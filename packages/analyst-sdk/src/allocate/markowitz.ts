@@ -26,7 +26,7 @@
 import type { Point } from "../types.ts";
 import {
   periodStats, simulateDrift, simulatePortfolio,
-  type BacktestMetrics, type DriftOptions, type Schedule, type SimulationResult, type Weights,
+  type BacktestMetrics, type DriftOptions, type Schedule, type SimulationResult, type SimulatorFill, type Weights,
 } from "../analyze/backtest.ts";
 import { dot2, sum2 } from "../transform/exact.ts";
 import { correlationMatrix, type Mat } from "../transform/linalg.ts";
@@ -318,6 +318,12 @@ export interface MarkowitzScheduleOptions {
   reoptimise?: Reoptimise;
   /** Maps optimizer weights onto priced holdings per axis date. Default identity. */
   expand?: ExpandFn;
+  /**
+   * Several named expand rules (issue 1554): one solve per re-optimisation, and
+   * `schedules[name]` per rule; `schedule` then holds the optimizer weights. Not
+   * with `expand`, and not on markowitzBacktest.
+   */
+  expands?: Readonly<Record<string, ExpandFn>>;
   /** History rows needed before the first weights. Default MIN_OBS (252). */
   minObs?: number;
   /** History starts at the first return dated on or after `from`. Default: every return. */
@@ -348,14 +354,16 @@ export interface MarkowitzRebalance {
 }
 
 export interface MarkowitzScheduleResult {
-  /** Holdings per axis date (after `expand`); null before enough history or where `expand` returned null. */
+  /** Holdings per axis date (after `expand`); null before enough history or where `expand` returned null. With `expands`, the optimizer weights. */
   schedule: Schedule;
+  /** With `expands`: the holdings per axis date under each named rule. */
+  schedules?: Record<string, Schedule>;
   rebalances: MarkowitzRebalance[];
 }
 
 const SCHEDULE_KEYS = [
   "dateAxis", "returns", "assets", "cashRate", "mu", "rule", "solve", "cov", "lookback", "reoptimise", "expand",
-  "minObs", "from", "shrink", "periodsPerYear", "lambda", "zeroTol",
+  "expands", "minObs", "from", "shrink", "periodsPerYear", "lambda", "zeroTol",
 ] as const;
 
 /** First index in `sorted` with value > d (the count of entries <= d). */
@@ -452,7 +460,16 @@ function scheduleWith(where: string, o: MarkowitzScheduleOptions, allowed: reado
   const rule = o.rule ?? "meanVar";
   const solve: SolveFn =
     o.solve ?? (rule === "tangency" ? (mu, S, rf) => tangencyExact(S, mu.map((m) => m - rf)) : (mu, S, rf) => meanVarExact(S, mu.map((m) => m - rf), lambda));
+  if (o.expands !== undefined) {
+    if (o.expand !== undefined) throw new RangeError(`${where}: give expand or expands, not both`);
+    if (o.expands === null || typeof o.expands !== "object" || Array.isArray(o.expands)) throw new RangeError(`${where}: expands must be a record of named expand functions`);
+    const names = Object.keys(o.expands);
+    if (names.length === 0) throw new RangeError(`${where}: expands names no rule`);
+    for (const name of names) if (typeof o.expands[name] !== "function") throw new RangeError(`${where}: expands ${JSON.stringify(name)} must be a function`);
+  }
   const expand: ExpandFn = o.expand ?? ((w) => w);
+  const expands = o.expands === undefined ? undefined : Object.entries(o.expands);
+  const schedules: Record<string, Schedule> | undefined = expands === undefined ? undefined : Object.fromEntries(expands.map(([name]) => [name, []]));
 
   const rdays = [...returns.keys()].filter((d) => o.from === undefined || d >= o.from).sort();
   for (const d of rdays) {
@@ -500,10 +517,14 @@ function scheduleWith(where: string, o: MarkowitzScheduleOptions, allowed: reado
       }
     }
     const inForce = rebalances[rebalances.length - 1];
-    schedule.push(cur === null || inForce === undefined ? null : expand({ ...cur }, d, { ...inForce, mu: [...inForce.mu], weights: { ...inForce.weights } }));
+    const inForceCopy = (r: MarkowitzRebalance) => ({ ...r, mu: [...r.mu], weights: { ...r.weights } });
+    schedule.push(cur === null || inForce === undefined ? null : expand({ ...cur }, d, inForceCopy(inForce)));
+    if (expands !== undefined) {
+      for (const [name, fn] of expands) schedules![name]!.push(cur === null || inForce === undefined ? null : fn({ ...cur }, d, inForceCopy(inForce)));
+    }
     prev = d;
   }
-  return { schedule, rebalances };
+  return schedules === undefined ? { schedule, rebalances } : { schedule, schedules, rebalances };
 }
 
 /** A custom cov callback's result must be an n by n matrix of finite numbers (SDK-11). */
@@ -546,6 +567,8 @@ export interface MarkowitzBacktestOptions extends MarkowitzScheduleOptions {
   simulate?: Simulator | { drift: DriftOptions };
   /** Trading cost in basis points of one-sided turnover. Default: the simulator's own default (10). Not with a Simulator function. */
   costBps?: number;
+  /** Fill policy per series for the built-in simulators (issue 1554). Default: the simulator's DEFAULT_SIMULATOR_FILL. Not with a Simulator function. */
+  fill?: SimulatorFill;
   /** In-sample end for periodStats. Default BACKTEST_IN_SAMPLE_END. */
   splitDate?: string;
 }
@@ -555,7 +578,7 @@ export interface MarkowitzBacktestResult extends MarkowitzScheduleResult {
   stats: BacktestMetrics;
 }
 
-const BACKTEST_KEYS = [...SCHEDULE_KEYS, "prices", "simulate", "costBps", "splitDate"] as const;
+const BACKTEST_KEYS = [...SCHEDULE_KEYS, "prices", "simulate", "costBps", "fill", "splitDate"] as const;
 
 /**
  * The Markowitz backtest: markowitzSchedule, then the simulator over the
@@ -566,19 +589,22 @@ const BACKTEST_KEYS = [...SCHEDULE_KEYS, "prices", "simulate", "costBps", "split
 export function markowitzBacktest(options: MarkowitzBacktestOptions): MarkowitzBacktestResult {
   const where = "markowitzBacktest";
   checkKeys(where, options, BACKTEST_KEYS);
-  const { prices, simulate, costBps, splitDate, ...scheduleOptions } = options;
+  const { prices, simulate, costBps, fill, splitDate, ...scheduleOptions } = options;
+  if (scheduleOptions.expands !== undefined) throw new RangeError(`${where}: expands is for markowitzSchedule; a backtest simulates one schedule, so give expand`);
   if (prices === null || typeof prices !== "object") throw new RangeError(`${where}: prices must be a record of holding id to points`);
   if (costBps !== undefined) nonNegative(where, "costBps", costBps);
-  const cost = costBps === undefined ? {} : { costBps };
+  const cost = { ...(costBps === undefined ? {} : { costBps }), ...(fill === undefined ? {} : { fill }) };
   let sim: Simulator;
   if (simulate === undefined) {
     sim = (a, s, p, c) => simulatePortfolio(a, s, p, c, cost);
   } else if (typeof simulate === "function") {
     if (costBps !== undefined) throw new RangeError(`${where}: costBps does not reach a simulate function; set the cost inside it`);
+    if (fill !== undefined) throw new RangeError(`${where}: fill does not reach a simulate function; set the fill policies inside it`);
     sim = simulate;
   } else if (simulate !== null && typeof simulate === "object" && Object.keys(simulate).length === 1 && "drift" in simulate) {
     const drift = simulate.drift;
     if (costBps !== undefined && drift.costBps !== undefined && drift.costBps !== costBps) throw new RangeError(`${where}: costBps ${costBps} and simulate.drift.costBps ${drift.costBps} disagree`);
+    if (fill !== undefined && drift.fill !== undefined) throw new RangeError(`${where}: give fill or simulate.drift.fill, not both`);
     sim = (a, s, p, c) => simulateDrift(a, s, p, c, { ...cost, ...drift });
   } else {
     throw new RangeError(`${where}: simulate must be a function or { drift: DriftOptions }`);

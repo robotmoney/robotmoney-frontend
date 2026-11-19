@@ -176,9 +176,11 @@ The backend and SDK run one shared backtest calculation. Generalizing the API pr
 - **Returns.** Each active day's asset return uses the previous active target weights and that day's price change against the preceding calendar date. Target weights are reapplied in daily return calculations; holding drift is not carried between dates.
 - **Missing weights.** A date with no applicable weights is skipped, including that day's market move. It does not acquire data or introduce a new hold-through-gap rule.
 - **Trading costs.** A change in target weights at the close deducts one-sided turnover times the cost rate. Turnover is the sum of absolute target-weight changes, halved. Unchanged target weights incur no cost. Preserve the established operation order.
-- **Cash.** Uses the previous calendar day's annual yield in percent, converted with `(1 + yield / 100) ** (1 / 365) - 1`. Missing earlier yields earn zero.
-- **Prices.** Gaps are forward-filled using the existing rules. The existing treatment of invalid or nonpositive prices is preserved.
+- **Fill policies.** No series is filled without a declared fill policy (issue 1554). Every price series and the cash rate a simulation reads has one: `none`, `forward` N days, `forward` with no age limit (`maxAgeDays: null`) or `zero`, the fill policy type of `regime-engine.md` section 8.1. A value on day d is the observation dated d. With none on d, `none` gives a missing value, `forward` N the latest observation dated d-1 to d-N, `forward` with no age limit the latest observation before d, and `zero` gives 0. Before a series' first observation `none` and both `forward` forms give a missing value. Only observations dated on axis dates are read.
+- **Cash.** Uses the previous calendar day's annual yield in percent, converted with `(1 + yield / 100) ** (1 / 365) - 1`, under the cash rate's fill policy. Missing earlier yields earn zero: before the first observation the cash leg earns zero, and a non-finite observation earns zero. After it, a held day with a nonzero cash weight whose previous date has no value under the policy is refused with an error naming the cash rate, the date and the policy.
+- **Prices.** Gaps are filled only as each series' declared policy allows. On a held day, each asset with a nonzero weight needs a value on the previous and the current date; a missing one is refused with an error naming the series, the date and the policy. An invalid observation (non-finite or nonpositive) is still an observation, and the existing treatment of invalid or nonpositive prices is preserved. The shipped policies are all `forward` with no age limit, the former undeclared carry, so every result is unchanged.
 - **Start.** Values start at 1. Strategies begin on their first applicable labelled date. Within a reference portfolio every strategy and baseline begins on one date, the latest of the strategies' first labelled dates, so every line covers the same window (issue 1559). Before issue 1559 the baselines began on their first priced date.
+- **End.** Each reference portfolio ends on its latest complete day: the last axis date on which each of its risky assets and the cash rate has a value under its policy. An invalid observation counts as a value, and the cash rate has a value on every date before its first observation. Every line of the portfolio is simulated over the axis cut at that day. A portfolio with no complete day at or after its first priced date is left out. Under policies with no age limit the latest complete day is the last axis date.
 
 ### 5.3 Simulator
 
@@ -191,6 +193,7 @@ The backend and SDK run one shared backtest calculation. Generalizing the API pr
 | `prices` | Supplied daily price levels per asset id. |
 | `cashRate` | Supplied annual cash yield in percent. |
 | `options.costBps` | Cost per unit of one-sided turnover. Default 10 basis points, matching existing reports. |
+| `options.fill` | A declared fill policy (with its `reason`) per key of `prices`, and one under `cash` for `cashRate` (section 5.2). A series with no entry uses `DEFAULT_SIMULATOR_FILL`: `forward` with no age limit, which reproduces the former carry. At `null` every series must be declared, and a missing entry is refused naming the series. A key that names no series is refused. |
 
 The result includes the daily value series, trade count, cost evidence and the pre-cost daily returns needed by period statistics. Additional simulation evidence is exposed separately from the existing report payload. The established report fields and serialization are unchanged; the numbers of a payload published before D78 replay up to rounding.
 
@@ -203,6 +206,7 @@ Weights set at today's close apply to later returns; changing today's target can
 | `options.costBps` | Cost per unit of one-sided turnover. Default 10 basis points. |
 | `options.freq` | Calendar rebalance: `daily` (default), `weekly` (the first date of a new Monday-to-Sunday week), `monthly` (a new YYYY-MM), `quarterly` (a new January, April, July or October) or `never`, each judged against the previous axis date. |
 | `options.band` | Rebalance when any weight is more than this absolute distance from its target. Default: no band. |
+| `options.fill` | Fill policy per series, as `simulatePortfolio`. |
 
 The book also rebalances when the target changes. A rebalance with turnover above 1e-9 costs turnover times `costBps` / 10000 and is recorded as a trade. The first date with weights sets the holdings at no cost. An unknown option key, or a bad `costBps`, `freq` or `band`, is refused with an error naming it. A day whose portfolio factor 1 + r_p is not positive is refused with an error naming the date. The result has the same shape as `simulatePortfolio`'s, so period statistics (section 5.4) accept it unchanged. With `costBps` 0 and `freq` daily its values and returns equal `simulatePortfolio`'s bit for bit. No report uses it.
 
@@ -223,7 +227,11 @@ Windows and market phases are supplied date ranges. Additional statistics must n
 
 The reference portfolios are data: `eth`, `sp500` and `mixed`, with their existing regime weight tables and baselines, plus the all-cash baseline. Single-asset hold baselines retain their existing behavior. The mixed baseline retains the `blend_hodl` key and its existing fixed-target daily calculation without charging for daily resets; its descriptive meaning is constant mix.
 
-`scheduleFromLabels(labels, table)` preserves the established label-to-weight mapping, including missing labels. Running those schedules through `simulatePortfolio` and `periodStats`, each empty before the portfolio's start date (section 5.2), gives the same daily values, statistics and serialized reference report as `computeBacktest`.
+`scheduleFromLabels(labels, table, options)` preserves the established label-to-weight mapping, including missing labels: a null label is a skipped day. A non-null label with no own row in the table follows `options.unknownLabel`, default `UNKNOWN_LABEL_RULE`. That rule is declared `"refuse"`: the label is refused with an error naming it and its index. `"skip"` gives a skipped day, the behaviour before issue 1554. Every label `computeRegime` produces has a row, so the reference backtest never meets an unknown one.
+
+`referenceStrategies(labels)` returns the reference grid's label series (composite, one per panel, `macro_inverted` when a macro panel exists, conservative and aggressive) from `{ regime, panelRegimes, panels? }`. `computeBacktest` takes the same label shape, so a client with published label series needs no copy of the grid. `REFERENCE_FILL_POLICIES` (`spx`, `eth`, `tbill3m`, each `forward` with no age limit) is the one place the reference backtest's fill policies are declared. An analyst changes one by editing its row, in a reviewed diff that also regenerates the golden.
+
+Running those schedules through `simulatePortfolio` and `periodStats`, each empty before the portfolio's start date (section 5.2), gives the same daily values, statistics and serialized reference report as `computeBacktest`.
 
 ### 5.6 Consumers
 
@@ -268,6 +276,9 @@ Package paths are relative to `packages/analyst-sdk/`.
 | A date with no applicable weights preserves the established skip behavior and daily return observations. | `tests/backtest.test.ts` |
 | Reference baselines retain their existing target-weight behavior, keys and start dates without introducing holding drift. | `tests/backtest.test.ts` |
 | `periodStats` with original pre-cost returns and boundary evidence reproduces existing full-range and split statistics, including Sharpe on a path with costs. | `tests/backtest.test.ts` |
+| A label with no weight row is refused by default and skipped under `unknownLabel: "skip"`; a null label is a skipped day under both. | `tests/backtest.test.ts` |
+| Every simulator series has a declared fill policy: a covered gap runs, an uncovered gap on a held day is refused naming the series, the date and the policy, the cash rate earns zero before its first observation, and a missing or unknown `fill` entry is refused. The shipped default reproduces every existing call. | `tests/backtest.test.ts`, `tests/backtest-drift.test.ts` |
+| The reference backtest over `{ regime, panelRegimes, panels }` equals it over a full result; `REFERENCE_FILL_POLICIES` reproduce the golden; a changed reference policy ends each portfolio on its latest complete day and equals the original cut there. | `tests/backtest.test.ts` |
 | A replay with the original effective inputs reproduces the complete published report byte for byte when it was computed with the D78 arithmetic, and up to rounding with the same labels when it was published before D78. The run uses the exact committed input versions; source-update jitter handling provides no replay exception. | `backend/tests/regime-replay-published.test.ts` |
 | As-of regime labels match the published record from 2026-09-21 (issue 1182). | `backend/tests/regime-replay-published.test.ts` |
 | The API and the replica write byte-identical archives for the same state. | `backend/tests/api/public-analytics-archives.test.ts` |

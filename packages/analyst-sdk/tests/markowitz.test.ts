@@ -9,14 +9,14 @@ import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseRawHistory, toHistory } from "../src/input/load.ts";
-import { periodStats, simulateDrift, simulatePortfolio, type Schedule, type Weights } from "../src/analyze/backtest.ts";
+import { periodStats, simulateDrift, simulatePortfolio, type DeclaredFill, type Schedule, type SimulatorFill, type Weights } from "../src/analyze/backtest.ts";
 import { dot2, sum2 } from "../src/transform/exact.ts";
 import { correlationMatrix, type Mat } from "../src/transform/linalg.ts";
 import { shrunkCov } from "../src/allocate/covariance.ts";
 import { ercCertified, meanVarExact, meanVarResidual, minVarExact, sharpeResidual, tangencyExact } from "../src/allocate/optimize.ts";
 import {
   canonZero, LAMBDA, markowitzBacktest, markowitzBooks, markowitzSchedule, markowitzSizing, MIN_OBS, ZERO_TOL,
-  type MarkowitzScheduleOptions,
+  type ExpandFn, type MarkowitzScheduleOptions, type SolveFn,
 } from "../src/allocate/markowitz.ts";
 import type { Point } from "../src/types.ts";
 
@@ -57,6 +57,7 @@ const asWeights = (w: readonly number[]): Weights => {
   const c = w.map((x) => canonZero(x));
   return { cash: canonZero(sum2([1, ...c.map((x) => -x)])), SPX: c[0]!, ETH: c[1]!, DXY: c[2]! };
 };
+const NO_LIMIT: DeclaredFill = { kind: "forward", maxAgeDays: null, reason: "test" };
 const pricesOf = (): Record<string, Point[]> => ({ SPX: closes.SPX!, ETH: closes.ETH!, DXY: closes.DXY! });
 
 describe("markowitzSizing and markowitzBooks", () => {
@@ -486,6 +487,57 @@ describe("markowitzBacktest", () => {
     expect(() => markowitzBacktest({ ...base(), prices: pricesOf(), costBps: 5, simulate: (a, s, p, c) => simulatePortfolio(a, s, p, c) })).toThrow(/costBps/);
     expect(() => markowitzBacktest({ ...base(), prices: pricesOf(), simulate: { drift: { freq: "hourly" as never } } })).toThrow(/freq/);
     expect(() => markowitzBacktest({ ...base(), prices: pricesOf(), simulate: { kind: "drift" } as never })).toThrow(/simulate/);
+  });
+});
+
+// Issue 1554: several named expand rules share one solve per re-optimisation,
+// and markowitzBacktest passes a declared `fill` to its built-in simulators.
+describe("markowitzSchedule expands and markowitzBacktest fill", () => {
+  const rules: Record<string, ExpandFn> = {
+    identity: (w) => w,
+    half: (w) => ({ cash: 0.5 + 0.5 * w.cash!, SPX: 0.5 * w.SPX!, ETH: 0.5 * w.ETH!, DXY: 0.5 * w.DXY! }),
+    noEth: (w, d) => (d.endsWith("-15") ? null : { cash: w.cash! + w.ETH!, SPX: w.SPX!, ETH: 0, DXY: w.DXY! }),
+  };
+  const counting = () => {
+    let n = 0;
+    const solve: SolveFn = (mu, S, rf) => (n++, meanVarExact(S, mu.map((m) => m - rf), 4));
+    return { solve, count: () => n };
+  };
+
+  test("one solve per re-optimisation; each schedules[name] equals a single-expand run; schedule is the optimizer weights", () => {
+    const c = counting();
+    const multi = markowitzSchedule({ ...base(), solve: c.solve, expands: rules });
+    expect(multi.rebalances.length).toBeGreaterThan(5);
+    expect(c.count()).toBe(multi.rebalances.length);
+    expect(Object.keys(multi.schedules!)).toEqual(["identity", "half", "noEth"]);
+    for (const [name, expand] of Object.entries(rules)) {
+      const single = markowitzSchedule({ ...base(), solve: counting().solve, expand });
+      expect(multi.schedules![name]).toEqual(single.schedule);
+      expect(multi.rebalances).toEqual(single.rebalances);
+    }
+    const plain = markowitzSchedule(base());
+    expect(multi.schedule).toEqual(plain.schedule);
+    expect(plain.schedules).toBeUndefined();
+  });
+
+  test("expand with expands, an empty expands, a non-function rule, and expands on markowitzBacktest throw RangeError", () => {
+    expect(() => markowitzSchedule({ ...base(), expand: (w) => w, expands: rules })).toThrow(RangeError);
+    expect(() => markowitzSchedule({ ...base(), expands: {} })).toThrow(RangeError);
+    expect(() => markowitzSchedule({ ...base(), expands: { bad: 1 as never } })).toThrow(/"bad"/);
+    expect(() => markowitzBacktest({ ...base(), prices: pricesOf(), expands: rules })).toThrow(RangeError);
+  });
+
+  test("fill reaches the built-in simulators; with no fill every call returns what it did; fill with a simulate function throws", () => {
+    const fill: SimulatorFill = { SPX: NO_LIMIT, ETH: NO_LIMIT, DXY: NO_LIMIT, cash: NO_LIMIT };
+    const plain = markowitzBacktest({ ...base(), prices: pricesOf() });
+    expect(markowitzBacktest({ ...base(), prices: pricesOf(), fill })).toEqual(plain);
+    expect(plain.simulation).toEqual(simulatePortfolio(AXIS, plain.schedule, pricesOf(), cashRate));
+    const drift = markowitzBacktest({ ...base(), prices: pricesOf(), simulate: { drift: { freq: "monthly" } }, fill });
+    expect(drift.simulation).toEqual(simulateDrift(AXIS, drift.schedule, pricesOf(), cashRate, { freq: "monthly" }));
+    // Non-vacuity: a bounded policy on SPX (weekends are 2- and 3-day gaps) refuses a held day.
+    expect(() => markowitzBacktest({ ...base(), prices: pricesOf(), fill: { ...fill, SPX: { kind: "none", reason: "test" } } })).toThrow(/price "SPX" has no value/);
+    expect(() => markowitzBacktest({ ...base(), prices: pricesOf(), fill, simulate: (a, s, p, c) => simulatePortfolio(a, s, p, c) })).toThrow(/fill/);
+    expect(() => markowitzBacktest({ ...base(), prices: pricesOf(), fill, simulate: { drift: { fill } } })).toThrow(/fill/);
   });
 });
 

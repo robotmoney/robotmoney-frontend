@@ -6,7 +6,8 @@
 import { describe, expect, test } from "bun:test";
 import { applyRatio } from "../src/transform/transforms.ts";
 import { mergeRatioSeries, shapeDaily } from "../src/transform/grid.ts";
-import { combineAggressiveN, combineConservativeN } from "../src/analyze/backtest.ts";
+import { combineAggressiveN, combineConservativeN, REFERENCE_FILL_POLICIES, referenceStrategies } from "../src/analyze/backtest.ts";
+import { PLAIN_DECIMAL, parsePlainDecimal } from "../src/input/load.ts";
 
 describe("applyRatio", () => {
   test("happy: element-wise numerator / denominator", () => {
@@ -88,5 +89,43 @@ describe("combineAggressiveN", () => {
     expect(combineAggressiveN(["risk_on", "risk_off"])).toBe("neutral");
     expect(combineAggressiveN(["neutral", "neutral"])).toBe("neutral");
     expect(combineAggressiveN([])).toBe("neutral");
+  });
+});
+
+// Issue 1554: the helpers a backtest client copies.
+describe("parsePlainDecimal and PLAIN_DECIMAL", () => {
+  test("happy: a finite number or a plain decimal string is its number", () => {
+    expect(parsePlainDecimal("1.5")).toBe(1.5);
+    expect(parsePlainDecimal(2)).toBe(2);
+    expect(PLAIN_DECIMAL.test("-2E+4")).toBe(true);
+  });
+  test("error: an overflowing, blank, word, hex or padded value, NaN and Infinity throw RangeError", () => {
+    for (const v of ["1e400", "", "abc", "0x10", " 1", NaN, Infinity]) expect(() => parsePlainDecimal(v)).toThrow(RangeError);
+  });
+  test("edge: '1e400' matches the pattern but is not finite, so it is refused", () => {
+    expect(PLAIN_DECIMAL.test("1e400")).toBe(true);
+    expect(() => parsePlainDecimal("1e400")).toThrow(/1e400/);
+  });
+});
+
+describe("referenceStrategies and REFERENCE_FILL_POLICIES", () => {
+  const regime = ["risk_on", "risk_off", null];
+  const panelRegimes = { macro: ["risk_on", "risk_off", "neutral"], onchain: ["risk_on", "neutral", "neutral"] };
+  test("happy: composite, one per panel, macro_inverted, conservative and aggressive", () => {
+    const s = referenceStrategies({ regime, panelRegimes });
+    expect(Object.keys(s)).toEqual(["composite", "macro", "onchain", "macro_inverted", "conservative", "aggressive"]);
+    expect(s.macro_inverted).toEqual(["risk_off", "risk_on", "neutral"]);
+    expect(s.conservative).toEqual(["risk_on", "risk_off", "neutral"]);
+    expect(s.aggressive).toEqual(["risk_on", "risk_off", "neutral"]);
+  });
+  test("error: a missing panel label gives a null conservative and aggressive label", () => {
+    const s = referenceStrategies({ regime, panelRegimes: { macro: ["risk_on", null, "neutral"], onchain: panelRegimes.onchain } });
+    expect(s.conservative![1]).toBeNull();
+    expect(s.aggressive![1]).toBeNull();
+  });
+  test("edge: with no macro panel there is no macro_inverted; the reference policies are forward with no age limit", () => {
+    const s = referenceStrategies({ regime, panelRegimes: { onchain: panelRegimes.onchain }, panels: ["onchain"] });
+    expect(Object.keys(s)).toEqual(["composite", "onchain", "conservative", "aggressive"]);
+    for (const p of Object.values(REFERENCE_FILL_POLICIES)) expect(p).toMatchObject({ kind: "forward", maxAgeDays: null });
   });
 });

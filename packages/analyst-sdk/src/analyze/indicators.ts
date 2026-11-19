@@ -58,11 +58,12 @@ export interface Indicator {
 // SDK never fills a gap by default. Each indicator declares its policy:
 //   none:    no fill; a day without a real observation is missing.
 //   forward: the last real observation is carried for at most maxAgeDays days;
-//            an older day is missing.
+//            an older day is missing. maxAgeDays null carries it with no age
+//            limit (issue 1554, the backtest's price and cash-rate series).
 //   zero:    a gap is a real 0.
 // An analyst changes a row (fill and fillReason) in its own reviewed diff,
 // which owns any methodology version change and golden regeneration.
-export type FillPolicy = { kind: "none" } | { kind: "forward"; maxAgeDays: number } | { kind: "zero" };
+export type FillPolicy = { kind: "none" } | { kind: "forward"; maxAgeDays: number | null } | { kind: "zero" };
 
 // Every registry indicator declares the former global cap, so every figure is
 // the one the SDK computed before per-indicator policies existed.
@@ -85,15 +86,15 @@ export function fillPolicyOf(ind: { id: string; fill?: unknown; fillReason?: unk
   if (f.kind === "none" || f.kind === "zero") return { kind: f.kind };
   if (f.kind === "forward") {
     const n = f.maxAgeDays;
-    if (typeof n === "number" && Number.isInteger(n) && n > 0) return { kind: "forward", maxAgeDays: n };
-    throw new FillPolicyError(ind.id, `forward fill needs a positive integer maxAgeDays, got ${JSON.stringify(n)}`);
+    if (n === null || (typeof n === "number" && Number.isInteger(n) && n > 0)) return { kind: "forward", maxAgeDays: n };
+    throw new FillPolicyError(ind.id, `forward fill needs a positive integer maxAgeDays, or null for no age limit, got ${JSON.stringify(n)}`);
   }
   throw new FillPolicyError(ind.id, `unknown fill kind ${JSON.stringify(f.kind)}`);
 }
 
-/** Days a gap may be filled under the policy: 0 for none, maxAgeDays for forward, Infinity for zero. */
+/** Days a gap may be filled under the policy: 0 for none, maxAgeDays for forward (Infinity when null), Infinity for zero. */
 export function fillMaxAgeDays(policy: FillPolicy): number {
-  return policy.kind === "none" ? 0 : policy.kind === "forward" ? policy.maxAgeDays : Infinity;
+  return policy.kind === "none" ? 0 : policy.kind === "forward" ? (policy.maxAgeDays ?? Infinity) : Infinity;
 }
 
 // Day rule (issue 1655): what a run does with a day that is not complete.

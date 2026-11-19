@@ -78,7 +78,9 @@ export class CsvQuotedFieldError extends InputRowError {
 const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
 
 const SOURCE_ID = /^[^\s,:"]+:[^\s,"]+$/;
-const PLAIN_DECIMAL = /^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$/;
+// The plain decimal form an input value may take: an optional sign, digits with
+// an optional fraction, and an optional exponent. No hex, no padding, no words.
+export const PLAIN_DECIMAL = /^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$/;
 const isRealDay = (d: string) => {
   if (!ISO_DAY.test(d)) return false;
   const t = Date.parse(`${d}T00:00:00Z`);
@@ -89,10 +91,24 @@ export function isCalendarDate(v: unknown): v is string {
   return typeof v === "string" && isRealDay(v);
 }
 
-function checkValue(row: number, value: unknown): number {
+/**
+ * The loader's value rule (issue 1554): a finite number, or a string matching
+ * PLAIN_DECIMAL whose number is finite. Anything else throws a RangeError
+ * naming the value: `1e400` (Infinity), blank, words, hex, padded strings, NaN
+ * and Infinity.
+ */
+export function parsePlainDecimal(value: unknown): number {
   const n = typeof value === "number" ? value : typeof value === "string" && PLAIN_DECIMAL.test(value) ? Number(value) : NaN;
-  if (!Number.isFinite(n)) throw new InputRowError(row, `value must be a plain decimal number (finite), got ${JSON.stringify(value)}`);
+  if (!Number.isFinite(n)) throw new RangeError(`not a plain decimal number (finite): ${typeof value === "string" ? JSON.stringify(value) : String(value)}`);
   return n;
+}
+
+function checkValue(row: number, value: unknown): number {
+  try {
+    return parsePlainDecimal(value);
+  } catch {
+    throw new InputRowError(row, `value must be a plain decimal number (finite), got ${JSON.stringify(value)}`);
+  }
 }
 
 function checkRow(row: number, date: unknown, indicator: unknown, value: unknown, source: unknown): RawRow {

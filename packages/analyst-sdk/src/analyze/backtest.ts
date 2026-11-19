@@ -34,10 +34,15 @@
 // variance is 0, so Sharpe is 0 under the zero-volatility convention. The
 // frozen pre-refactor copy (tests/reference/backtest-pre-refactor.ts) keeps the
 // old arithmetic and now agrees to within rounding, not byte for byte.
-import type { RegimeComputeResult } from "./compute.ts";
+//
+// Issue 1554: no series is filled without a declared fill policy. Each price
+// series and the cash rate the simulators read has one, through options.fill or
+// DEFAULT_SIMULATOR_FILL; the reference backtest's are REFERENCE_FILL_POLICIES.
+// Every shipped value is forward with no age limit, the former undeclared carry,
+// so every output is unchanged. A label with no weight row is refused by default
+// (UNKNOWN_LABEL_RULE).
 import type { Point } from "../types.ts";
-import { toDateMap } from "./correlations.ts";
-import { PANELS } from "./indicators.ts";
+import { FillPolicyError, PANELS, fillMaxAgeDays, fillPolicyOf, type FillPolicy } from "./indicators.ts";
 import { annualizedGrowth, Compounder, ddDiv, ddMulD, ddValue, dotDD, meanAndSampleSd, periodicRate, sharpeDD, sumDD, twoSum } from "../transform/exact.ts";
 
 export const BACKTEST_COST_PER_REBALANCE = 0.001;
@@ -115,10 +120,41 @@ export type Weights = Record<string, number>;
 // missing regime label). Same length as the date axis.
 export type Schedule = (Weights | null)[];
 
+// A declared fill policy for one simulator series: issue 1655's FillPolicy
+// (with issue 1554's `forward` form with no age limit, maxAgeDays null) and the
+// reason it was chosen. Validated by fillPolicyOf.
+export type DeclaredFill = FillPolicy & { reason: string };
+
+// The fill policy per simulator series: one per key of `prices`, and `cash`
+// for the cash rate.
+export type SimulatorFill = Record<string, DeclaredFill>;
+
+// The policy of a simulator series with no `fill` entry. null means every
+// series must be declared. The declared value reproduces the undeclared carry
+// the simulators applied before issue 1554, so a caller that passes no `fill`
+// gets the same values, trades and evidence. An analyst changes it here, in a
+// reviewed diff (research issue 1673 records the choice).
+export let DEFAULT_SIMULATOR_FILL: DeclaredFill | null = { kind: "forward", maxAgeDays: null, reason: "Reproduces the undeclared carry" };
+
+// Test seam: runs `fn` with DEFAULT_SIMULATOR_FILL set to `fill`, then restores
+// the declared value. Not on the package entry.
+export function withDefaultSimulatorFill<T>(fill: DeclaredFill | null, fn: () => T): T {
+  const saved = DEFAULT_SIMULATOR_FILL;
+  DEFAULT_SIMULATOR_FILL = fill;
+  try {
+    return fn();
+  } finally {
+    DEFAULT_SIMULATOR_FILL = saved;
+  }
+}
+
 export interface SimulateOptions {
   // Cost per unit of one-sided turnover, in basis points. Default 10, the
   // established BACKTEST_COST_PER_REBALANCE.
   costBps?: number;
+  // Fill policy per series (issue 1554). A series with no entry uses
+  // DEFAULT_SIMULATOR_FILL.
+  fill?: SimulatorFill;
 }
 
 export interface TradeEvidence {
@@ -160,10 +196,35 @@ function checkWeights(w: Weights, where: string, assets: ReadonlySet<string>): v
   if (Math.abs(sum - 1) > 1e-9) throw new RangeError(`${where}: weights must sum to 1, got ${sum}`);
 }
 
-// The established label-to-weight mapping: a label with no row in the table
-// (including a missing label) has no applicable weights.
-export function scheduleFromLabels(labels: readonly (string | null)[], table: Record<string, Weights>): Schedule {
-  return labels.map((l) => (l != null && Object.hasOwn(table, l) ? table[l]! : null));
+// What scheduleFromLabels does with a non-null label that has no own row in the
+// weight table: "skip" gives a null entry (a skipped day, the former
+// behaviour); "refuse" throws a RangeError naming the index and the label.
+export type UnknownLabelRule = "skip" | "refuse";
+
+// Declared value (issue 1554): a misspelt label is bad input, so the default
+// fails closed. Every label computeRegime produces has a weight row, so the
+// reference backtest never meets one.
+export const UNKNOWN_LABEL_RULE: UnknownLabelRule = "refuse";
+
+// The established label-to-weight mapping. A null label has no applicable
+// weights (a skipped day) under either rule; a non-null label with no own row
+// follows options.unknownLabel (default UNKNOWN_LABEL_RULE).
+export function scheduleFromLabels(
+  labels: readonly (string | null)[],
+  table: Record<string, Weights>,
+  options: { unknownLabel?: UnknownLabelRule } = {},
+): Schedule {
+  for (const k of Object.keys(options)) {
+    if (k !== "unknownLabel") throw new RangeError(`scheduleFromLabels: unknown option ${JSON.stringify(k)}; expected unknownLabel`);
+  }
+  const rule = options.unknownLabel ?? UNKNOWN_LABEL_RULE;
+  if (rule !== "skip" && rule !== "refuse") throw new RangeError(`scheduleFromLabels: unknownLabel must be "skip" or "refuse", got ${JSON.stringify(rule)}`);
+  return labels.map((l, i) => {
+    if (l == null) return null;
+    if (Object.hasOwn(table, l)) return table[l]!;
+    if (rule === "refuse") throw new RangeError(`scheduleFromLabels: label ${JSON.stringify(l)} at index ${i} has no weight row`);
+    return null;
+  });
 }
 
 // The shared simulation (analytics requirements 5.2/5.3) over supplied assets.
@@ -180,30 +241,152 @@ export function simulatePortfolio(
   options: SimulateOptions = {},
 ): SimulationResult {
   for (const k of Object.keys(options)) {
-    if (k !== "costBps") throw new RangeError(`unknown option ${JSON.stringify(k)}; expected costBps`);
+    if (k !== "costBps" && k !== "fill") throw new RangeError(`unknown option ${JSON.stringify(k)}; expected costBps, fill`);
   }
   const { costBps } = options;
   if (costBps !== undefined && (typeof costBps !== "number" || !Number.isFinite(costBps) || costBps < 0)) {
     throw new RangeError(`costBps must be a finite nonnegative number, got ${JSON.stringify(costBps)}`);
   }
   const costRate = costBps === undefined ? BACKTEST_COST_PER_REBALANCE : costBps / 10_000;
-  const { assetSeries, tbillDaily, firstIdx } = prepareSimulation(dateAxis, schedule, prices, cashRate);
-  return simulate(dateAxis, schedule, assetSeries, tbillDaily, firstIdx, costRate);
+  const prepared = prepareSimulation(dateAxis, schedule, prices, cashRate, options.fill);
+  return simulate(dateAxis, schedule, prepared, costRate);
 }
 
 interface PreparedSimulation {
   assetSeries: Record<string, number[]>;
+  // Per asset and date: whether the series has a value there under its policy.
+  assetHas: Record<string, boolean[]>;
+  assetPolicy: Record<string, FillPolicy>;
   tbillDaily: number[];
+  cashHas: boolean[];
+  cashPolicy: FillPolicy;
   firstIdx: number;
 }
 
-// The input checks, forward fill, cash-rate series and first index shared by
+/** Validates a declared fill policy (fillPolicyOf, with its reason); a bad one is a RangeError naming the series. */
+function declaredPolicy(name: string, f: unknown): FillPolicy {
+  try {
+    return fillPolicyOf({ id: name, fill: f, fillReason: f !== null && typeof f === "object" ? (f as { reason?: unknown }).reason : undefined });
+  } catch (e) {
+    if (e instanceof FillPolicyError) throw new RangeError(`fill policy for ${name} is invalid: ${e.message}`);
+    throw e;
+  }
+}
+
+/** The fill policy of every series a simulation reads: its `fill` entry, else DEFAULT_SIMULATOR_FILL. */
+function simulatorPolicies(prices: Record<string, Point[]>, fill: SimulatorFill | undefined): { price: Record<string, FillPolicy>; cash: FillPolicy } {
+  if (fill !== undefined) {
+    if (fill === null || typeof fill !== "object" || Array.isArray(fill)) throw new RangeError("fill must be a record of fill policy per series");
+    for (const k of Object.keys(fill)) {
+      if (k !== "cash" && !Object.hasOwn(prices, k)) throw new RangeError(`fill key ${JSON.stringify(k)} names no series; expected cash or a key of prices`);
+    }
+  }
+  const of = (key: string, name: string): FillPolicy => {
+    const f = fill !== undefined && Object.hasOwn(fill, key) && fill[key] !== undefined ? fill[key] : DEFAULT_SIMULATOR_FILL;
+    if (f === null) throw new RangeError(`fill policy missing for ${name}`);
+    return declaredPolicy(name, f);
+  };
+  const price: Record<string, FillPolicy> = {};
+  for (const k of Object.keys(prices)) price[k] = of(k, `price ${JSON.stringify(k)}`);
+  return { price, cash: of("cash", "the cash rate") };
+}
+
+/** A fill policy in words, for error messages. */
+function describeFill(p: FillPolicy): string {
+  if (p.kind === "forward") return p.maxAgeDays === null ? "fill forward, no age limit" : `fill forward ${p.maxAgeDays} days`;
+  return `fill ${p.kind}`;
+}
+
+const DAY_MS = 86_400_000;
+const dayNumber = (iso: string): number => Date.parse(`${iso}T00:00:00Z`) / DAY_MS;
+
+interface AxisSeries {
+  // The value per axis date; NaN where the series has none.
+  values: number[];
+  // Whether the series has a value on the date under its policy (an invalid
+  // observation is a value).
+  has: boolean[];
+  // Index of the first axis date with an observation, -1 when none.
+  firstObs: number;
+}
+
+// A series on the date axis under its fill policy (issue 1554). A value on day
+// d is the observation dated d (finite or not); with none on d, `none` gives a
+// missing value, `forward` N the latest observation dated d-1 to d-N, `forward`
+// with no age limit the latest observation before d, and `zero` gives 0.
+// Before the first observation `none` and `forward` give a missing value. As
+// before issue 1554, only observations dated on axis dates are read.
+function fillOnAxis(series: Point[] | undefined, dateAxis: readonly string[], policy: FillPolicy): AxisSeries {
+  const map = new Map<string, number>();
+  if (Array.isArray(series)) for (const p of series) map.set(p.date, p.value);
+  const maxAge = fillMaxAgeDays(policy);
+  const values = new Array<number>(dateAxis.length).fill(NaN);
+  const has = new Array<boolean>(dateAxis.length).fill(false);
+  let firstObs = -1;
+  let last = NaN;
+  let lastDay = NaN;
+  for (let i = 0; i < dateAxis.length; i++) {
+    const v = map.get(dateAxis[i]!);
+    if (v !== undefined) {
+      if (firstObs < 0) firstObs = i;
+      last = v;
+      lastDay = dayNumber(dateAxis[i]!);
+      values[i] = v;
+      has[i] = true;
+    } else if (policy.kind === "zero") {
+      values[i] = 0;
+      has[i] = true;
+    } else if (firstObs >= 0 && (maxAge === Infinity || dayNumber(dateAxis[i]!) - lastDay <= maxAge)) {
+      values[i] = last;
+      has[i] = true;
+    }
+  }
+  return { values, has, firstObs };
+}
+
+// The cash rate on the axis: before its first observation it earns zero (a
+// value of 0); after it, its value under the policy, a non-finite observation
+// earning zero; a date the policy does not cover is missing (NaN).
+function cashOnAxis(cashRate: Point[] | undefined, dateAxis: readonly string[], policy: FillPolicy): { rate: number[]; has: boolean[] } {
+  const f = fillOnAxis(cashRate, dateAxis, policy);
+  const rate = new Array<number>(dateAxis.length);
+  const has = new Array<boolean>(dateAxis.length);
+  for (let i = 0; i < dateAxis.length; i++) {
+    if (f.firstObs < 0 || i < f.firstObs) {
+      rate[i] = 0;
+      has[i] = true;
+    } else {
+      rate[i] = f.has[i] ? (Number.isFinite(f.values[i]) ? f.values[i]! : 0) : NaN;
+      has[i] = f.has[i]!;
+    }
+  }
+  return { rate, has };
+}
+
+// A held day reads, for the cash leg and every asset with a nonzero weight held
+// into day i, its value on the previous date (and, for an asset, the current
+// date). A value its policy does not cover is a RangeError naming the series,
+// the date and the policy.
+function checkHeldDay(weights: Weights, p: PreparedSimulation, dateAxis: readonly string[], i: number): void {
+  if ((weights.cash || 0) !== 0 && !p.cashHas[i - 1]) {
+    throw new RangeError(`the cash rate has no value on ${dateAxis[i - 1]} (${describeFill(p.cashPolicy)})`);
+  }
+  for (const [asset, wa] of Object.entries(weights)) {
+    if (asset === "cash" || !wa) continue;
+    for (const j of [i - 1, i]) {
+      if (!p.assetHas[asset]![j]) throw new RangeError(`price ${JSON.stringify(asset)} has no value on ${dateAxis[j]} (${describeFill(p.assetPolicy[asset]!)})`);
+    }
+  }
+}
+
+// The input checks, declared fill, cash-rate series and first index shared by
 // simulatePortfolio and simulateDrift.
 function prepareSimulation(
   dateAxis: readonly string[],
   schedule: Schedule,
   prices: Record<string, Point[]>,
   cashRate: Point[],
+  fill: SimulatorFill | undefined,
 ): PreparedSimulation {
   if (dateAxis.length === 0) throw new RangeError("dateAxis is empty");
   for (let i = 0; i < dateAxis.length; i++) {
@@ -216,31 +399,29 @@ function prepareSimulation(
     if (w != null) checkWeights(w, `schedule ${dateAxis[i]}`, assets);
   }
 
-  const tbillMap = toDateMap(cashRate);
-  let lastTbill = 0;
-  const tbillDaily = new Array<number>(dateAxis.length).fill(0);
-  for (let i = 0; i < dateAxis.length; i++) {
-    const v = tbillMap.get(dateAxis[i]);
-    if (v !== undefined) lastTbill = v;
-    tbillDaily[i] = Number.isFinite(lastTbill) ? lastTbill : 0;
-  }
+  const policies = simulatorPolicies(prices, fill);
+  const cash = cashOnAxis(cashRate, dateAxis, policies.cash);
   const assetSeries: Record<string, number[]> = {};
-  for (const [k, pts] of Object.entries(prices)) assetSeries[k] = forwardFillDaily(pts, dateAxis as string[]);
+  const assetHas: Record<string, boolean[]> = {};
+  for (const [k, pts] of Object.entries(prices)) {
+    const f = fillOnAxis(pts, dateAxis, policies.price[k]!);
+    assetSeries[k] = f.values;
+    assetHas[k] = f.has;
+  }
   const firstIdx = firstIndexWithAllAssets(Object.keys(assetSeries), assetSeries, dateAxis.length);
   if (firstIdx < 0) {
     throw new RangeError(`missing price coverage: no date in ${dateAxis[0]}..${dateAxis[dateAxis.length - 1]} has prices for every asset (${Object.keys(prices).join(", ")})`);
   }
-  return { assetSeries, tbillDaily, firstIdx };
+  return { assetSeries, assetHas, assetPolicy: policies.price, tbillDaily: cash.rate, cashHas: cash.has, cashPolicy: policies.cash, firstIdx };
 }
 
 function simulate(
   dateAxis: readonly string[],
   schedule: Schedule,
-  assetSeries: Record<string, number[]>,
-  tbillDaily: number[],
-  firstIdx: number,
+  prepared: PreparedSimulation,
   costRate: number,
 ): SimulationResult {
+  const { assetSeries, tbillDaily, firstIdx } = prepared;
   const equity = new Compounder(1);
   let lastWeights: Weights | null = null;
   const values: Point[] = [];
@@ -255,6 +436,7 @@ function simulate(
 
     // Day i's portfolio return = lastWeights · (day i's asset returns).
     if (lastWeights != null) {
+      checkHeldDay(lastWeights, prepared, dateAxis, i);
       const dailyTbill = periodicRate((tbillDaily[i - 1] || 0) / 100, 365);
       // portRet = cash weight x daily cash rate + sum of weight x asset return,
       // as one compensated dot product.
@@ -315,6 +497,8 @@ export interface DriftOptions {
   freq?: RebalanceFrequency;
   // Rebalance when any weight is more than `band` (absolute) from its target. Default: no band.
   band?: number;
+  // Fill policy per series, as simulatePortfolio (issue 1554).
+  fill?: SimulatorFill;
 }
 
 /** UTC weekday of a YYYY-MM-DD date, Monday 0 through Sunday 6. */
@@ -362,7 +546,7 @@ export function simulateDrift(
   options: DriftOptions = {},
 ): SimulationResult {
   for (const k of Object.keys(options)) {
-    if (k !== "costBps" && k !== "freq" && k !== "band") throw new RangeError(`unknown option ${JSON.stringify(k)}; expected costBps, freq, band`);
+    if (k !== "costBps" && k !== "freq" && k !== "band" && k !== "fill") throw new RangeError(`unknown option ${JSON.stringify(k)}; expected costBps, freq, band, fill`);
   }
   const { costBps, freq = "daily", band } = options;
   if (costBps !== undefined && (typeof costBps !== "number" || !Number.isFinite(costBps) || costBps < 0)) {
@@ -375,7 +559,8 @@ export function simulateDrift(
     throw new RangeError(`band must be a finite nonnegative number, got ${JSON.stringify(band)}`);
   }
   const costRate = costBps === undefined ? BACKTEST_COST_PER_REBALANCE : costBps / 10_000;
-  const { assetSeries, tbillDaily, firstIdx } = prepareSimulation(dateAxis, schedule, prices, cashRate);
+  const prepared = prepareSimulation(dateAxis, schedule, prices, cashRate, options.fill);
+  const { assetSeries, tbillDaily, firstIdx } = prepared;
 
   const equity = new Compounder(1);
   // The drifted weights of the book; holdings are held x equity.
@@ -398,6 +583,7 @@ export function simulateDrift(
       continue;
     }
 
+    checkHeldDay(held, prepared, dateAxis, i);
     const dailyCash = periodicRate((tbillDaily[i - 1] || 0) / 100, 365);
     const { ws, rs } = dayTerms(held, assetSeries, i, dailyCash);
     const portRet = ddValue(dotDD(ws, rs));
@@ -531,59 +717,111 @@ function fullStats(sim: SimulationResult): BacktestMetrics {
   return periodStats(sim.values, sim.startDate, sim.endDate, { returns: sim.returns, trades: sim.trades });
 }
 
-export function computeBacktest(
-  dateAxis: string[],
-  result: RegimeComputeResult,
-  extras: BacktestExtras,
-): BacktestPayload {
-  const priceSeries: Record<string, Point[]> = { eth: extras.eth, sp500: extras.spx };
-  const assetSeries: Record<string, number[]> = {
-    eth: forwardFillDaily(extras.eth, dateAxis),
-    sp500: forwardFillDaily(extras.spx, dateAxis),
-  };
+// The label series a reference backtest reads: the composite regime and one per
+// panel. A RegimeComputeResult has this shape.
+export interface BacktestLabels {
+  regime: readonly (string | null)[];
+  panelRegimes: Record<string, readonly (string | null)[]>;
+  // Default PANELS.
+  panels?: readonly string[];
+}
 
-  const panels = result.panels || PANELS;
-  const strategies: Record<string, (string | null)[]> = { composite: result.regime };
-  for (const p of panels) strategies[p] = result.panelRegimes[p];
-  if (result.panelRegimes.macro) {
-    strategies.macro_inverted = result.panelRegimes.macro.map((b) => {
+// The reference grid's label series (analytics requirements 5.5): composite,
+// one per panel, macro_inverted when a macro panel exists, conservative and
+// aggressive (generalized to N panels; they reduce to the original 2-panel
+// truth tables exactly when N = 2).
+export function referenceStrategies(labels: BacktestLabels): Record<string, (string | null)[]> {
+  const panels = labels.panels || PANELS;
+  const strategies: Record<string, (string | null)[]> = { composite: [...labels.regime] };
+  for (const p of panels) strategies[p] = [...labels.panelRegimes[p]!];
+  if (labels.panelRegimes.macro) {
+    strategies.macro_inverted = labels.panelRegimes.macro.map((b) => {
       if (b === "risk_off") return "risk_on";
       if (b === "risk_on") return "risk_off";
       return b;
     });
   }
-  // Conservative / aggressive generalized to N panels (reduces to the original
-  // 2-panel truth tables exactly when N = 2).
-  strategies.conservative = result.regime.map((_, i) =>
-    combineConservativeN(panels.map((p) => result.panelRegimes[p][i])),
-  );
-  strategies.aggressive = result.regime.map((_, i) =>
-    combineAggressiveN(panels.map((p) => result.panelRegimes[p][i])),
-  );
+  strategies.conservative = labels.regime.map((_, i) => combineConservativeN(panels.map((p) => labels.panelRegimes[p]![i] ?? null)));
+  strategies.aggressive = labels.regime.map((_, i) => combineAggressiveN(panels.map((p) => labels.panelRegimes[p]![i] ?? null)));
+  return strategies;
+}
+
+// The reference backtest's fill policies, keyed like BacktestExtras: the one
+// place they are declared. Each reproduces the published reference backtest
+// exactly. An analyst changes one by editing its row, in a reviewed diff that
+// also regenerates the golden (research issue 1673 records the choice).
+export const REFERENCE_FILL_POLICIES: Readonly<Record<keyof BacktestExtras, DeclaredFill>> = {
+  spx: { kind: "forward", maxAgeDays: null, reason: "Reproduces the published backtest" },
+  eth: { kind: "forward", maxAgeDays: null, reason: "Reproduces the published backtest" },
+  tbill3m: { kind: "forward", maxAgeDays: null, reason: "Reproduces the published backtest" },
+};
+
+const EXTRA_KEYS = ["spx", "eth", "tbill3m"] as const;
+
+// The reference backtest under REFERENCE_FILL_POLICIES.
+export function computeBacktest(dateAxis: string[], labels: BacktestLabels, extras: BacktestExtras): BacktestPayload {
+  return computeBacktestWithFill(dateAxis, labels, extras, REFERENCE_FILL_POLICIES);
+}
+
+// The reference backtest under the supplied policies (keyed like
+// BacktestExtras). Each market ends on its latest complete day: the last axis
+// date on which each of its risky assets and the cash rate has a value under
+// its policy (the cash rate has one on every date before its first
+// observation). Every line of the market is simulated over the axis cut at that
+// day. A market with no complete day at or after its first priced date is left
+// out. Not on the package entry.
+export function computeBacktestWithFill(
+  dateAxis: string[],
+  labels: BacktestLabels,
+  extras: BacktestExtras,
+  fill: Readonly<Record<keyof BacktestExtras, DeclaredFill>>,
+): BacktestPayload {
+  if (fill === null || typeof fill !== "object") throw new RangeError("fill must be a record of fill policy per extra (spx, eth, tbill3m)");
+  for (const k of Object.keys(fill)) {
+    if (!(EXTRA_KEYS as readonly string[]).includes(k)) throw new RangeError(`fill key ${JSON.stringify(k)} names no extra; expected spx, eth, tbill3m`);
+  }
+  for (const k of EXTRA_KEYS) if (!fill[k]) throw new RangeError(`fill policy missing for extra ${JSON.stringify(k)}`);
+  const priceSeries: Record<string, Point[]> = { eth: extras.eth, sp500: extras.spx };
+  const priceFill: Record<string, DeclaredFill> = { eth: fill.eth, sp500: fill.spx };
+  const filled: Record<string, AxisSeries> = {
+    eth: fillOnAxis(extras.eth, dateAxis, declaredPolicy('extra "eth"', fill.eth)),
+    sp500: fillOnAxis(extras.spx, dateAxis, declaredPolicy('extra "spx"', fill.spx)),
+  };
+  const assetSeries: Record<string, number[]> = { eth: filled.eth!.values, sp500: filled.sp500!.values };
+  const cashHas = cashOnAxis(extras.tbill3m, dateAxis, declaredPolicy('extra "tbill3m"', fill.tbill3m)).has;
+  const strategies = referenceStrategies(labels);
 
   const out: BacktestPayload = {};
   for (const [pKey, spec] of Object.entries(PORTFOLIO_SPECS)) {
     const pricedIdx = firstIndexWithAllAssets(spec.risky, assetSeries, dateAxis.length);
     if (pricedIdx < 0) continue;
+    let endIdx = dateAxis.length - 1;
+    while (endIdx >= 0 && !(cashHas[endIdx] && spec.risky.every((a) => filled[a]!.has[endIdx]))) endIdx--;
+    if (endIdx < pricedIdx) continue;
+    const axis = endIdx === dateAxis.length - 1 ? dateAxis : dateAxis.slice(0, endIdx + 1);
     const prices: Record<string, Point[]> = {};
-    for (const a of spec.risky) prices[a] = priceSeries[a]!;
+    const marketFill: SimulatorFill = { cash: fill.tbill3m };
+    for (const a of spec.risky) {
+      prices[a] = priceSeries[a]!;
+      marketFill[a] = priceFill[a]!;
+    }
     // Every line of a market starts on one date: the first day all the
     // strategies can trade (issue 1559). Before it, every schedule is empty, so
     // the comparison lines cover the strategies' window.
     const schedules: Record<string, Schedule> = {};
-    for (const [name, regimeSeries] of Object.entries(strategies)) schedules[name] = scheduleFromLabels(regimeSeries, spec.weights);
+    for (const [name, regimeSeries] of Object.entries(strategies)) schedules[name] = scheduleFromLabels(regimeSeries.slice(0, axis.length), spec.weights);
     let startIdx = -1;
     for (const schedule of Object.values(schedules)) {
       const first = schedule.findIndex((w, i) => i >= pricedIdx && w != null);
       if (first > startIdx) startIdx = first;
     }
-    schedules[spec.hodl.key] = dateAxis.map(() => spec.hodl.weights);
-    schedules.stables_only = dateAxis.map(() => ({ cash: 1 }));
+    schedules[spec.hodl.key] = axis.map(() => spec.hodl.weights);
+    schedules.stables_only = axis.map(() => ({ cash: 1 }));
 
     const port: Record<string, BacktestMetrics> = {};
     for (const [name, schedule] of Object.entries(schedules)) {
       const fromStart = startIdx < 0 ? schedule : schedule.map((w, i) => (i < startIdx ? null : w));
-      port[name] = fullStats(simulatePortfolio(dateAxis, fromStart, prices, extras.tbill3m));
+      port[name] = fullStats(simulatePortfolio(axis, fromStart, prices, extras.tbill3m, { fill: marketFill }));
     }
     out[pKey] = port;
   }
@@ -614,17 +852,12 @@ function firstIndexWithAllAssets(assetKeys: string[], assetSeries: Record<string
   return -1;
 }
 
-export function forwardFillDaily(series: Point[] | undefined, dateAxis: string[]): number[] {
-  const map = new Map<string, number>();
-  if (Array.isArray(series)) for (const p of series) map.set(p.date, p.value);
-  let last = NaN;
-  const out = new Array<number>(dateAxis.length).fill(NaN);
-  for (let i = 0; i < dateAxis.length; i++) {
-    const v = map.get(dateAxis[i]);
-    if (v !== undefined) last = v;
-    out[i] = last;
-  }
-  return out;
+// A price series on the axis under its declared fill policy (default
+// DEFAULT_SIMULATOR_FILL); NaN where the policy gives no value. It never fills
+// a gap the policy does not cover. Not on the package entry.
+export function forwardFillDaily(series: Point[] | undefined, dateAxis: readonly string[], policy: DeclaredFill | null = DEFAULT_SIMULATOR_FILL): number[] {
+  if (policy === null) throw new RangeError("fill policy missing for the series");
+  return fillOnAxis(series, dateAxis, declaredPolicy("the series", policy)).values;
 }
 
 function sameWeights(a: Weights, b: Weights): boolean {
