@@ -9,7 +9,7 @@ import type { VersionCheck } from "../../version-check.ts";
 
 export const FILES = [
   { path: "/assets/js/app/lib/regime-scale.js", must: /export function readOnComposite\b/, what: "exports readOnComposite" },
-  { path: "/assets/js/app/alpine/views/regime.js", must: /import \{ readOnComposite \} from "\.\.\/\.\.\/lib\/regime-scale\.js"/, what: "imports readOnComposite" },
+  { path: "/assets/js/app/alpine/views/regime.js", must: /import \{ readOnComposite \} from "\.\.\/\.\.\/lib\/regime-scale\.js(\?v=[0-9a-f]+)?"/, what: "imports readOnComposite" },
   { path: "/assets/js/app/alpine/regime-dial.js", must: /\bvalue\b/, mustNot: /\.percentile\b/, what: "reads the dial from value, not percentile" },
 ] as const;
 

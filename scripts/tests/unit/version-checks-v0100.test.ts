@@ -122,7 +122,10 @@ describe("Q41-regime-v5/C29-regime-v5 (PR 1665, D86)", () => {
   test("days before the first v5 run are frozen and not graded", () => {
     const h = run([0.8, 0.8, 0.8, 0.8, 0.8, 0.8], ["neutral", "neutral", "neutral", "neutral", "neutral", "neutral"]);
     expect(labelProblems(h, day(6)).problems).toEqual([]);
-    expect(labelProblems(h, day(5)).problems.length).toBe(1);
+    // The streak counts v5 days only: a v5 start on day 1 has its fifth v5 day at index 5.
+    expect(labelProblems(h, day(1)).problems.length).toBe(1);
+    // Frozen days before the first v5 run never count toward a confirmation (stage run 20261119T152050Z).
+    expect(labelProblems(h, day(5)).problems).toEqual([]);
   });
   test("a gap in the dates restarts the run, and a composite off the 0 to 1 scale is refused", () => {
     const h = [p(day(0), 0.8, "neutral"), p(day(1), 0.8, "neutral"), p(day(3), 0.8, "neutral"), p(day(4), 0.8, "neutral"), p(day(5), 0.8, "neutral")];
