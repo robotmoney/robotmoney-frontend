@@ -44,7 +44,8 @@ describe("Q39-flow-index/C27-flow-index (PR 1658, migration 0132)", () => {
     jobsByStatus: {},
     blocks: 0,
     logs: 0,
-    health: { status: 503, error: "flow index is not configured" },
+    health: { status: 200, state: "idle", reason: "flow index is not configured" },
+    vaultStatus: 404,
   };
   test("envMap reads KEY=value lines and keeps an empty value empty", () => {
     const m = envMap(["PATH=/bin", "FLOW_FUND_ADDRESS=", "A=b=c", ""]);
@@ -55,7 +56,7 @@ describe("Q39-flow-index/C27-flow-index (PR 1658, migration 0132)", () => {
     expect(flowProblems(idle)).toEqual([]);
   });
   test("passes: a configured lane that has indexed and is healthy", () => {
-    expect(flowProblems({ ...idle, configured: true, enabledSchedules: 1, jobsByStatus: { succeeded: 9 }, blocks: 40, logs: 3, health: { status: 200, error: null } })).toEqual([]);
+    expect(flowProblems({ ...idle, configured: true, enabledSchedules: 1, jobsByStatus: { succeeded: 9 }, blocks: 40, logs: 3, health: { status: 200, state: "ok", reason: null } })).toEqual([]);
   });
   test("red: the migration or a table is missing", () => {
     expect(flowProblems({ ...idle, ledger: [] }).join()).toContain("0132_flow_index.sql");
@@ -65,12 +66,15 @@ describe("Q39-flow-index/C27-flow-index (PR 1658, migration 0132)", () => {
     expect(flowProblems({ ...idle, enabledSchedules: 1 }).join()).toContain("enabled with the FLOW keys unset");
     expect(flowProblems({ ...idle, jobsByStatus: { succeeded: 1 } }).join()).toContain("should be idle");
     expect(flowProblems({ ...idle, blocks: 2 }).join()).toContain("holds 2 block(s)");
-    expect(flowProblems({ ...idle, health: { status: 500, error: null } }).join()).toContain("not 503");
+    expect(flowProblems({ ...idle, health: { status: 500, state: null, reason: null } }).join()).toContain("not 200");
+    expect(flowProblems({ ...idle, health: { status: 503, state: "unavailable", reason: null } }).join()).toContain("not 200");
+    expect(flowProblems({ ...idle, health: { status: 200, state: "ok", reason: null } }).join()).toContain("not 200");
+    expect(flowProblems({ ...idle, vaultStatus: 503 }).join()).toContain("flow vault answered 503");
   });
   test("red: an erroring lane, in either configuration", () => {
     expect(flowProblems({ ...idle, jobsByStatus: { failed: 2 } }).join()).toContain("erroring");
-    expect(flowProblems({ ...idle, configured: true, enabledSchedules: 1, jobsByStatus: { dead: 1 }, health: { status: 200, error: null } }).join()).toContain("erroring");
-    expect(flowProblems({ ...idle, configured: true, health: { status: 502, error: null } }).join()).toContain("only 200 or 503");
+    expect(flowProblems({ ...idle, configured: true, enabledSchedules: 1, jobsByStatus: { dead: 1 }, health: { status: 200, state: "ok", reason: null } }).join()).toContain("erroring");
+    expect(flowProblems({ ...idle, configured: true, health: { status: 502, state: null, reason: null } }).join()).toContain("only 200 or 503");
   });
   test("red: an unreadable api container is a problem, not a pass", () => {
     expect(flowProblems({ ...idle, configured: null }).join()).toContain("environment could not be read");

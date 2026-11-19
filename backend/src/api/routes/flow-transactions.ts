@@ -1,3 +1,4 @@
+import { flowDisabled } from "./flow-config.ts";
 import { config } from "../../config.ts";
 import { rpcBatchRequest } from "../../chain/base-rpc-client.ts";
 import { decodeFlowQuote, flowQueueCalldata } from "../../chain/flow-queue-calldata.ts";
@@ -33,7 +34,7 @@ export async function handleFlowTransactions(req: Request, url: URL, clientIp: s
   const byId = action === "cancel" || action === "withdraw-expired" || action === "notice" || action === "claim-notice" || claim;
   if ((!newRequest && !byId) || !/^0x[0-9a-fA-F]{40}$/.test(owner) || !/^0x[0-9a-fA-F]{40}$/.test(sender) || ((newRequest || claim) && !/^[1-9][0-9]{0,77}$/.test(amount)) || (byId && !/^[1-9][0-9]{0,77}$/.test(requestId))) return respond(400, { error: "invalid action, owner, sender, amount or request id" });
   if ((byId && BigInt(requestId) >= (1n << 256n)) || ((newRequest || claim) && BigInt(amount) >= (1n << 256n))) return respond(400, { error: "amount or request id out of range" });
-  if (!/^0x[0-9a-fA-F]{40}$/.test(dependencies.address)) return respond(503, { error: "queue is not configured" });
+  if (!/^0x[0-9a-fA-F]{40}$/.test(dependencies.address)) return flowDisabled();
   try {
     const watermark = await dependencies.watermark();
     if (byId) {

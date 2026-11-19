@@ -1,14 +1,15 @@
 // Q39-flow-index/C27-flow-index (PR 1658, migration 0132_flow_index, issue 1693): the deposit-flow index tables exist and
 // the indexer lane is idle, not erroring, where its compose keys are unset. Production does not get the FLOW_* keys in
 // v0.10.0 (owner, 2026-11-19), so the seeded flow.index schedule stays disabled (backend/src/db/seed.ts) and the
-// flow routes answer "not configured". Read-only: the ledger and four counts as rm_readonly, the api container's
+// flow health answers 200 "idle", the data routes 404. Read-only: the ledger and four counts as rm_readonly, the api container's
 // environment, and one GET through the public origin.
 //
 // WHAT IT REQUIRES:
 //   - schema_migrations records 0132_flow_index.sql, and flow_index_deployment, flow_index_blocks and flow_index_logs exist;
 //   - with FLOW_QUEUE_ADDRESS or FLOW_FUND_ADDRESS unset in the api container (the idle lane): every flow.index schedule is
 //     disabled, no flow.index job exists in any state (none failed, none dead), the index holds no block and no log, and
-//     GET /api/public/flow/health answers 503 "flow index is not configured" (idle, not a 500 or a crash);
+//     GET /api/public/flow/health answers 200 status "idle" with enabled false and the reason "flow index is not configured"
+//     (never a 5xx), and one data route (/api/public/flow/vault) answers 404 enabled false;
 //   - with both set (a stage that configures the lane): no flow.index job failed or died, and the health route answers
 //     200 or 503 with a JSON body, never any other status.
 import type { VersionCheck } from "../../version-check.ts";
@@ -26,7 +27,9 @@ export interface FlowRead {
   readonly jobsByStatus: Readonly<Record<string, number>>;
   readonly blocks: number;
   readonly logs: number;
-  readonly health: { readonly status: number; readonly error: string | null } | null;
+  readonly health: { readonly status: number; readonly state: string | null; readonly reason: string | null } | null;
+  /** The dormant data route's status (GET /api/public/flow/vault); null when not read. */
+  readonly vaultStatus?: number | null;
 }
 
 /** PURE. Why the flow lane is not idle-and-clean for its configuration; empty when it is. */
@@ -43,7 +46,8 @@ export function flowProblems(r: FlowRead): string[] {
     if (jobs > 0) out.push(`${jobs} flow.index job(s) exist with the FLOW keys unset; the lane should be idle`);
     if (r.blocks > 0 || r.logs > 0) out.push(`the index holds ${r.blocks} block(s) and ${r.logs} log(s) with the FLOW keys unset`);
     if (r.health === null) out.push("GET /api/public/flow/health was not read");
-    else if (r.health.status !== 503 || r.health.error !== "flow index is not configured") out.push(`flow health answered ${r.health.status} ${JSON.stringify(r.health.error)}, not 503 "flow index is not configured"`);
+    else if (r.health.status !== 200 || r.health.state !== "idle" || r.health.reason !== "flow index is not configured") out.push(`flow health answered ${r.health.status} ${JSON.stringify(r.health.state)} ${JSON.stringify(r.health.reason)}, not 200 "idle" "flow index is not configured"`);
+    if (r.vaultStatus !== 404) out.push(`flow vault answered ${r.vaultStatus ?? "nothing"} with the FLOW keys unset, not 404`);
   } else if (r.health === null || (r.health.status !== 200 && r.health.status !== 503)) {
     out.push(`flow health answered ${r.health?.status ?? "nothing"} with the FLOW keys set; only 200 or 503 is a healthy answer`);
   }
@@ -60,13 +64,16 @@ export default (async (ctx) => {
   const count = async (t: string): Promise<number> => (has(t) ? Number((await db.query<{ n: string }>(`SELECT count(*)::text AS n FROM ${t}`))[0]?.n ?? 0) : 0);
   const env = apiEnv(ctx);
   const res = await ctx.http(`/api/public/flow/health?rm-v0100-flow=${Date.now()}`);
-  let error: string | null = null;
+  let state: string | null = null;
+  let reason: string | null = null;
   try {
-    const body = JSON.parse(res.text) as { error?: unknown };
-    error = typeof body.error === "string" ? body.error : null;
+    const body = JSON.parse(res.text) as { status?: unknown; reason?: unknown };
+    state = typeof body.status === "string" ? body.status : null;
+    reason = typeof body.reason === "string" ? body.reason : null;
   } catch {
-    error = null;
+    state = reason = null;
   }
+  const vault = await ctx.http(`/api/public/flow/vault?rm-v0100-flow=${Date.now()}`);
   const read: FlowRead = {
     ledger,
     tables,
@@ -75,7 +82,8 @@ export default (async (ctx) => {
     jobsByStatus: Object.fromEntries(jobs.map((j) => [j.status, Number(j.n)])),
     blocks: await count("flow_index_blocks"),
     logs: await count("flow_index_logs"),
-    health: { status: res.status, error },
+    health: { status: res.status, state, reason },
+    vaultStatus: vault.status,
   };
   return { found: { ...read, ledger: undefined, migrationRecorded: ledger.includes(MIGRATION) }, problems: flowProblems(read) };
 }) satisfies VersionCheck;

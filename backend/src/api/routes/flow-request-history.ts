@@ -1,3 +1,4 @@
+import { flowConfigured, flowDisabled } from "./flow-config.ts";
 import { sql } from "../../db/client.ts";
 import { on, registerQuery } from "../../db/registry.ts";
 import { flowCheckpoints, flowDeployment } from "../../pipeline/stores/flow-index.ts";
@@ -13,6 +14,7 @@ const requestEvents = new Set(["DepositRequested", "RedeemRequested", "RequestCa
 export async function handleFlowRequestHistory(req: Request, url: URL, id: string, ip: string): Promise<Response> {
   if (limiter.check(ip).limited) return reply(429, { error: "rate limit exceeded" });
   if (req.method !== "GET") return reply(405, { error: "method not allowed" });
+  if (!flowConfigured()) return flowDisabled();
   if (!/^[1-9][0-9]{0,77}$/.test(id) || BigInt(id) >= (1n << 256n)) return reply(400, { error: "invalid request id" });
   const block = Number(url.searchParams.get("afterBlock") ?? 0), index = Number(url.searchParams.get("afterLogIndex") ?? -1);
   if (!Number.isSafeInteger(block) || block < 0 || !Number.isSafeInteger(index) || index < -1) return reply(400, { error: "invalid cursor" });

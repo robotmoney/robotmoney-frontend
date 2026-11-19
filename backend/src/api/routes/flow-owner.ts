@@ -1,3 +1,4 @@
+import { flowConfigured, flowDisabled } from "./flow-config.ts";
 import { sql } from "../../db/client.ts";
 import { on, registerQuery } from "../../db/registry.ts";
 import { flowCheckpoints, flowDeployment } from "../../pipeline/stores/flow-index.ts";
@@ -14,6 +15,7 @@ const REDEEM = "0x4e6558a3f3bfe9109a9a42f577ad5068d47c1e903f1f059cd8844db8d524d8
 export async function handleFlowOwner(req: Request, url: URL, owner: string, ip: string): Promise<Response> {
   if (limiter.check(ip).limited) return respond(429, { error: "rate limit exceeded" });
   if (req.method !== "GET") return respond(405, { error: "method not allowed" });
+  if (!flowConfigured()) return flowDisabled();
   if (!/^0x[0-9a-fA-F]{40}$/.test(owner)) return respond(400, { error: "invalid owner" });
   const block = Number(url.searchParams.get("afterBlock") ?? 0), index = Number(url.searchParams.get("afterLogIndex") ?? -1);
   if (!Number.isSafeInteger(block) || block < 0 || !Number.isSafeInteger(index) || index < -1) return respond(400, { error: "invalid cursor" });
