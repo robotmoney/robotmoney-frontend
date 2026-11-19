@@ -158,9 +158,9 @@ test("issue 1653: the committed floor seed holds BAA10Y rows from 1986-01-02", a
 });
 
 // The sha256 of every non-BAA10Y line of the committed floor seed on origin/main
-// before issue 1653 (unchanged since issue 616). The BAA10Y backfill adds lines
+// before issue 1653 (as issue 1644 left it). The BAA10Y backfill adds lines
 // only, so every other series' rows are byte-identical, in their order.
-const PRE_1653_OTHER_ROWS_SHA256 = "c9c0b12fa3c3bcc8f016292de362ed186f72608f414cffb1c957b15fa4c21fd6";
+const PRE_1653_OTHER_ROWS_SHA256 = "42d0748bf3c9a8b5240eb62572de0d8f0064c847cb9cb26bf5555d6c7a79d131";
 
 test("issue 1653: every row of every series other than BAA10Y is byte-identical to the floor seed before the backfill", () => {
   const text = gunzipSync(readFileSync(DEFAULT_FLOOR_SEED_PATH)).toString("utf8");

@@ -11,7 +11,7 @@ import { writeFileSync, readFileSync, renameSync, unlinkSync, mkdirSync } from "
 import { dirname } from "node:path";
 import { mergeSeries } from "../transform/math.ts";
 import { loadRawFloorSeed, DEFAULT_FLOOR_SEED_PATH } from "./floor-seed.ts";
-import { collectionRegistry } from "../../../../packages/analyst-sdk/src/extract/collected-series.ts";
+import { collectionRegistry } from "./collected-series.ts";
 import { RATIO_IDS, RATIO_LEG_KEYS } from "../extras.ts";
 import { filterCalendarValid, validateFloorCalendar } from "./floor-seed-calendar.ts";
 import type { Point, RawIndicatorHistory } from "../types.ts";

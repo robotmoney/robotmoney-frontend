@@ -8,7 +8,7 @@ import { analyticsApiClient, resolveAnalyticsApiConfig, type AnalyticsApiConfig 
 import { bootstrapEdgarSeed } from "../analytics/edgar-seed-loader.ts";
 import type { AnalyticsPersistence } from "../analytics/persistence.ts";
 import type { AnalyticsDataSource } from "../analytics/access/data-source.ts";
-import { collectionRegistry } from "../../../packages/analyst-sdk/src/extract/collected-series.ts";
+import { collectionRegistry } from "../analytics/extract/collected-series.ts";
 import { RATIO_IDS, STORED_RATIO_IDS } from "../analytics/extras.ts";
 import type { RawIndicatorHistory } from "../analytics/types.ts";
 import { writeHeartbeat } from "../ops/heartbeat.ts";

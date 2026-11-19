@@ -13,9 +13,9 @@ import {
   runRegime as runRegimeOutcome, requireComplete,
   prepareRegimeInputs,
   toHistory,
-  COLLECTED_SERIES,
   type Indicator,
 } from "../src/index.ts";
+import { COLLECTED_SERIES } from "../src/extract/collected-series.ts";
 // Each run here scores a complete day (issue 1655): an IncompleteDay fails the test.
 const runRegime = (...a: Parameters<typeof runRegimeOutcome>) => requireComplete(runRegimeOutcome(...a));
 

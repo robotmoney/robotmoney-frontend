@@ -14,7 +14,7 @@ import { randomUUID } from "node:crypto";
 import { sql, jsonValue } from "../../db/client.ts";
 import { on, registerQuery } from "../../db/registry.ts";
 import { jobCountsByKind, jobCountsByStatus } from "../../admin/job-counts.ts";
-import { collectionRegistry } from "../../../../packages/analyst-sdk/src/extract/collected-series.ts";
+import { collectionRegistry } from "../../analytics/extract/collected-series.ts";
 import { computeRegimeStaleness } from "../../analytics/report/regime-projection.ts";
 import { decodeCursor, encodeCursor } from "../../admin/cursor.ts";
 import { recordAudit, redactAuditRow } from "../../admin/audit.ts";

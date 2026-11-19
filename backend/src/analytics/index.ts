@@ -31,7 +31,7 @@ import {
   mergeSeries,
 } from "./transform/math.ts";
 import { loadRawFloorSeed } from "./extract/floor-seed.ts";
-import { COLLECTED_SERIES, collectionRegistry } from "../../../packages/analyst-sdk/src/extract/collected-series.ts";
+import { COLLECTED_SERIES, collectionRegistry } from "./extract/collected-series.ts";
 import type { RegimeSnapshotRow } from "./report/regime-projection.ts";
 import type { AnalyticsPersistence } from "./persistence.ts";
 import { analyticsApiClient } from "./api-client.ts";

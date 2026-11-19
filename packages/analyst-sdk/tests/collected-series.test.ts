@@ -2,7 +2,8 @@
 // served, never scored; collectionRegistry() is INDICATORS then
 // COLLECTED_SERIES, and an id in both throws.
 import { describe, expect, test } from "bun:test";
-import { COLLECTED_SERIES, collectionRegistry, INDICATORS, PANELS } from "../src/index.ts";
+import { INDICATORS, PANELS } from "../src/index.ts";
+import { COLLECTED_SERIES, collectionRegistry } from "../src/extract/collected-series.ts";
 import { sourceCalendar } from "../src/extract/floor-seed-calendar.ts";
 
 describe("COLLECTED_SERIES and collectionRegistry() (issue 1653)", () => {

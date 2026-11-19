@@ -34,7 +34,7 @@
 //   bun run scripts/floor-seed-regenerate.ts --fred-backfill BAA10Y --first-vintage 2014-01-27
 import { fetchCoinmetrics } from "../src/analytics/extract/coinmetrics.ts";
 import { fetchAlfredFirstRelease, fetchFred } from "../src/analytics/extract/fred.ts";
-import { collectionRegistry } from "../../packages/analyst-sdk/src/extract/collected-series.ts";
+import { collectionRegistry } from "../src/analytics/extract/collected-series.ts";
 import { fetchAll } from "../src/analytics/extract/sources.ts";
 import {
   generateFloorSeedArtifact,

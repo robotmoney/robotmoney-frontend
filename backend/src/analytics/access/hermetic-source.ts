@@ -12,7 +12,7 @@
 // `base` only anchors a level and `vol` supplies the variation the ranks need.
 import type { AnalyticsDataSource, ResearchInputs, BacktestExtras, Logger } from "./data-source.ts";
 import type { Point } from "../types.ts";
-import type { SourceSeries } from "../../../../packages/analyst-sdk/src/extract/collected-series.ts";
+import type { SourceSeries } from "../extract/collected-series.ts";
 import { seededProvider } from "./provider.ts";
 import { TOP7 } from "../analyze/research-signals.ts";
 

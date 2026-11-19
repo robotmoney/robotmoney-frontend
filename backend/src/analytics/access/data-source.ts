@@ -7,7 +7,7 @@
 // Tests inject a fixture-backed source implementing the same interface for a
 // deterministic, network-free round-trip (see tests/analytics-suite.test.ts).
 import type { Point } from "../types.ts";
-import type { SourceSeries } from "../../../../packages/analyst-sdk/src/extract/collected-series.ts";
+import type { SourceSeries } from "../extract/collected-series.ts";
 import { fetchAll, createFetchMemo, mergeYahooPlans, registryYahooPlan, type FetchMemo } from "../extract/sources.ts";
 import { fetchYahoo } from "../extract/yahoo.ts";
 import { fetchFred } from "../extract/fred.ts";
