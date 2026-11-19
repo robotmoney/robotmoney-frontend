@@ -1,12 +1,15 @@
 // prepareRegimeInputs unit tests with synthetic registries. The shipped registry
-// has no zero_fill indicator, so these are the only red controls for that branch,
+// has no zero-fill indicator, so these are the only red controls for that branch,
 // for lastRaw, and for the empty-series rule (all NaN, for every transform).
+// Each fill policy's own rules are pinned by tests/fill-policy.test.ts.
 import { beforeAll, describe, expect, test } from "bun:test";
 import { prepareRegimeInputs } from "../src/prepare.ts";
-import type { Indicator } from "../src/analyze/indicators.ts";
+import type { FillPolicy, Indicator } from "../src/analyze/indicators.ts";
 
-const mk = (id: string, transform: string, align?: "zero_fill"): Indicator => ({
-  id, name: id, panel: "macro", source: "test", sign: 1, transform, unit: "x", ...(align ? { align } : {}),
+const ZERO: FillPolicy = { kind: "zero" };
+const FORWARD: FillPolicy = { kind: "forward", maxAgeDays: 120 };
+const mk = (id: string, transform: string, fill: FillPolicy = FORWARD): Indicator => ({
+  id, name: id, panel: "macro", source: "test", sign: 1, transform, unit: "x", fill, fillReason: "test",
 });
 const TRANSFORMS = ["level", "change30", "change90", "sma4", "sma7", "trend_50_200", "rolling_sum_7"];
 const START = "2024-01-01";
@@ -17,7 +20,7 @@ describe("prepareRegimeInputs", () => {
     const rows = [{ date: "2024-01-03", value: 5 }, { date: "2024-01-06", value: 7 }];
     const p = prepareRegimeInputs(
       { Z: rows, F: rows },
-      { start: START, asof: ASOF, indicators: [mk("Z", "level", "zero_fill"), mk("F", "level")] },
+      { start: START, asof: ASOF, indicators: [mk("Z", "level", ZERO), mk("F", "level")] },
     );
     expect(p.dateAxis.length).toBe(10);
     expect(p.transformed.Z).toEqual([NaN, NaN, 5, 0, 0, 7, 0, 0, 0, 0]);
@@ -40,13 +43,13 @@ describe("prepareRegimeInputs", () => {
   });
 
   test("an empty or absent series is all NaN for every transform and zero_fill, with ages still NaN-filled for forward-fill", () => {
-    const inds = TRANSFORMS.flatMap((t) => [mk(`E_${t}`, t), mk(`Z_${t}`, t, "zero_fill")]);
+    const inds = TRANSFORMS.flatMap((t) => [mk(`E_${t}`, t), mk(`Z_${t}`, t, ZERO)]);
     const p = prepareRegimeInputs({ E_level: [] }, { start: START, asof: ASOF, indicators: inds });
     for (const ind of inds) {
       expect(p.transformed[ind.id]!.length).toBe(10);
       expect(p.transformed[ind.id]!.every(Number.isNaN)).toBe(true);
-      expect(ind.id in p.ages).toBe(ind.align !== "zero_fill");
-      if (ind.align !== "zero_fill") expect(p.ages[ind.id]!.every(Number.isNaN)).toBe(true);
+      expect(ind.id in p.ages).toBe(ind.fill.kind !== "zero");
+      if (ind.fill.kind !== "zero") expect(p.ages[ind.id]!.every(Number.isNaN)).toBe(true);
     }
   });
 });
@@ -63,7 +66,9 @@ import { mergeRatioSeries } from "../src/transform/grid.ts";
 import { mergeRatioSeries as fetchRatio } from "../src/extract/sources.ts";
 import { resolveInputHistory } from "../src/series-ids.ts";
 import { ratiosFromLegs } from "../src/transform/ratios.ts";
-import { buildReport, runRegime, type RunResult } from "../src/run.ts";
+import { buildReport, runRegime as runRegimeOutcome, requireComplete, type RunResult } from "../src/run.ts";
+// Each run here scores a complete day (issue 1655): an IncompleteDay fails the test.
+const runRegime = (...a: Parameters<typeof runRegimeOutcome>) => requireComplete(runRegimeOutcome(...a));
 import type { Point, RawIndicatorHistory } from "../src/types.ts";
 import { legInputs, legsOf, RATIOS } from "./support/ratio-legs.ts";
 

@@ -69,7 +69,7 @@ test("every sources.ts provider variant records requests, ratio/fallback legs, p
     ...enumerated.filter((source) => !INDICATORS.some((i) => i.source === source))
       .map((source): Indicator => ({
         id: `synthetic_${source}`, name: source, panel: INDICATORS[0]!.panel,
-        source, sign: 1, transform: INDICATORS[0]!.transform, unit: "index",
+        source, sign: 1, transform: INDICATORS[0]!.transform, unit: "index", fill: INDICATORS[0]!.fill, fillReason: INDICATORS[0]!.fillReason,
       })),
   ];
   const output = await fetchAll({ indicators, acquisitionSink: sink, requestedByRunId: 42 });

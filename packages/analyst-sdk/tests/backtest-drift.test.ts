@@ -21,7 +21,9 @@ import {
 } from "../src/analyze/backtest.ts";
 import { ddDiv, ddValue, dotDD, periodicRate, twoSum } from "../src/transform/exact.ts";
 import * as entry from "../src/index.ts";
-import { parseRawHistory, runRegime, toHistory } from "../src/index.ts";
+import { parseRawHistory, runRegime as runRegimeOutcome, requireComplete, toHistory } from "../src/index.ts";
+// Each run here scores a complete day (issue 1655): an IncompleteDay fails the test.
+const runRegime = (...a: Parameters<typeof runRegimeOutcome>) => requireComplete(runRegimeOutcome(...a));
 import type { Point } from "../src/types.ts";
 import { exactDot, onePlus, Q } from "./support/exact-reference.ts";
 

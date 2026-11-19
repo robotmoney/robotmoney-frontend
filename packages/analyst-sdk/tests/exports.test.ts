@@ -25,3 +25,14 @@ describe("package entry exports the tunable building blocks", () => {
     expect(JSON.parse(JSON.stringify(books))).toEqual(books);
   });
 });
+
+// Issue 1655: the fill-policy and day-completeness API is on the package entry,
+// and MAX_FORWARD_FILL_DAYS stays exported as the value every registry row declares.
+describe("package entry exports the fill-policy and complete-day API", () => {
+  test("fill policies, day completeness and the incomplete result are exported; MAX_FORWARD_FILL_DAYS stays 120", () => {
+    for (const name of ["fillPolicyOf", "fillMaxAgeDays", "FillPolicyError", "latestCompleteDay", "missingOnDay", "requireComplete", "IncompleteDayError", "forwardFillAge"] as const) {
+      expect(typeof sdk[name]).toBe("function");
+    }
+    expect(sdk.MAX_FORWARD_FILL_DAYS).toBe(120);
+  });
+});

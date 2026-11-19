@@ -10,6 +10,12 @@
 // Sign convention: +1 means "rising raw value = risk-on", -1 means flip.
 // Transform: applied to the raw history before percentile ranking.
 
+// #402: the former single maximum age (in days) a forward-filled value could be
+// carried. Since issue 1655 it is the value every registry indicator declares in
+// its own fill policy below. Defined here, in the pure registry, so a reader of
+// the registry imports no calculation code; transform/math.ts re-exports it.
+export const MAX_FORWARD_FILL_DAYS = 120;
+
 export type Panel = "macro" | "onchain" | "factor";
 
 export interface Indicator {
@@ -20,13 +26,69 @@ export interface Indicator {
   series?: string | string[] | { asset: string; metric: string };
   sign: 1 | -1;
   transform: string;
-  align?: "zero_fill";
+  // How a day without a real observation is treated (issue 1655). Required:
+  // the SDK has no default. See FillPolicy below.
+  fill: FillPolicy;
+  // Why this indicator has its policy, in a short phrase.
+  fillReason: string;
   unit: string;
   source_url?: string;
   description?: string;
   derivation?: string;
   interpretation?: string;
 }
+
+// Fill policy (issue 1655, docs/technical/regime-engine.md section 8.1). The
+// SDK never fills a gap by default. Each indicator declares its policy:
+//   none:    no fill; a day without a real observation is missing.
+//   forward: the last real observation is carried for at most maxAgeDays days;
+//            an older day is missing.
+//   zero:    a gap is a real 0.
+// An analyst changes a row (fill and fillReason) in its own reviewed diff,
+// which owns any methodology version change and golden regeneration.
+export type FillPolicy = { kind: "none" } | { kind: "forward"; maxAgeDays: number } | { kind: "zero" };
+
+// Every registry indicator declares the former global cap, so every figure is
+// the one the SDK computed before per-indicator policies existed.
+const DECLARED_FILL: FillPolicy = { kind: "forward", maxAgeDays: MAX_FORWARD_FILL_DAYS };
+const DECLARED_FILL_REASON = "Carried forward up to the former global cap";
+
+// Raised when an indicator has no valid declared fill policy. Names it.
+export class FillPolicyError extends Error {
+  constructor(readonly indicatorId: string, detail: string) {
+    super(`indicator ${indicatorId}: ${detail} (declare fill as { kind: "none" }, { kind: "forward", maxAgeDays }, or { kind: "zero" }, with a fillReason)`);
+    this.name = "FillPolicyError";
+  }
+}
+
+/** The indicator's declared fill policy. Throws FillPolicyError when it is missing or malformed. */
+export function fillPolicyOf(ind: { id: string; fill?: unknown; fillReason?: unknown }): FillPolicy {
+  const f = ind.fill as { kind?: unknown; maxAgeDays?: unknown } | undefined;
+  if (!f || typeof f !== "object") throw new FillPolicyError(ind.id, "no fill policy declared");
+  if (typeof ind.fillReason !== "string" || ind.fillReason.trim() === "") throw new FillPolicyError(ind.id, "no fillReason declared");
+  if (f.kind === "none" || f.kind === "zero") return { kind: f.kind };
+  if (f.kind === "forward") {
+    const n = f.maxAgeDays;
+    if (typeof n === "number" && Number.isInteger(n) && n > 0) return { kind: "forward", maxAgeDays: n };
+    throw new FillPolicyError(ind.id, `forward fill needs a positive integer maxAgeDays, got ${JSON.stringify(n)}`);
+  }
+  throw new FillPolicyError(ind.id, `unknown fill kind ${JSON.stringify(f.kind)}`);
+}
+
+/** Days a gap may be filled under the policy: 0 for none, maxAgeDays for forward, Infinity for zero. */
+export function fillMaxAgeDays(policy: FillPolicy): number {
+  return policy.kind === "none" ? 0 : policy.kind === "forward" ? policy.maxAgeDays : Infinity;
+}
+
+// Day rule (issue 1655): what a run does with a day that is not complete.
+//   score-newest:     score the day given, or the newest input row, as before;
+//                     an indicator older than its policy is NaN that day.
+//   require-complete: without an as-of day score the latest complete day; an
+//                     explicit incomplete day is an IncompleteDay, no figure.
+// The declared value keeps today's day in every case.
+export type DayRule = "score-newest" | "require-complete";
+export const DAY_RULES: readonly DayRule[] = ["score-newest", "require-complete"];
+export const DAY_RULE: DayRule = "score-newest";
 
 export const INDICATORS: Indicator[] = [
   // ── MACRO ────────────────────────────────────────────────────────────────
@@ -39,6 +101,8 @@ export const INDICATORS: Indicator[] = [
     sign: +1,
     transform: "level",
     unit: "percent",
+    fill: DECLARED_FILL,
+    fillReason: DECLARED_FILL_REASON,
     source_url: "https://fred.stlouisfed.org/series/T10Y2Y",
     description:
       "The difference between 10-year and 2-year US Treasury yields. When negative (\"inverted\"), short-dated bonds yield more than long-dated ones — a configuration that has historically preceded every US recession since 1955.",
@@ -56,6 +120,8 @@ export const INDICATORS: Indicator[] = [
     sign: -1,
     transform: "level",
     unit: "percent",
+    fill: DECLARED_FILL,
+    fillReason: DECLARED_FILL_REASON,
     source_url: "https://fred.stlouisfed.org/series/DFII10",
     description:
       "The yield on 10-year Treasury Inflation-Protected Securities (TIPS) — the \"real\" interest rate after stripping out inflation expectations. The pure cost of capital that policymakers actually care about.",
@@ -72,6 +138,8 @@ export const INDICATORS: Indicator[] = [
     sign: +1,
     transform: "level",
     unit: "percent",
+    fill: DECLARED_FILL,
+    fillReason: DECLARED_FILL_REASON,
     source_url: "https://fred.stlouisfed.org/series/T5YIE",
     description:
       "The bond market's implied forecast for average inflation over the next 5 years. Computed as the spread between nominal 5-year Treasury yield and 5-year TIPS yield.",
@@ -89,6 +157,8 @@ export const INDICATORS: Indicator[] = [
     sign: -1,
     transform: "level",
     unit: "percent",
+    fill: DECLARED_FILL,
+    fillReason: DECLARED_FILL_REASON,
     source_url: "https://fred.stlouisfed.org/series/BAMLH0A0HYM2",
     description:
       "ICE BofA US High Yield Option-Adjusted Spread. The yield premium that investors demand to hold US junk-rated corporate bonds over Treasuries. A direct, real-time measure of credit risk appetite.",
@@ -106,6 +176,8 @@ export const INDICATORS: Indicator[] = [
     sign: -1,
     transform: "level",
     unit: "index",
+    fill: DECLARED_FILL,
+    fillReason: DECLARED_FILL_REASON,
     source_url: "https://fred.stlouisfed.org/series/DTWEXBGS",
     description:
       "A broad trade-weighted index of the US dollar against the currencies of major US trading partners. Measures dollar strength globally, not just against the major reserve currencies.",
@@ -123,6 +195,8 @@ export const INDICATORS: Indicator[] = [
     sign: -1,
     transform: "level",
     unit: "count",
+    fill: DECLARED_FILL,
+    fillReason: DECLARED_FILL_REASON,
     source_url: "https://fred.stlouisfed.org/series/ICSA",
     description:
       "The number of new claims filed for US unemployment insurance benefits in the most recent week. The cleanest high-frequency read on labor market health.",
@@ -140,6 +214,8 @@ export const INDICATORS: Indicator[] = [
     sign: -1,
     transform: "level",
     unit: "index",
+    fill: DECLARED_FILL,
+    fillReason: DECLARED_FILL_REASON,
     source_url: "https://finance.yahoo.com/quote/%5EVIX",
     description:
       "CBOE Volatility Index. The market's expected 30-day volatility of the S&P 500, derived from the prices of out-of-the-money S&P options. Universally known as the \"fear gauge.\"",
@@ -157,6 +233,8 @@ export const INDICATORS: Indicator[] = [
     sign: +1,
     transform: "level",
     unit: "ratio4",
+    fill: DECLARED_FILL,
+    fillReason: DECLARED_FILL_REASON,
     source_url: "https://finance.yahoo.com/quote/HG=F",
     description:
       "Price of copper futures divided by price of gold futures. Copper is an industrial-demand proxy (used heavily in construction, electronics, manufacturing); gold is a defensive store of value. The ratio captures whether the commodity complex is leaning cyclical or defensive.",
@@ -174,6 +252,8 @@ export const INDICATORS: Indicator[] = [
     sign: +1,
     transform: "trend_50_200",
     unit: "index",
+    fill: DECLARED_FILL,
+    fillReason: DECLARED_FILL_REASON,
     source_url: "https://finance.yahoo.com/quote/%5EGSPC",
     description:
       "Ratio of the S&P 500's 50-day simple moving average to its 200-day simple moving average. The classic \"golden cross / death cross\" trend indicator on the broadest equity benchmark.",
@@ -191,6 +271,8 @@ export const INDICATORS: Indicator[] = [
     sign: +1,
     transform: "level",
     unit: "ratio4",
+    fill: DECLARED_FILL,
+    fillReason: DECLARED_FILL_REASON,
     source_url: "https://finance.yahoo.com/quote/IWM",
     description:
       "Ratio of the Russell 2000 small-cap ETF (IWM) to the S&P 500 ETF (SPY). A measure of market breadth — whether small-caps are participating in the rally or just the mega-cap leaders.",
@@ -208,6 +290,8 @@ export const INDICATORS: Indicator[] = [
     sign: +1,
     transform: "level",
     unit: "usd",
+    fill: DECLARED_FILL,
+    fillReason: DECLARED_FILL_REASON,
     source_url: "https://defillama.com/",
     description:
       "Total dollar value of crypto assets locked across all DeFi protocols — lending, automated market makers, liquid staking, restaking, yield aggregators. The aggregate measure of capital deployment into permissionless finance.",
@@ -224,6 +308,8 @@ export const INDICATORS: Indicator[] = [
     sign: +1,
     transform: "level",
     unit: "usd",
+    fill: DECLARED_FILL,
+    fillReason: DECLARED_FILL_REASON,
     source_url: "https://defillama.com/stablecoins",
     description:
       "Total outstanding supply of USD-pegged stablecoins (USDT, USDC, DAI, and others) across all chains. Approximates the dollar liquidity sitting on crypto rails.",
@@ -240,6 +326,8 @@ export const INDICATORS: Indicator[] = [
     sign: +1,
     transform: "level",
     unit: "count",
+    fill: DECLARED_FILL,
+    fillReason: DECLARED_FILL_REASON,
     source_url: "https://www.blockchain.com/explorer/charts/n-unique-addresses",
     description:
       "Number of unique Bitcoin addresses that participated in transactions on a given day. A proxy for organic network usage and on-chain engagement.",
@@ -256,6 +344,8 @@ export const INDICATORS: Indicator[] = [
     sign: +1,
     transform: "level",
     unit: "count",
+    fill: DECLARED_FILL,
+    fillReason: DECLARED_FILL_REASON,
     source_url: "https://charts.coinmetrics.io/network-data/eth/AdrActCnt",
     description:
       "Number of unique Ethereum addresses that transacted on a given day. Equivalent to the BTC measure, for ETH mainnet specifically.",
@@ -272,6 +362,8 @@ export const INDICATORS: Indicator[] = [
     sign: +1,
     transform: "level",
     unit: "ratio2",
+    fill: DECLARED_FILL,
+    fillReason: DECLARED_FILL_REASON,
     source_url: "https://charts.coinmetrics.io/network-data/btc/CapMVRVCur",
     description:
       "Market Value to Realized Value ratio. Divides BTC market capitalization by its \"realized cap\" — the sum of (price-at-last-move × amount) across all UTXOs. Represents how big a paper gain or loss the average bitcoin holder is sitting on.",
@@ -289,6 +381,8 @@ export const INDICATORS: Indicator[] = [
     sign: -1,
     transform: "level",
     unit: "ratio2",
+    fill: DECLARED_FILL,
+    fillReason: DECLARED_FILL_REASON,
     source_url: "https://finance.yahoo.com/quote/BTC-USD",
     description:
       "BTC price divided by ETH price. A proxy for \"crypto risk preference\" — when capital flies to the safest crypto asset (BTC) over the higher-beta major (ETH), risk-off is happening within crypto.",
@@ -306,6 +400,8 @@ export const INDICATORS: Indicator[] = [
     sign: +1,
     transform: "trend_50_200",
     unit: "index",
+    fill: DECLARED_FILL,
+    fillReason: DECLARED_FILL_REASON,
     source_url: "https://finance.yahoo.com/quote/ETH-USD",
     description:
       "Ratio of ETH's 50-day simple moving average to its 200-day SMA. The ETH-specific equivalent of SPX_TREND.",
@@ -321,6 +417,8 @@ export const INDICATORS: Indicator[] = [
     sign: -1,
     transform: "level",
     unit: "count",
+    fill: DECLARED_FILL,
+    fillReason: DECLARED_FILL_REASON,
     source_url: "https://www.geckoterminal.com/new-pools",
     description:
       "Count of new DEX liquidity pools (≈ new token launches) observed across all networks in the trailing 24 hours. A real-time measure of crypto speculation intensity.",
@@ -337,6 +435,8 @@ export const INDICATORS: Indicator[] = [
     sign: +1,
     transform: "change90",
     unit: "percent_change",
+    fill: DECLARED_FILL,
+    fillReason: DECLARED_FILL_REASON,
     source_url: "https://defillama.com/",
     description:
       "The 90-day percent change in total DeFi TVL. Captures flow — whether capital is actively expanding or contracting the on-chain ecosystem — independent of where the absolute level happens to be.",
@@ -353,6 +453,8 @@ export const INDICATORS: Indicator[] = [
     sign: +1,
     transform: "change90",
     unit: "percent_change",
+    fill: DECLARED_FILL,
+    fillReason: DECLARED_FILL_REASON,
     source_url: "https://defillama.com/stablecoins",
     description:
       "The 90-day percent change in total stablecoin float. Captures whether dollar liquidity on crypto rails is expanding or shrinking — a leading indicator of imminent risk-asset deployment or withdrawal.",
@@ -372,6 +474,8 @@ export const INDICATORS: Indicator[] = [
     sign: +1,
     transform: "level",
     unit: "ratio4",
+    fill: DECLARED_FILL,
+    fillReason: DECLARED_FILL_REASON,
     source_url: "https://finance.yahoo.com/quote/SPHB",
     description:
       "Ratio of the Invesco S&P 500 High Beta ETF (SPHB) to the Invesco S&P 500 Low Volatility ETF (SPLV). Both are S&P 500 subsets, so the ratio isolates the risk-axis directly without cross-cap or sector confounds.",
@@ -388,6 +492,8 @@ export const INDICATORS: Indicator[] = [
     sign: +1,
     transform: "level",
     unit: "ratio4",
+    fill: DECLARED_FILL,
+    fillReason: DECLARED_FILL_REASON,
     source_url: "https://finance.yahoo.com/quote/MTUM",
     description:
       "Ratio of the iShares MSCI USA Momentum Factor ETF (MTUM) to the S&P 500 ETF (SPY). Captures whether cross-sectional momentum — buying recent winners — is working in the current market.",
@@ -404,6 +510,8 @@ export const INDICATORS: Indicator[] = [
     sign: +1,
     transform: "level",
     unit: "ratio4",
+    fill: DECLARED_FILL,
+    fillReason: DECLARED_FILL_REASON,
     source_url: "https://finance.yahoo.com/quote/IWF",
     description:
       "Ratio of the iShares Russell 1000 Growth ETF (IWF) to the iShares Russell 1000 Value ETF (IWD). Captures the high-duration / risk-asset side of the equity style axis.",
@@ -420,6 +528,8 @@ export const INDICATORS: Indicator[] = [
     sign: -1,
     transform: "level",
     unit: "ratio4",
+    fill: DECLARED_FILL,
+    fillReason: DECLARED_FILL_REASON,
     source_url: "https://finance.yahoo.com/quote/XLU",
     description:
       "Ratio of the SPDR Utilities Select Sector ETF (XLU) to the S&P 500 ETF (SPY). Utilities are the canonical defensive / bond-proxy sector.",
@@ -436,6 +546,8 @@ export const INDICATORS: Indicator[] = [
     sign: -1,
     transform: "level",
     unit: "ratio4",
+    fill: DECLARED_FILL,
+    fillReason: DECLARED_FILL_REASON,
     source_url: "https://finance.yahoo.com/quote/XLP",
     description:
       "Ratio of the SPDR Consumer Staples ETF (XLP) to the SPDR Consumer Discretionary ETF (XLY). Direct read on consumer-driven cyclical vs defensive rotation.",
@@ -451,6 +563,8 @@ export const INDICATORS: Indicator[] = [
     sign: -1,
     transform: "level",
     unit: "ratio2",
+    fill: DECLARED_FILL,
+    fillReason: DECLARED_FILL_REASON,
     source_url: "https://www.multpl.com/shiller-pe",
     description:
       "Robert Shiller's Cyclically Adjusted Price-to-Earnings ratio for the S&P 500 — current real price divided by the 10-year average of real earnings. Smooths the earnings cycle so the multiple is comparable across business cycles, unlike raw trailing P/E which spikes mechanically in recessions.",

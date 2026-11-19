@@ -3,7 +3,7 @@
 // and async fetchers. Ported from agentjuno/robotmoney fetchers/defillama.js.
 import type { Point } from "../types.ts";
 import { isoDay } from "../transform/math.ts";
-import { fetchJson } from "./http.ts";
+import { applyDayClose, fetchJson, type DayClose } from "./http.ts";
 
 export const llamaTvlUrl = "https://api.llama.fi/v2/historicalChainTvl";
 export const llamaStablesUrl = "https://stablecoins.llama.fi/stablecoincharts/all";
@@ -23,12 +23,21 @@ export function parseLlamaStables(j: unknown): Point[] {
   }));
 }
 
+// The run time and the source's day-close rule (issue 1655) are parameters, so
+// tests pin them. Under the declared "accept-partial" every served row is kept.
+export interface DayCloseOptions {
+  dayClose?: DayClose;
+  now?: Date;
+}
+
 // Total DeFi TVL across all chains (drops non-finite tvl rows).
-export async function fetchDefillamaTvl(timeoutMs = 15000): Promise<Point[]> {
-  return parseLlamaTvl(await fetchJson(llamaTvlUrl, timeoutMs)).filter((p) => Number.isFinite(p.value));
+export async function fetchDefillamaTvl(timeoutMs = 15000, opts: DayCloseOptions = {}): Promise<Point[]> {
+  const rows = parseLlamaTvl(await fetchJson(llamaTvlUrl, timeoutMs)).filter((p) => Number.isFinite(p.value));
+  return applyDayClose(rows, opts.dayClose, opts.now);
 }
 
 // Total stablecoin float (drops non-finite rows).
-export async function fetchDefillamaStables(timeoutMs = 15000): Promise<Point[]> {
-  return parseLlamaStables(await fetchJson(llamaStablesUrl, timeoutMs)).filter((p) => Number.isFinite(p.value));
+export async function fetchDefillamaStables(timeoutMs = 15000, opts: DayCloseOptions = {}): Promise<Point[]> {
+  const rows = parseLlamaStables(await fetchJson(llamaStablesUrl, timeoutMs)).filter((p) => Number.isFinite(p.value));
+  return applyDayClose(rows, opts.dayClose, opts.now);
 }

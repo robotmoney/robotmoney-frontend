@@ -19,7 +19,9 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseRawHistory, toHistory } from "../src/input/load.ts";
-import { buildReport, EXTRA_IDS, runRegime, type RunResult } from "../src/run.ts";
+import { buildReport, EXTRA_IDS, runRegime as runRegimeOutcome, requireComplete, type RunResult } from "../src/run.ts";
+// Each run here scores a complete day (issue 1655): an IncompleteDay fails the test.
+const runRegime = (...a: Parameters<typeof runRegimeOutcome>) => requireComplete(runRegimeOutcome(...a));
 import { computeBacktest } from "../src/analyze/backtest.ts";
 import { cutAtAsof } from "../src/prepare.ts";
 import { expectSameUpToRounding } from "./support/numeric-diff.ts";

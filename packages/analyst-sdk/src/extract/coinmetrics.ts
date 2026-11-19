@@ -8,7 +8,8 @@
 // ETH_ACTIVE (asset=eth, metric=AdrActCnt) and BTC_MVRV (asset=btc,
 // metric=CapMVRVCur — repointed off blockchain.com's removed mvrv chart, #127).
 import type { Point } from "../types.ts";
-import { fetchJson } from "./http.ts";
+import { applyDayClose, fetchJson } from "./http.ts";
+import type { DayCloseOptions } from "./defillama.ts";
 
 const BASE = "https://community-api.coinmetrics.io/v4/timeseries/asset-metrics";
 
@@ -40,6 +41,7 @@ export async function fetchCoinmetrics(
   metric: string,
   startDate = "2018-01-01",
   timeoutMs = 15000,
+  opts: DayCloseOptions = {},
 ): Promise<Point[]> {
   const out: Point[] = [];
   let url = coinmetricsUrl(asset, metric, startDate);
@@ -51,5 +53,6 @@ export async function fetchCoinmetrics(
     // Per Coinmetrics docs: once next_page_token is present, use it standalone.
     url = `${BASE}?next_page_token=${encodeURIComponent(nextToken)}&pretty=false`;
   }
-  return out;
+  // The source's day-close rule (issue 1655); "accept-partial" keeps every row.
+  return applyDayClose(out, opts.dayClose, opts.now);
 }

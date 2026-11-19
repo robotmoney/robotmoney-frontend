@@ -1,9 +1,14 @@
 export * from "./types.ts";
 export * from "./input/load.ts";
 export * from "./run.ts";
-export { prepareRegimeInputs, type PreparedRegimeInputs } from "./prepare.ts";
+export {
+  prepareRegimeInputs, latestCompleteDay, missingOnDay, type PreparedRegimeInputs, type MissingIndicator,
+} from "./prepare.ts";
 export { computeRegime, regimeLabels, type RegimeComputeResult } from "./analyze/compute.ts";
-export { INDICATORS, PANELS, type Indicator, type Panel } from "./analyze/indicators.ts";
+export {
+  INDICATORS, PANELS, FillPolicyError, fillPolicyOf, fillMaxAgeDays, DAY_RULE, DAY_RULES,
+  type Indicator, type Panel, type FillPolicy, type DayRule,
+} from "./analyze/indicators.ts";
 export { computeCorrelations, type CorrelationsPayload } from "./analyze/correlations.ts";
 export {
   computeBacktest, stripDailyFromSnapshot, simulatePortfolio, simulateDrift, periodStats, scheduleFromLabels, PORTFOLIO_SPECS,

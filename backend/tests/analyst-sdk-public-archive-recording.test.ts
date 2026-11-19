@@ -33,7 +33,7 @@ import {
 } from "../src/analytics/store/public-archive-store.ts";
 import { parseInput, parseRawHistory, toHistory } from "../../packages/analyst-sdk/src/input/load.ts";
 import { seriesForStorageKey } from "../../packages/analyst-sdk/src/archive/format1.ts";
-import { buildReport, runRegime } from "../../packages/analyst-sdk/src/run.ts";
+import { buildReport, requireComplete, runRegime } from "../../packages/analyst-sdk/src/run.ts";
 import type { RawIndicatorHistory } from "../../packages/analyst-sdk/src/types.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
 import { fixtureDb } from "./support/fixture-db.ts";
@@ -245,8 +245,8 @@ test(
     expect(generated.history).toEqual(fromDb);
     const rev = generated.history.VIX!.find((x) => x.date === revised.date)!.value;
     expect(rev).toBe(toHistory(parseRawHistory(readFileSync(join(SDK, "tests/fixtures/raw-indicator-history.csv"), "utf8"))).VIX!.find((x) => x.date === revised.date)!.value + 0.25);
-    const a = JSON.stringify(buildReport(runRegime(generated.history, { asof: RUN2.asof }), { full: true }));
-    const b = JSON.stringify(buildReport(runRegime(fromDb, { asof: RUN2.asof }), { full: true }));
+    const a = JSON.stringify(buildReport(requireComplete(runRegime(generated.history, { asof: RUN2.asof })), { full: true }));
+    const b = JSON.stringify(buildReport(requireComplete(runRegime(fromDb, { asof: RUN2.asof })), { full: true }));
     expect(a).toBe(b);
     expect(JSON.parse(a).backtest).not.toBeNull();
   },

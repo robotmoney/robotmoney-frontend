@@ -21,12 +21,12 @@
 // by inverseCorrelationWeights' minValidObs) and logged loudly. The seededProvider
 // is retained ONLY for the hermetic unit-test tools (analyze/regime.ts etc.) and is
 // never referenced on this path. Tests inject a fixture-backed AnalyticsDataSource.
-import { INDICATORS, PANELS } from "./analyze/indicators.ts";
+import { DAY_RULE, INDICATORS, PANELS, fillMaxAgeDays, fillPolicyOf, type DayRule } from "./analyze/indicators.ts";
 import { LEDGER_EXTRA_KEYS, STORED_UNDER, inputHistoryFromStorage, storedIndicatorId } from "./extras.ts";
 import { computeRegime, type RegimeComputeResult } from "./analyze/compute.ts";
-import { cutAtAsof, prepareRegimeInputs } from "./prepare.ts";
+import { cutAtAsof, latestCompleteDay, missingOnDay, prepareRegimeInputs } from "./prepare.ts";
+import { IncompleteDayError } from "../../../packages/analyst-sdk/src/run.ts";
 import {
-  MAX_FORWARD_FILL_DAYS,
   mergeSeries,
 } from "./transform/math.ts";
 import { loadRawFloorSeed } from "./extract/floor-seed.ts";
@@ -178,6 +178,12 @@ export async function runAnalytics(
   telemetry: TelemetrySink = telemetryHttpSink(),
   jobId?: number,
   regimeVersion: RegimeVersion = CURRENT_REGIME_VERSION,
+  // Issue 1655, the day rule (default DAY_RULE, "score-newest": score `asof`,
+  // as before). Under "require-complete": when `asof` is the run's UTC date
+  // (what the producer passes), score the latest complete day on or before it;
+  // an explicit earlier day (a replay or catch-up) that is not complete fails
+  // the whole run. `now` is the run time, a parameter so tests pin it.
+  opts: { dayRule?: DayRule; now?: Date } = {},
 ): Promise<Record<string, unknown>> {
   const logger: Logger = console;
   // `toolId` is one tool id, the RESEARCH_TOOL_GROUP alias, or omitted (whole
@@ -258,6 +264,9 @@ export async function runAnalytics(
   // missing input there is a coverage error or a documented missing result,
   // never a fetch. Pinned by tests/analytics-offline-replay.test.ts and
   // tests/analytics-source-tolerance.test.ts.
+  // The day the regime scores: `asof`, or with opts.latestComplete the latest
+  // complete day on or before it (issue 1655).
+  let regimeAsof = asof;
   let registry: Record<string, { date: string; value: number }[]> | null = null;
   let extras: BacktestExtras | null = null;
   // What the registry fetch collected, before the D56 tolerance decision.
@@ -321,6 +330,31 @@ export async function runAnalytics(
       `merged persisted floor with fetched data: ${emptyFetches} fallback, ${excluded} excluded (of ${INDICATORS.length})`,
       t0,
     );
+
+    // Issue 1655: under the require-complete day rule the day the regime scores
+    // must be complete. It is checked on the inputs this run read, before the
+    // merged floor is written, so an incomplete day persists no indicator row,
+    // calculation, snapshot or report: the run fails as a whole, naming each
+    // missing indicator. Under score-newest (declared) nothing changes.
+    const byInput: Record<string, { date: string; value: number }[]> = {};
+    for (const ind of INDICATORS) byInput[ind.id] = merged[storedIndicatorId(ind.id)] ?? [];
+    const dayRule = opts.dayRule ?? DAY_RULE;
+    const runDate = (opts.now ?? new Date()).toISOString().slice(0, 10);
+    const scored = dayRule === "require-complete" && asof === runDate ? latestCompleteDay(byInput, { notAfter: asof, notBefore: BACKFILL_START }) : null;
+    if (dayRule === "score-newest") {
+      // As before: the day given is scored; an indicator older than its policy is NaN that day.
+    } else if (scored !== null) {
+      regimeAsof = scored;
+      if (scored !== asof) logger.log?.(`[analytics] regime: ${asof} is not complete; scoring the latest complete day on or before it, ${scored}`);
+    } else {
+      const missing = missingOnDay(byInput, asof);
+      if (missing.length > 0) {
+        const err = new IncompleteDayError({ kind: "incomplete", asof, missing });
+        logger.error?.(`[analytics] regime ${err.message}; the run fails and persists nothing`);
+        collector.stage("extract", "error", err.message, t0);
+        throw err;
+      }
+    }
 
     // Persist the merged floor back. Tag every row with which
     // AnalyticsDataSource actually produced it this run (issue #397
@@ -428,13 +462,15 @@ export async function runAnalytics(
   if (want("regime") && registry && extras) {
     // With no composite panel holding any observation nothing can be classified: a
     // named coverage error, never a fetch (issue 1421).
-    assertRequiredCoverage(registry, asof);
+    assertRequiredCoverage(registry, regimeAsof);
 
     let t0 = new Date();
-    // #402: `ages` is the forward-fill age per non-zero_fill indicator (days since
-    // the last REAL observation); zero_fill indicators are left out so
-    // computeRegime never caps them. Built by the shared SDK seam.
-    const { dateAxis, transformed, lastRaw, ages } = prepareRegimeInputs(registry, { start: BACKFILL_START, asof });
+    // `ages` is the days since the last REAL observation per indicator whose fill
+    // policy is not zero; a day older than its policy allows is already NaN in
+    // `transformed` (issue 1655), and computeRegime's global-cap mask over the
+    // same ages leaves it unchanged. Built by the shared SDK seam.
+    const { dateAxis, transformed, lastRaw, ages } = prepareRegimeInputs(registry, { start: BACKFILL_START, asof: regimeAsof });
+    if (regimeAsof !== asof) extras = { spx: cutAtAsof(extras.spx, regimeAsof), eth: cutAtAsof(extras.eth, regimeAsof), tbill3m: cutAtAsof(extras.tbill3m, regimeAsof) };
     collector.stage("transform", "ok", `built ${dateAxis.length}-day date axis and aligned/transformed ${INDICATORS.length} indicator(s)`, t0);
 
     t0 = new Date();
@@ -486,13 +522,13 @@ export async function runAnalytics(
     collector.stage("store", "ok", `captured ${rows.length} regime snapshot row(s) for the terminal run package`, t0);
 
     results.regime = {
-      asof,
+      asof: regimeAsof,
       rows: rows.length,
       composite: nn(r2.composite[last]),
       compositePercentile: nn(r2.compositePercentile[last]),
       regime: r2.regime[last] ?? null,
     };
-    logger.log?.(`[analytics] regime asof ${asof}: composite=${nn(r2.composite[last])} regime=${r2.regime[last] ?? "insufficient_history"} (${rows.length} rows)`);
+    logger.log?.(`[analytics] regime asof ${regimeAsof}: composite=${nn(r2.composite[last])} regime=${r2.regime[last] ?? "insufficient_history"} (${rows.length} rows)`);
   }
 
   // ── RESEARCH SIGNALS ────────────────────────────────────────────────────────
@@ -886,7 +922,7 @@ function buildRichIndicators(
     // visibly degraded — not silently dropped — in the same snapshot payload the
     // dashboard already renders raw_value/raw_date from.
     const ageDays = ages[ind.id]?.[i];
-    const forwardFillExpired = Number.isFinite(ageDays) && (ageDays as number) > MAX_FORWARD_FILL_DAYS;
+    const forwardFillExpired = Number.isFinite(ageDays) && (ageDays as number) > fillMaxAgeDays(fillPolicyOf(ind));
     return {
       id: ind.id,
       name: ind.name,

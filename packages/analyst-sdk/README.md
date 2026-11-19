@@ -285,6 +285,7 @@ Options (CLI flag, or the `runRegime(raw, opts)` field):
 | ------ | ------- |
 | `--start D` / `start` | first day of the date axis. Default `2018-01-01`. |
 | `--asof D` / `asof` | last day of the date axis, `YYYY-MM-DD`. Input rows dated after it are ignored. Default: the newest date of any series the run reads. |
+| `dayRule` | what to do with a day that is not complete (see "Fill policy, day rule and day close"). Default `DAY_RULE`, `"score-newest"`: the day given, or the newest date, as above. `"require-complete"`: without `asof` the latest complete day; with an incomplete `asof`, `runRegime` returns `{ kind: "incomplete", asof, missing: [{ id, lastObserved }] }` and no figure. |
 | `--factor` / `factor: true` | also run production's second `computeRegime` call (macro, onchain, factor) and report `factor` (`index`, `percentile`, `regime`, `weights` for the last day, plus a per-day `series` with `--full`). The factor panel is display-only in production, so `composite`, `compositePercentile` and the labels stay the two-panel ones and match the published table. |
 | `--replay` | accept the historical replay contract (`parseInput(text, { replay: true })`). |
 | `--methodology V` / `version` | the regime methodology version to compute, `v3` or `v5`. Default `CURRENT_REGIME_VERSION` (`v5`). `v5` cuts the regime label on the composite and each panel label on its panel index; `v3` cut them on the 3y rolling percentile of that series. A published run replays under the version it was stamped with, e.g. `--replay --methodology v3` for a run published before v5 (issue 1652, decision D84). `compositePercentile` and the panel percentiles are the same under both and are information only. |
@@ -294,22 +295,80 @@ Options (CLI flag, or the `runRegime(raw, opts)` field):
 | validation | the CLI exits 2 on a usage error: a second input file, an option given twice, an unknown option (such as the former `--panels`), an option missing its value, an invalid `start`/`asof` (real `YYYY-MM-DD` dates, `asof` not before `start` or every input row), a `start` after every input row. It exits 1 on a runtime failure: an unreadable or malformed input, a manifest that does not match its input. `runRegime` throws a `RangeError` for the same option errors. |
 
 `runRegime` builds its inputs with `prepareRegimeInputs`, the same function production
-calls, so the as-of cut for indicator rows, forward-fill and the 120-day cap
-(`MAX_FORWARD_FILL_DAYS`) behave as in production. `SPX`, `ETH` and `TBILL3M` rows
+calls, so the as-of cut for indicator rows, each indicator's fill policy (forward-fill
+and the 120-day `MAX_FORWARD_FILL_DAYS` horizon as declared) behave as in production. `SPX`, `ETH` and `TBILL3M` rows
 dated after the as-of day are cut in both places too (`cutAtAsof`, section 8.1). Their semantics are in [`docs/technical/regime-engine.md` section 8.1](../../docs/technical/regime-engine.md#81-run-semantics-as-of-forward-fill-replay). Both names are exported
 from `src/index.ts`.
 
 From code:
 
 ```ts
-import { parseInput, runRegime, buildReport } from "./src/index.ts";
+import { parseInput, runRegime, requireComplete, buildReport } from "./src/index.ts";
 
 const input = parseInput(await Bun.file("my-history.csv").text());
-const report = buildReport(runRegime(input.history));
+const report = buildReport(requireComplete(runRegime(input.history)));
 
 // cut the axis at a day, and compute the factor panel too
-const asOf = buildReport(runRegime(input.history, { asof: "2026-10-05", factor: true }));
+const run = runRegime(input.history, { asof: "2026-10-05", factor: true });
+if (run.kind === "incomplete") console.error(run.missing); // [{ id, lastObserved }], no figure
+else console.log(buildReport(run));
 ```
+
+### Fill policy, day rule and day close
+
+Three declared parameters (issue 1655). Each is declared at the value that reproduces
+the figures the SDK computed before, so no report, golden or replay changes until an
+analyst changes one.
+
+**Fill policy.** Each indicator in `src/analyze/indicators.ts` carries a required
+`fill` and a short `fillReason`. There is no default.
+
+| `fill` | meaning |
+| ------ | ------- |
+| `{ kind: "none" }` | no fill: a day without a real observation is missing |
+| `{ kind: "forward", maxAgeDays: N }` | the last real observation is carried for at most N days; an older day is missing |
+| `{ kind: "zero" }` | a gap is a real 0 |
+
+Declared: every indicator is `{ kind: "forward", maxAgeDays: MAX_FORWARD_FILL_DAYS }`
+(120), reason "Carried forward up to the former global cap". A missing or malformed
+`fill` is a `FillPolicyError` that names the indicator before anything is computed.
+
+**Day rule.** A day is complete when every indicator has a real observation on it or
+a value its policy allows (a series that has not started does not count).
+`latestCompleteDay(raw)` and `missingOnDay(raw, day)` answer both questions directly.
+`DAY_RULE` (declared `"score-newest"`) keeps today's behaviour: the day given, or the
+newest row. `"require-complete"` scores the latest complete day, and an explicit
+incomplete day returns an `IncompleteDay` (`requireComplete(run)` turns it into an
+`IncompleteDayError` naming the missing indicators).
+
+**Day close.** `SOURCE_DAY_CLOSE` in `src/extract/sources.ts` declares, per source,
+`"accept-partial"` (keep every served row, including the partial row for the run's UTC
+date; declared for every source) or `"drop-unclosed"` (drop rows dated on or after the
+run's UTC date; supported for `defillama_tvl`, `defillama_stables` and `coinmetrics`
+only, checked when the module loads).
+
+**Changing a value.** Each change lands in its own reviewed diff, which owns any
+methodology version change and golden regeneration:
+
+- a fill policy: edit the indicator's `fill` and `fillReason`. To try one without
+  editing the registry, pass a copied indicator list to `prepareRegimeInputs`, as the
+  research comparisons do;
+- the day rule: edit `DAY_RULE`, or pass `dayRule` to `runRegime` to try it;
+- a source's day close: edit its `SOURCE_DAY_CLOSE` entry; the extractors also take
+  `{ dayClose, now }` directly.
+
+```ts
+import { INDICATORS, prepareRegimeInputs, computeRegime, runRegime } from "./src/index.ts";
+
+const trial = INDICATORS.map((i) => (i.id === "VIX" ? { ...i, fill: { kind: "none" as const } } : i));
+const prepared = prepareRegimeInputs(raw, { start: "2018-01-01", asof: "2026-08-14", indicators: trial });
+const composite = computeRegime(prepared.transformed, prepared.dateAxis).composite;
+
+const strict = runRegime(raw, { dayRule: "require-complete" }); // the latest complete day
+```
+
+`tests/fill-policy.test.ts` and `tests/complete-day.test.ts` show each change taking
+effect against the declared values.
 
 ### Current-month values (MNA)
 

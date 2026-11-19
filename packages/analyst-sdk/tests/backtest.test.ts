@@ -32,7 +32,9 @@ import {
 } from "../src/analyze/backtest.ts";
 import { computeBacktest as originalBacktest } from "./reference/backtest-pre-refactor.ts";
 import type { RegimeComputeResult } from "../src/analyze/compute.ts";
-import { buildReport, parseRawHistory, runRegime, toHistory } from "../src/index.ts";
+import { buildReport, parseRawHistory, runRegime as runRegimeOutcome, requireComplete, toHistory } from "../src/index.ts";
+// Each run here scores a complete day (issue 1655): an IncompleteDay fails the test.
+const runRegime = (...a: Parameters<typeof runRegimeOutcome>) => requireComplete(runRegimeOutcome(...a));
 import type { Point } from "../src/types.ts";
 import { expectSameUpToRounding } from "./support/numeric-diff.ts";
 import { apply1559 } from "./support/issue-1559.ts";

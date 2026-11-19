@@ -1,18 +1,18 @@
 // Replay raw indicator history through the regime pipeline. This is the same
 // path backend/tests/regime-fidelity.test.ts replays: prepareRegimeInputs (the
 // seam production shares: align each registry indicator, forward-fill or
-// zero-fill, apply its transform, forward-fill ages), then computeRegime.
-// Run semantics (as-of, forward-fill, replay): docs/technical/regime-engine.md
-// section 8.1; the seam is D59 in docs/decisions.md.
+// zero-fill, apply its transform and its fill policy), then computeRegime.
+// Run semantics (as-of, fill policy, complete days, replay):
+// docs/technical/regime-engine.md section 8.1; the seam is D59 in docs/decisions.md.
 // Optional SPX, ETH and TBILL3M price series in
 // the same input add the correlation and backtest output.
 import type { Point, RawIndicatorHistory } from "./types.ts";
-import { INDICATORS, PANELS } from "./analyze/indicators.ts";
+import { DAY_RULE, DAY_RULES, INDICATORS, PANELS, type DayRule } from "./analyze/indicators.ts";
 import { computeRegime, type RegimeComputeResult } from "./analyze/compute.ts";
 import { computeCorrelations, type CorrelationsPayload } from "./analyze/correlations.ts";
 import { computeBacktest, stripDailyFromSnapshot, type BacktestPayload } from "./analyze/backtest.ts";
 import { CURRENT_REGIME_VERSION, REGIME_VERSIONS, isRegimeVersion, type RegimeVersion } from "./analyze/regime-versions.ts";
-import { cutAtAsof, prepareRegimeInputs } from "./prepare.ts";
+import { cutAtAsof, latestCompleteDay, missingOnDay, prepareRegimeInputs, type MissingIndicator } from "./prepare.ts";
 import { LEDGER_EXTRA_KEYS } from "./extras.ts";
 import { resolveInputHistory } from "./series-ids.ts";
 import { ratiosFromLegs } from "./transform/ratios.ts";
@@ -28,6 +28,7 @@ export const EXTRA_IDS = {
 const READ_IDS: ReadonlySet<string> = new Set([...INDICATORS.map((i) => i.id), ...Object.values(EXTRA_IDS)]);
 
 export interface RunResult {
+  kind: "complete";
   // The methodology version the run computed (RunOptions.version).
   version: RegimeVersion;
   dateAxis: string[];
@@ -40,7 +41,40 @@ export interface RunResult {
   backtest?: BacktestPayload;
 }
 
+// The as-of day is not complete (issue 1655): some indicator has neither a
+// real observation on it nor a value its fill policy allows. No figure is
+// produced. `missing` names each such indicator and the date of its last real
+// observation on or before the day. What a pipeline does with an incomplete
+// day is its caller's concern: the SDK knows nothing of persistence or reports.
+export interface IncompleteDay {
+  kind: "incomplete";
+  asof: string;
+  missing: MissingIndicator[];
+}
+
+export type RunOutcome = RunResult | IncompleteDay;
+
+// Thrown by requireComplete. Its message names each missing indicator and its
+// last observation date.
+export class IncompleteDayError extends Error {
+  constructor(readonly incomplete: IncompleteDay) {
+    super(`as-of ${incomplete.asof} is not complete: missing ${incomplete.missing.map((m) => `${m.id} (last ${m.lastObserved})`).join(", ")}`);
+    this.name = "IncompleteDayError";
+  }
+}
+
+/** The run's figure, or IncompleteDayError when the day was incomplete. For callers that fail as a whole. */
+export function requireComplete(outcome: RunOutcome): RunResult {
+  if (outcome.kind === "incomplete") throw new IncompleteDayError(outcome);
+  return outcome;
+}
+
 export interface RunOptions {
+  // What to do with a day that is not complete (issue 1655). Default DAY_RULE
+  // ("score-newest": the day given or the newest input row, as before).
+  // "require-complete": without an as-of day score the latest complete day; an
+  // explicit incomplete day returns IncompleteDay and no figure.
+  dayRule?: DayRule;
   start?: string;
   // Last day of the date axis (YYYY-MM-DD). Input rows dated after it are
   // ignored. Default: the newest date of any input series the run reads.
@@ -62,20 +96,22 @@ function assertIsoDate(name: string, v: string): void {
   if (!ok) throw new RangeError(`${name} must be a real date in YYYY-MM-DD form, got ${JSON.stringify(v)}`);
 }
 
-const KNOWN_OPTIONS: readonly string[] = ["start", "asof", "factor", "version"];
+const KNOWN_OPTIONS: readonly string[] = ["start", "asof", "factor", "version", "dayRule"];
 
-export function runRegime(input: RawIndicatorHistory, opts: RunOptions = {}): RunResult {
+export function runRegime(input: RawIndicatorHistory, opts: RunOptions = {}): RunOutcome {
   // An option this version does not know is an error, never silently ignored
   // (a caller passing the former `panels` would otherwise get no factor output).
   for (const k of Object.keys(opts)) {
     if (!KNOWN_OPTIONS.includes(k)) {
       const hint = k === "panels" ? " (use factor: true for the factor_* figures)" : "";
-      throw new RangeError(`unknown option ${JSON.stringify(k)}${hint}; expected start, asof, factor, version`);
+      throw new RangeError(`unknown option ${JSON.stringify(k)}${hint}; expected start, asof, factor, version, dayRule`);
     }
   }
   if (opts.factor !== undefined && typeof opts.factor !== "boolean") {
     throw new RangeError(`factor must be a boolean, got ${JSON.stringify(opts.factor)}`);
   }
+  const dayRule = opts.dayRule ?? DAY_RULE;
+  if (!DAY_RULES.includes(dayRule)) throw new RangeError(`dayRule must be one of ${DAY_RULES.join(", ")}, got ${JSON.stringify(opts.dayRule)}`);
   const version = opts.version ?? CURRENT_REGIME_VERSION;
   if (!isRegimeVersion(version)) {
     throw new RangeError(`version must be one of ${REGIME_VERSIONS.join(", ")}, got ${JSON.stringify(opts.version)}`);
@@ -84,7 +120,7 @@ export function runRegime(input: RawIndicatorHistory, opts: RunOptions = {}): Ru
   // below, and each ratio the input does not store from its legs (4.3).
   const rawIn = ratiosFromLegs(input, resolveInputHistory(input));
   const start = opts.start ?? BACKFILL_START;
-  const asof = opts.asof;
+  let asof = opts.asof;
   assertIsoDate("start", start);
   if (asof !== undefined) assertIsoDate("asof", asof);
   if (asof !== undefined) {
@@ -99,7 +135,7 @@ export function runRegime(input: RawIndicatorHistory, opts: RunOptions = {}): Ru
     if (!anyOnOrBefore) throw new RangeError(`asof ${asof} is before every input row`);
   }
   // Never mutate the caller's input: with asof, build a filtered copy.
-  const raw: RawIndicatorHistory = {};
+  let raw: RawIndicatorHistory = {};
   for (const id in rawIn) raw[id] = asof === undefined ? rawIn[id]! : cutAtAsof(rawIn[id]!, asof);
   // Only series the run reads set the date axis (analytics requirements 4.2),
   // so an input that also carries other source data (the model portfolio
@@ -123,9 +159,30 @@ export function runRegime(input: RawIndicatorHistory, opts: RunOptions = {}): Ru
   // Required data is supplied or the run stops with a named error; a
   // downstream run never fetches (issue 1421, src/coverage.ts).
   assertRequiredCoverage(raw, asof ?? maxDate);
-  const { dateAxis, transformed, ages } = prepareRegimeInputs(raw, { start, asof: asof ?? maxDate });
+  // Issue 1655, the day rule. score-newest (declared): the day given, or the
+  // newest row the run reads, as before. require-complete: without an as-of day
+  // the latest complete day on or before that newest row; an explicit
+  // incomplete day is a typed IncompleteDay, never a figure.
+  if (dayRule === "score-newest") {
+    asof ??= maxDate;
+  } else if (asof === undefined) {
+    const day = latestCompleteDay(raw, { notAfter: maxDate, notBefore: start });
+    if (day === null) return { kind: "incomplete", asof: maxDate, missing: missingOnDay(raw, maxDate) };
+    asof = day;
+    if (asof < maxDate) {
+      const cut: RawIndicatorHistory = {};
+      for (const id in raw) cut[id] = cutAtAsof(raw[id]!, asof);
+      raw = cut;
+    }
+  } else {
+    const missing = missingOnDay(raw, asof);
+    if (missing.length > 0) return { kind: "incomplete", asof, missing };
+  }
+  // The fill policy already masked `transformed`; passing `ages` keeps the
+  // global-cap mask too, which leaves a policy-masked series unchanged.
+  const { dateAxis, transformed, ages } = prepareRegimeInputs(raw, { start, asof });
   const result = computeRegime(transformed, dateAxis, PANELS, ages, undefined, version);
-  const out: RunResult = { version, dateAxis, result };
+  const out: RunResult = { kind: "complete", version, dateAxis, result };
   if (opts.factor) out.factor = computeRegime(transformed, dateAxis, ["macro", "onchain", "factor"], ages, undefined, version);
   const spx: Point[] | undefined = raw[EXTRA_IDS.spx];
   const eth: Point[] | undefined = raw[EXTRA_IDS.eth];

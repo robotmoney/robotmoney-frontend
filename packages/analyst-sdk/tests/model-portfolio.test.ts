@@ -26,7 +26,9 @@ import { parseLlamaYieldChart } from "../src/extract/defillama-yields.ts";
 import { LEDGER_EXTRA_KEYS } from "../src/extras.ts";
 import { loadUniverse } from "../src/allocate/universe.ts";
 import { resolveInputHistory } from "../src/series-ids.ts";
-import { buildReport, runRegime, parseRawHistory, toHistory, type RawRow } from "../src/index.ts";
+import { buildReport, runRegime as runRegimeOutcome, requireComplete, parseRawHistory, toHistory, type RawRow } from "../src/index.ts";
+// Each run here scores a complete day (issue 1655): an IncompleteDay fails the test.
+const runRegime = (...a: Parameters<typeof runRegimeOutcome>) => requireComplete(runRegimeOutcome(...a));
 import shippedJson from "../inventory/model-portfolio.json";
 import researchJson from "../inventory/research-series.json";
 

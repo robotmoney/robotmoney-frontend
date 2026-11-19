@@ -52,15 +52,19 @@ try {
       manifest = validateManifest(await sidecar.text(), { name: basename(file), sha256, rows: input.rows });
     }
   }
-  const report = buildReport(
-    runRegime(input.history, {
+  const run = runRegime(input.history, {
       start: args.values.get("--start"),
       asof: args.values.get("--asof"),
       factor: args.flags.has("--factor"),
       version: args.values.get("--methodology") as RegimeVersion | undefined,
-    }),
-    { full: args.flags.has("--full") },
-  );
+    });
+  // An incomplete as-of day (issue 1655) has no figure: the typed result is
+  // printed as is, and the command exits 1.
+  if (run.kind === "incomplete") {
+    console.log(JSON.stringify(run, null, 2));
+    process.exit(1);
+  }
+  const report = buildReport(run, { full: args.flags.has("--full") });
   console.log(JSON.stringify(args.flags.has("--provenance") ? provenanceEnvelope(report, manifest) : report, null, 2));
 } catch (e) {
   // A rejected option value (RangeError from runRegime) is a usage error like a

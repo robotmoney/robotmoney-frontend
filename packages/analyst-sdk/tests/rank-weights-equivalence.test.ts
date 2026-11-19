@@ -4,7 +4,9 @@
 import { describe, expect, test } from "bun:test";
 import { INDICATORS, PANELS, ROLLING_WINDOW_DAYS } from "../src/analyze/indicators.ts";
 import { prepareRegimeInputs } from "../src/prepare.ts";
-import { BACKFILL_START, buildReport, runRegime } from "../src/run.ts";
+import { BACKFILL_START, buildReport, runRegime as runRegimeOutcome, requireComplete } from "../src/run.ts";
+// Each run here scores a complete day (issue 1655): an IncompleteDay fails the test.
+const runRegime = (...a: Parameters<typeof runRegimeOutcome>) => requireComplete(runRegimeOutcome(...a));
 import { correlation, correlationFromMoments, correlationMoments } from "../src/transform/exact.ts";
 import { inverseCorrelationWeights, lcg, MAX_FORWARD_FILL_DAYS, rollingPercentileRank } from "../src/transform/math.ts";
 import { resolveInputHistory } from "../src/series-ids.ts";

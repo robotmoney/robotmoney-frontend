@@ -10,10 +10,12 @@ import {
   buildReport,
   parseRawCsv,
   parseRawHistory,
-  runRegime,
+  runRegime as runRegimeOutcome, requireComplete,
   prepareRegimeInputs,
   toHistory,
 } from "../src/index.ts";
+// Each run here scores a complete day (issue 1655): an IncompleteDay fails the test.
+const runRegime = (...a: Parameters<typeof runRegimeOutcome>) => requireComplete(runRegimeOutcome(...a));
 
 const DIR = import.meta.dir;
 const csvText = await Bun.file(join(DIR, "fixtures/raw-indicator-history.csv")).text();
@@ -171,7 +173,7 @@ describe("runRegime asof, factor and forward-fill ages", () => {
   test("forwardFillAge is exported and an indicator last observed >120 days before asof gets weight 0", () => {
     expect(MAX_FORWARD_FILL_DAYS).toBe(120);
     expect(forwardFillAge([{ date: "2024-01-02", value: 1 }], ["2024-01-01", "2024-01-02", "2024-01-03", "2024-01-05"])).toEqual([NaN, 0, 1, 2]);
-    const victim = INDICATORS.find((i) => i.panel === "macro" && i.align !== "zero_fill" && (raw[i.id]?.length ?? 0) > 400)!;
+    const victim = INDICATORS.find((i) => i.panel === "macro" && i.fill.kind !== "zero" && (raw[i.id]?.length ?? 0) > 400)!;
     const baseline = buildReport(runRegime(raw, { asof: newest }));
     expect(baseline.indicators.find((i) => i.id === victim.id)!.weight).toBeGreaterThan(0);
     // Keep only the first ~100 days of the victim: its last observation is far

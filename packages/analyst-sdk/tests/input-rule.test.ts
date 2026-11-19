@@ -193,7 +193,9 @@ import {
   parseSourceCsv,
   parseSourceJson,
 } from "../src/input/load.ts";
-import { buildReport, runRegime } from "../src/run.ts";
+import { buildReport, runRegime as runRegimeOutcome, requireComplete } from "../src/run.ts";
+// Each run here scores a complete day (issue 1655): an IncompleteDay fails the test.
+const runRegime = (...a: Parameters<typeof runRegimeOutcome>) => requireComplete(runRegimeOutcome(...a));
 
 describe("strict rows, every contract", () => {
   const SRC = "date,series,value\n";

@@ -10,7 +10,9 @@ import http from "node:http";
 import https from "node:https";
 import { configureHttp } from "../src/extract/http.ts";
 import { parseRawHistory, toHistory } from "../src/input/load.ts";
-import { buildReport, runRegime } from "../src/run.ts";
+import { buildReport, runRegime as runRegimeOutcome, requireComplete } from "../src/run.ts";
+// Each run here scores a complete day (issue 1655): an IncompleteDay fails the test.
+const runRegime = (...a: Parameters<typeof runRegimeOutcome>) => requireComplete(runRegimeOutcome(...a));
 import { CoverageError, assertRequiredCoverage } from "../src/coverage.ts";
 import { INDICATORS } from "../src/analyze/indicators.ts";
 import { computeBacktest } from "../src/analyze/backtest.ts";
