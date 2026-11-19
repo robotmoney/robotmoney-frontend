@@ -6598,6 +6598,8 @@ This is SDK tooling, not a methodology change: with every parameter at its decla
 <a id="d86"></a>
 ## D86 — Digest scheme `derivation-v2`: the judge digest reads the regime composite, not its percentile (follows D44 and D84; issue 1660)
 
+**Status:** proposed. Drafted by the agent with issue 1660 (pr 1685); the owner accepts it.
+
 **Decision.**
 
 1. **What members and judges are served.** A session aggregated from now on stores `regime_summary.composite_percentile` as `null`, on the latest reading and on every `history` point. `composite`, `regime`, the panel labels and the panel percentiles are unchanged. A session stored earlier keeps its summary byte for byte, and the contract keeps the field as `number | null`.
