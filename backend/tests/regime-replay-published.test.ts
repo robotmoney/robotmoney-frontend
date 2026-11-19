@@ -36,7 +36,7 @@ import { noopTelemetrySink } from "../src/analytics/telemetry.ts";
 import { INDICATORS } from "../src/analytics/analyze/indicators.ts";
 import { STORED_UNDER, inputHistoryFromStorage } from "../src/analytics/extras.ts";
 import { withinTolerance } from "../src/analytics/source-tolerance.ts";
-import { runRegime } from "../../packages/analyst-sdk/src/run.ts";
+import { requireComplete, runRegime } from "../../packages/analyst-sdk/src/run.ts";
 import { CURRENT_REGIME_VERSION, isRegimeVersion, type RegimeVersion } from "../src/analytics/analyze/regime-versions.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
 import { baseObservations, poisonedSource, secondObservations, type Observations } from "./support/committed-inputs.ts";
@@ -124,7 +124,7 @@ describe("regime replay of every published run from 2026-09-21", () => {
         expect({ run: run.id, asof: run.asof, differing: outcome.differing }).toEqual({ run: run.id, asof: run.asof, differing: [] });
         expect(Object.keys(outcome.fields)).toEqual([...COMPARED_FIELDS]);
 
-        const replay = runRegime(input, { asof: run.asof, version: run.version });
+        const replay = requireComplete(runRegime(input, { asof: run.asof, version: run.version }));
         const at = new Map(replay.dateAxis.map((d, i) => [d, i]));
         expect(run.rows.length).toBeGreaterThan(1000);
         for (const row of run.rows) {

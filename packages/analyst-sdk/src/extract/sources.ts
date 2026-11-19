@@ -37,6 +37,39 @@ import { fetchDefillamaTvl, fetchDefillamaStables } from "./defillama.ts";
 import { fetchBlockchainComChart } from "./blockchain-com.ts";
 import { fetchCoinmetrics } from "./coinmetrics.ts";
 import { fetchShillerCape, fetchMultplShillerCape } from "./shiller.ts";
+import type { DayClose } from "./http.ts";
+
+// Each source's day-close rule (issue 1655, extract/http.ts applyDayClose).
+// Declared "accept-partial" for every source: each extractor keeps exactly the
+// rows it served before. "drop-unclosed" is supported for the DefiLlama and
+// Coin Metrics sources only; GeckoTerminal stamps NEW_TOKENS with the poll day,
+// so a drop there would discard every new row. An analyst changes an entry in
+// its own reviewed diff.
+export const DROP_UNCLOSED_SOURCES: readonly string[] = ["defillama_tvl", "defillama_stables", "coinmetrics"];
+export const SOURCE_DAY_CLOSE: Readonly<Record<string, DayClose>> = {
+  fred: "accept-partial",
+  yahoo: "accept-partial",
+  defillama_tvl: "accept-partial",
+  defillama_stables: "accept-partial",
+  blockchain_com: "accept-partial",
+  coinmetrics: "accept-partial",
+  geckoterminal_newpools: "accept-partial",
+  multpl_shiller_cape: "accept-partial",
+  shiller_cape: "accept-partial",
+};
+
+/** Throws when a rule is unknown, or drop-unclosed is declared for a source that does not support it. */
+export function assertDayCloseRules(rules: Readonly<Record<string, string>>): void {
+  for (const [source, rule] of Object.entries(rules)) {
+    if (rule !== "accept-partial" && rule !== "drop-unclosed") throw new Error(`SOURCE_DAY_CLOSE.${source}: unknown day-close rule ${JSON.stringify(rule)}`);
+    if (rule === "drop-unclosed" && !DROP_UNCLOSED_SOURCES.includes(source)) {
+      throw new Error(`SOURCE_DAY_CLOSE.${source}: drop-unclosed is supported only for ${DROP_UNCLOSED_SOURCES.join(", ")}`);
+    }
+  }
+}
+// Checked at module load: a bad declaration stops every run before any fetch.
+assertDayCloseRules(SOURCE_DAY_CLOSE);
+const dayClose = (source: string) => ({ dayClose: SOURCE_DAY_CLOSE[source] });
 
 // Backend-only seams (issue #1095 part B). geckoterminal reads process.env and
 // the ledger needs a database sink, so the SDK takes them as arguments instead
@@ -123,8 +156,8 @@ export function createFetchMemo(plan: YahooPlan = {}): FetchMemo {
       const from = isoDay(startUnix * 1000);
       return points.filter((p) => p.date >= from);
     },
-    defillamaTvl: () => (tvl ??= fetchDefillamaTvl()).then((p) => p.slice()),
-    defillamaStables: () => (stables ??= fetchDefillamaStables()).then((p) => p.slice()),
+    defillamaTvl: () => (tvl ??= fetchDefillamaTvl(15000, dayClose("defillama_tvl"))).then((p) => p.slice()),
+    defillamaStables: () => (stables ??= fetchDefillamaStables(15000, dayClose("defillama_stables"))).then((p) => p.slice()),
   };
 }
 
@@ -171,14 +204,14 @@ export async function fetchOne(ind: Indicator, logger: Logger = console, ext: So
       return yahoo(ind.series as string);
     }
     case "defillama_tvl":
-      return memo ? memo.defillamaTvl() : fetchDefillamaTvl();
+      return memo ? memo.defillamaTvl() : fetchDefillamaTvl(15000, dayClose("defillama_tvl"));
     case "defillama_stables":
-      return memo ? memo.defillamaStables() : fetchDefillamaStables();
+      return memo ? memo.defillamaStables() : fetchDefillamaStables(15000, dayClose("defillama_stables"));
     case "blockchain_com":
       return fetchBlockchainComChart(ind.series as string);
     case "coinmetrics": {
       const s = ind.series as { asset: string; metric: string };
-      return fetchCoinmetrics(s.asset, s.metric);
+      return fetchCoinmetrics(s.asset, s.metric, "2018-01-01", 15000, dayClose("coinmetrics"));
     }
     case "geckoterminal_newpools":
       if (!ext.geckoterminal_newpools) throw new Error("geckoterminal_newpools needs a host-supplied adapter (SourceExtensions)");

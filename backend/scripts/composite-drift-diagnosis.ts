@@ -32,7 +32,7 @@ import { collectRunInputs, openBackupsDir, type Archive } from "../../packages/a
 import { seriesForStorageKey, serializeInputs } from "../../packages/analyst-sdk/src/archive/format1.ts";
 import { parseInput } from "../../packages/analyst-sdk/src/input/load.ts";
 import { resolveInputHistory } from "../../packages/analyst-sdk/src/series-ids.ts";
-import { runRegime } from "../../packages/analyst-sdk/src/run.ts";
+import { requireComplete, runRegime } from "../../packages/analyst-sdk/src/run.ts";
 import type { Point, RawIndicatorHistory } from "../../packages/analyst-sdk/src/types.ts";
 import { poisonNetwork } from "../tests/support/network-poison.ts";
 
@@ -84,7 +84,7 @@ function withComputed(history: RawIndicatorHistory, id: string, c: SeriesObserva
 }
 
 function compositeOf(history: RawIndicatorHistory, asof: string): number {
-  const run = runRegime(history, { asof });
+  const run = requireComplete(runRegime(history, { asof }));
   return run.result.composite[run.dateAxis.length - 1]!;
 }
 

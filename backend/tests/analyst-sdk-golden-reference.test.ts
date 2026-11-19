@@ -139,10 +139,10 @@ function diff(got: any, exp: any, path: string, out: string[], counter: { n: num
 // compared with the SDK's v3 report over the same fixture, computed in process.
 // The v5 golden differs from it only in its labels (and the backtest that trades
 // them), which the last test below checks.
-const { buildReport: sdkReport, runRegime: sdkRun } = await import("../../packages/analyst-sdk/src/run.ts");
+const { buildReport: sdkReport, runRegime: sdkRun, requireComplete: sdkComplete } = await import("../../packages/analyst-sdk/src/run.ts");
 const { parseRawHistory: sdkParse, toHistory: sdkHistory } = await import("../../packages/analyst-sdk/src/input/load.ts");
 const sdkFixture = sdkHistory(sdkParse(readFileSync(join(SDK, "fixtures", "raw-indicator-history.csv"), "utf8")));
-const golden = JSON.parse(JSON.stringify(sdkReport(sdkRun(sdkFixture, { version: "v3" }))));
+const golden = JSON.parse(JSON.stringify(sdkReport(sdkComplete(sdkRun(sdkFixture, { version: "v3" })))));
 const goldenV5 = JSON.parse(readFileSync(join(SDK, "golden", "regime-report.json"), "utf8"));
 const ref = referenceReport();
 
@@ -226,7 +226,7 @@ describe("analyst-sdk report bytes are unchanged by the D74 storage mapping", ()
   test("with fetch throwing, the full serialized report equals the pre-change golden bytes", async () => {
     const { createHash } = await import("node:crypto");
     const { parseRawHistory, toHistory } = await import("../../packages/analyst-sdk/src/input/load.ts");
-    const { buildReport, runRegime } = await import("../../packages/analyst-sdk/src/run.ts");
+    const { buildReport, requireComplete, runRegime } = await import("../../packages/analyst-sdk/src/run.ts");
     const { SERIES_MAPPING } = await import("../src/analytics/extras.ts");
     const goldenText = readFileSync(join(SDK, "golden", "regime-report.json"), "utf8");
     expect(createHash("sha256").update(goldenText).digest("hex")).toBe(GOLDEN_SHA256);
@@ -242,7 +242,7 @@ describe("analyst-sdk report bytes are unchanged by the D74 storage mapping", ()
     try {
       await expect(fetch("https://example.com")).rejects.toThrow(/must not use the network/);
       for (const text of [csv, byStorageKey]) {
-        expect(JSON.stringify(buildReport(runRegime(toHistory(parseRawHistory(text)))), null, 2) + "\n").toBe(goldenText);
+        expect(JSON.stringify(buildReport(requireComplete(runRegime(toHistory(parseRawHistory(text))))), null, 2) + "\n").toBe(goldenText);
       }
     } finally {
       globalThis.fetch = realFetch;

@@ -21,7 +21,7 @@ import { saveSourceAcquisition } from "../src/analytics/store/source-ledger-stor
 import { beginRun, freezeVintage, loadFrozenVintage } from "../src/analytics/store/run-ledger-store.ts";
 import { parseInput, parseRawHistory, toHistory } from "../../packages/analyst-sdk/src/input/load.ts";
 import { seriesForStorageKey } from "../../packages/analyst-sdk/src/archive/format1.ts";
-import { buildReport, runRegime } from "../../packages/analyst-sdk/src/run.ts";
+import { buildReport, requireComplete, runRegime } from "../../packages/analyst-sdk/src/run.ts";
 import type { RawIndicatorHistory } from "../../packages/analyst-sdk/src/types.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
 
@@ -143,8 +143,8 @@ test(
     expect(generated.history.VIX!.find((x) => x.date === revisedDate)!.value).toBe(original);
 
     // (7) Report bytes: identical through the generated file and the backend-loaded vintage.
-    const a = JSON.stringify(buildReport(runRegime(generated.history, { asof: ASOF }), { full: true }));
-    const b = JSON.stringify(buildReport(runRegime(fromBackend, { asof: ASOF }), { full: true }));
+    const a = JSON.stringify(buildReport(requireComplete(runRegime(generated.history, { asof: ASOF })), { full: true }));
+    const b = JSON.stringify(buildReport(requireComplete(runRegime(fromBackend, { asof: ASOF })), { full: true }));
     expect(a).toBe(b);
     expect(JSON.parse(a).backtest).not.toBeNull();
   },

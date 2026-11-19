@@ -20,7 +20,7 @@ import { beginRun, freezeVintage, loadFrozenVintage, loadHistoricalSourceValues 
 import { buildVintageManifest, sortedMembers } from "../src/analytics/run-ledger.ts";
 import { SERIES_MAPPING, STORED_UNDER, inputHistoryFromStorage, selectConsumerObservations } from "../src/analytics/extras.ts";
 import { parseRawHistory, toHistory } from "../../packages/analyst-sdk/src/input/load.ts";
-import { buildReport, runRegime } from "../../packages/analyst-sdk/src/run.ts";
+import { buildReport, requireComplete, runRegime } from "../../packages/analyst-sdk/src/run.ts";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -220,7 +220,7 @@ test(
     // The history the run reads equals the committed fixture, and the report its bytes.
     const history = inputHistoryFromStorage(members);
     expect(history).toEqual(fixture);
-    expect(JSON.stringify(buildReport(runRegime(history)), null, 2) + "\n").toBe(goldenText);
+    expect(JSON.stringify(buildReport(requireComplete(runRegime(history))), null, 2) + "\n").toBe(goldenText);
   },
   { timeout: 120_000 },
 );
@@ -255,7 +255,7 @@ test(
     for (const id of Object.keys(STORED_UNDER)) expect(members.some((m) => m.sourceKey === legacy(id))).toBe(true);
     const history = inputHistoryFromStorage(members);
     expect(history).toEqual(fixture);
-    expect(JSON.stringify(buildReport(runRegime(history)), null, 2) + "\n").toBe(goldenText);
+    expect(JSON.stringify(buildReport(requireComplete(runRegime(history))), null, 2) + "\n").toBe(goldenText);
   },
   { timeout: 120_000 },
 );
@@ -325,7 +325,7 @@ test(
     // DEFI_GROWTH and STABLES_GROWTH read the DEFI_TVL and STABLES series (D74 amendment).
     const growth = Object.fromEntries(Object.entries(STORED_UNDER).map(([id, stored]) => [id, committed.registry[stored]!]));
     const prepared = prepareRegimeInputs({ ...committed.registry, ...growth }, { start: "2018-01-01", asof: COMMITTED_ASOF });
-    const r2 = computeRegime(prepared.transformed, prepared.dateAxis, PANELS, prepared.ages);
+    const r2 = computeRegime(prepared.transformed, prepared.dateAxis, PANELS);
     expect(latest.composite).toBe(r2.composite[r2.composite.length - 1]!);
     const analysis = (extras: typeof committed.extras) =>
       JSON.stringify({
@@ -419,7 +419,7 @@ test(
     const nn = (v: number | undefined) => (typeof v === "number" && Number.isFinite(v) ? v : null);
     for (const run of runs) {
       const vintage = await loadFrozenVintage(run.vintageId);
-      const replay = runRegime(inputHistoryFromStorage(vintage!.members), { asof: COMMITTED_ASOF, factor: true });
+      const replay = requireComplete(runRegime(inputHistoryFromStorage(vintage!.members), { asof: COMMITTED_ASOF, factor: true }));
       const at = new Map(replay.dateAxis.map((d, i) => [d, i]));
       const f = replay.factor!;
       const replayed = run.rows.map((r) => {

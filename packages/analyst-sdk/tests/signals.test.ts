@@ -15,7 +15,7 @@ import {
   parseRawHistory,
   parseSignalName,
   researchSignalValues,
-  runRegime,
+  runRegime as runRegimeOutcome, requireComplete,
   SignalNameError,
   signalOrNeutral,
   signalPercentile,
@@ -24,6 +24,8 @@ import {
   type Point,
   type SignalInputs,
 } from "../src/index.ts";
+// Each run here scores a complete day (issue 1655): an IncompleteDay fails the test.
+const runRegime = (...a: Parameters<typeof runRegimeOutcome>) => requireComplete(runRegimeOutcome(...a));
 
 setDefaultTimeout(120_000);
 

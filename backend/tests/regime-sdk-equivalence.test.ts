@@ -52,7 +52,9 @@ import type { AnalyticsDataSource, ResearchInputs } from "../src/analytics/acces
 import { TOP7 } from "../src/analytics/analyze/research-signals.ts";
 import { MAX_FORWARD_FILL_DAYS } from "../src/analytics/transform/math.ts";
 import { computeCorrelations } from "../src/analytics/analyze/correlations.ts";
-import { runRegime } from "../../packages/analyst-sdk/src/run.ts";
+import { requireComplete, runRegime as runRegimeOutcome } from "../../packages/analyst-sdk/src/run.ts";
+// Every run here scores a complete day under the shipped day rule (issue 1655).
+const runRegime = (...a: Parameters<typeof runRegimeOutcome>) => requireComplete(runRegimeOutcome(...a));
 import { loadRawIndicatorHistory, loadJsonGz } from "./fixtures/regime/load.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
 

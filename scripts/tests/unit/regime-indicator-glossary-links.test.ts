@@ -59,4 +59,23 @@ describe("regime indicator glossary links", () => {
     expect(noDescription).toEqual([]);
     expect(noSourceUrl).toEqual([]);
   });
+
+  // Issue 1655: each card shows the fill policy and its reason the registry
+  // declares, in the spec block next to the source.
+  test("every card shows exactly the fill policy and reason the registry declares", () => {
+    const unescape = (t: string) => t.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+    for (const ind of INDICATORS) {
+      const start = glossary.indexOf(`<section class="ri__ind" id="${ind.id}">`);
+      const end = glossary.indexOf("</section>", start);
+      const card = glossary.slice(start, end);
+      const rows = [...card.matchAll(/<div class="ri__meta-row" data-fill-kind="([a-z]+)"(?: data-fill-max-age="(\d+)")?><dt>Fill<\/dt><dd>[^<]*<span class="ri__fill-reason">([^<]*)<\/span><\/dd><\/div>/g)];
+      expect(rows.length, ind.id).toBe(1);
+      const [, kind, maxAge, reason] = rows[0]!;
+      const shown = { kind, ...(maxAge ? { maxAgeDays: Number(maxAge) } : {}), fillReason: unescape(reason!) };
+      expect(shown, ind.id).toEqual({ ...ind.fill, fillReason: ind.fillReason } as never);
+      // Next to the source: the row right after the Source row.
+      expect(card.indexOf("<dt>Fill</dt>") > card.indexOf("<dt>Source</dt>"), ind.id).toBe(true);
+      expect(card.indexOf("<dt>Transform</dt>") > card.indexOf("<dt>Fill</dt>"), ind.id).toBe(true);
+    }
+  });
 });

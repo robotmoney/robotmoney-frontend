@@ -11,6 +11,19 @@
 
 export const UA = "robotmoney-regime/1.0";
 
+// Day-close rule (issue 1655). A source's day D closes at 00:00 UTC on D+1.
+//   accept-partial: keep every row the source serves, including the partial
+//                   row for the run's UTC date (the declared value).
+//   drop-unclosed:  drop every row dated on or after the run's UTC date.
+export type DayClose = "accept-partial" | "drop-unclosed";
+
+/** Apply a day-close rule to the rows a source served, at run time `now`. */
+export function applyDayClose<T extends { date: string }>(rows: T[], rule: DayClose = "accept-partial", now: Date = new Date()): T[] {
+  if (rule !== "drop-unclosed") return rows;
+  const today = now.toISOString().slice(0, 10);
+  return rows.filter((r) => r.date < today);
+}
+
 export type CacheStatus = "disabled" | "hit" | "miss";
 
 export interface FetchRecord {

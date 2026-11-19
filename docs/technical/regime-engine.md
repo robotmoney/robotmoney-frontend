@@ -359,12 +359,63 @@ correlation sample of n=2923 against the SDK's 2915). Pinned by the `FUTURE_EXTR
 case of `backend/tests/regime-sdk-equivalence.test.ts`. An indicator with no rows is all-NaN and carries
 no weight.
 
-**Forward-fill and ages.** Every indicator except `zero_fill` ones is forward-filled
-onto the axis, and `forwardFillAge` records the days since its last real observation.
-`computeRegime` treats a day whose age exceeds `MAX_FORWARD_FILL_DAYS` (120) as
-missing before ranking. That is what "expired" means: the persisted row's
-`forward_fill_expired` is true when the age is above 120. A real observation resets
-the age to 0. `zero_fill` indicators have no ages, because a gap there is a real 0.
+**Fill policy and ages (issue 1655).** Each indicator declares its fill policy in its
+definition (`packages/analyst-sdk/src/analyze/indicators.ts`): a required `fill` and a
+short `fillReason`. The SDK has no default. `{ kind: "none" }` fills nothing, so a day
+without a real observation is missing. `{ kind: "forward", maxAgeDays: N }` carries the
+last real observation for at most N days. `{ kind: "zero" }` treats a gap as a real 0.
+A missing or malformed `fill` is a definition error (`FillPolicyError`) that names the
+indicator before any computation. A real observation is a row dated that day, and a
+day's age is its `forwardFillAge` value. `prepareRegimeInputs` applies the policy to the
+transformed series, after `applyTransform`, with `age > maxAgeDays`: the same mask on
+the same series that `computeRegime` applies with its `ages` and `maxForwardFillDays`
+arguments, which it keeps, so masking twice changes nothing. The persisted row's
+`forward_fill_expired` compares the age with the indicator's `maxAgeDays`. The policy is
+not serialised into any report or snapshot; it appears on each card of
+`/regime/indicators`.
+
+Declared value: every registry indicator is
+`{ kind: "forward", maxAgeDays: MAX_FORWARD_FILL_DAYS }` (120), reason "Carried forward
+up to the former global cap", so every figure is the one the former global cap gave.
+
+**Day completeness and the day rule (issue 1655).** A day is complete when every
+indicator has, on that day, a real observation or a value its policy allows. An
+indicator with no observation on or before the day (a series that has not started)
+does not make it incomplete. The SDK exports `latestCompleteDay(raw, opts)` and the
+typed `IncompleteDay`, `{ kind: "incomplete", asof, missing: [{ id, lastObserved }] }`.
+The declared `DAY_RULE` (`indicators.ts`) sets what a run does with an incomplete day:
+
+- `"score-newest"` (declared): the run scores the day it is given, or the newest row of
+  any series it reads, as before; an indicator older than its policy is NaN that day.
+- `"require-complete"`: `runRegime` without an as-of day scores the latest complete day
+  on or before the newest row it reads; with an explicit incomplete as-of day it
+  returns `IncompleteDay` and no figure. The analytics worker, given a run on its own
+  UTC date (what the producer passes), scores the latest complete day on or before it;
+  asked for an explicit earlier day that is not complete, it fails the run as a whole
+  before the merged floor is written, persisting no indicator row, calculation,
+  snapshot or report, and logs each missing indicator, its last observation and the
+  day.
+
+`runRegime` takes a `dayRule` option (default `DAY_RULE`); the worker takes the same
+rule as an option. The SDK knows nothing of persistence or reports.
+
+**Day-close rule per source (issue 1655).** A source's day D closes at 00:00 UTC on
+D+1. `SOURCE_DAY_CLOSE` (`packages/analyst-sdk/src/extract/sources.ts`) declares for
+each source `"accept-partial"` (keep every served row, including the partial row for
+the run's UTC date) or `"drop-unclosed"` (drop every row dated on or after the run's
+UTC date). Declared value: every source is `"accept-partial"`, so ingestion stores what
+it stored before. `"drop-unclosed"` is supported for `defillama_tvl`,
+`defillama_stables` and `coinmetrics`; declaring it for another source fails at module
+load (GeckoTerminal stamps `NEW_TOKENS` with the poll day). The extractors take the
+rule and the run time as parameters.
+
+With every parameter at its declared value no report, golden or replay changes. An
+analyst changes a value (a `fill`, `DAY_RULE`, or a `SOURCE_DAY_CLOSE` entry) in its own
+reviewed diff, which owns any methodology version change and golden regeneration.
+Pinned by `packages/analyst-sdk/tests/fill-policy.test.ts`,
+`packages/analyst-sdk/tests/complete-day.test.ts`,
+`backend/tests/analytics-incomplete-day.test.ts` and
+`backend/tests/forward-fill-cap.test.ts`.
 
 **FRED publication lag.** A value that arrives late replaces what had been
 forward-filled. `DXY` can arrive up to 7 days late, and `HY_OAS` and `DFII10` 3 days
@@ -467,7 +518,7 @@ backtest that trades them do.
 
 **The seam.** `prepareRegimeInputs` (`packages/analyst-sdk/src/prepare.ts`, shimmed
 at `backend/src/analytics/prepare.ts`) is the one place the axis, alignment,
-transforms and forward-fill ages are built. Its callers are
+transforms, fill policies and forward-fill ages are built. Its callers are
 `backend/src/analytics/index.ts::runAnalytics` (production),
 `packages/analyst-sdk/src/run.ts::runRegime`, the research comparisons
 `computeRegimeEqComparison` and `computeWeightingComparison`, and
@@ -578,9 +629,10 @@ three places:
    currently zero real-data exposure**). v0 carries a stale forward-filled
    value forward with full panel weight forever. v1's `ages` mechanism
    (`forwardFillAge`, consumed by `computeRegime`'s optional `ages` parameter,
-   `analyze/compute.ts:59-75`) nulls out a day's value **before** percentile
-   ranking once its last real observation is more than
-   `MAX_FORWARD_FILL_DAYS = 120` days old — so a long-dead indicator's weight
+   and since issue 1655 each indicator's declared `forward` fill policy with
+   `maxAgeDays` `MAX_FORWARD_FILL_DAYS`, applied by `prepareRegimeInputs`)
+   nulls out a day's value **before** percentile ranking once its last real
+   observation is more than 120 days old — so a long-dead indicator's weight
    decays to 0 (via `inverseCorrelationWeights`' `minValidObs` floor) rather
    than permanently dragging a stale reading through the composite. Exposure
    is zero today because the seeded floor is dense (every axis day has a
@@ -615,7 +667,7 @@ by `buildRichIndicators`, `analytics/index.ts:529-549`): `0` on a day with a
 real print, the day count since the last real observation otherwise, `NaN`
 before any observation has ever been seen, reset to `0` immediately on the
 next real print (no special-case "recovery" code path). `forward_fill_expired`
-is simply `forward_fill_age_days > MAX_FORWARD_FILL_DAYS`, the same 120-day
+is simply `forward_fill_age_days` above the indicator's declared policy (120 days for every registry row), the same 120-day
 constant §9.2 describes. How this field participates in the broader
 detect/repair story for bad persisted data (as opposed to the single
 120-day cap above) is out of scope here — see

@@ -401,17 +401,12 @@ export function alignDailyForwardFill(
   return out;
 }
 
-// #402: the single documented maximum age (in days) a forward-filled value may
-// be carried before it is considered "dead" and must stop contributing to panel
-// weights / the composite. Chosen to comfortably clear the slowest legitimate
-// registry cadence (SHILLER_CAPE is monthly, ~30-35d between real prints, plus
-// scrape/holiday slack) while still catching an indicator whose upstream feed
-// has actually gone dark for multiple reporting cycles. Consumed by
-// computeRegime (compute.ts) via the `ages` it receives from forwardFillAge —
-// alignDailyForwardFill itself is intentionally left unchanged above so the
-// regime-fidelity byte-identical-replay tests keep reproducing the original
-// (uncapped) JS pipeline exactly.
-export const MAX_FORWARD_FILL_DAYS = 120;
+// #402: the former global forward-fill cap, now the value every registry
+// indicator declares in its fill policy (analyze/indicators.ts, issue 1655),
+// applied by prepareRegimeInputs. alignDailyForwardFill itself is
+// intentionally left unchanged above so the regime-fidelity byte-identical-
+// replay tests keep reproducing the original (uncapped) JS pipeline exactly.
+export { MAX_FORWARD_FILL_DAYS } from "../analyze/indicators.ts";
 
 // Companion to alignDailyForwardFill: for each date in `allDates`, the number of
 // days since the value being carried forward was last a REAL observation (0 on

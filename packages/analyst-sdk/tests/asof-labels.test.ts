@@ -16,11 +16,13 @@ import {
   INDICATORS,
   labelCacheKey,
   parseRawHistory,
-  runRegime,
+  runRegime as runRegimeOutcome, requireComplete,
   toHistory,
   type AsofLabel,
   type RawIndicatorHistory,
 } from "../src/index.ts";
+// Each run here scores a complete day (issue 1655): an IncompleteDay fails the test.
+const runRegime = (...a: Parameters<typeof runRegimeOutcome>) => requireComplete(runRegimeOutcome(...a));
 
 const FIXTURE_8Y = join(import.meta.dir, "fixtures/allocate/raw-indicator-history-8y.csv");
 const text8y = readFileSync(FIXTURE_8Y, "utf8");

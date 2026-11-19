@@ -19,7 +19,8 @@ import type { RegimeIndicator } from "@robotmoney/contract";
 import { sql } from "../src/db/client.ts";
 import { fixtureDb } from "./support/fixture-db.ts";
 import { computeRegime } from "../src/analytics/analyze/compute.ts";
-import { INDICATORS } from "../src/analytics/analyze/indicators.ts";
+import { INDICATORS, type Indicator } from "../src/analytics/analyze/indicators.ts";
+import { prepareRegimeInputs } from "../src/analytics/prepare.ts";
 import {
   buildDateAxis,
   alignDailyForwardFill,
@@ -65,9 +66,10 @@ test("forwardFillAge: NaN before the first observation, 0 on a real day, increme
   expect(age[9]).toBe(4);
 });
 
-test("MAX_FORWARD_FILL_DAYS is the single documented default horizon", () => {
+test("MAX_FORWARD_FILL_DAYS is the single documented default horizon, and every registry indicator declares it", () => {
   expect(MAX_FORWARD_FILL_DAYS).toBe(120);
   expect(Number.isFinite(MAX_FORWARD_FILL_DAYS)).toBe(true);
+  for (const ind of INDICATORS) expect(ind.fill).toEqual({ kind: "forward", maxAgeDays: MAX_FORWARD_FILL_DAYS });
 });
 
 // ─── computeRegime: capped contribution end-to-end ───────────────────────────
@@ -151,6 +153,86 @@ test("computeRegime: omitting `ages` (every existing call site) preserves curren
   const last = dateAxis.length - 1;
   expect(a.macroIndex![last]).toBe(b.macroIndex![last]);
   expect(Number.isFinite(a.macroIndex![last])).toBe(true); // still forward-filling unbounded, as before #402
+});
+
+// ─── Issue 1655: the same scenarios through a per-indicator forward policy ───
+//
+// The cap is now each indicator's declared `forward` fill policy, applied by
+// prepareRegimeInputs. The scenarios above (computeRegime with `ages` and the
+// cap, as on main) still hold; these run the same series through a policy of
+// maxAgeDays CAP on TARGET_ID and expect the same outcomes.
+// The registry with TARGET_ID's forward policy set to `maxAgeDays`; every
+// other indicator keeps its declared policy (and has no rows here).
+const withTargetPolicy = (maxAgeDays: number): Indicator[] =>
+  INDICATORS.map((ind) => (ind.id === TARGET_ID ? { ...ind, fill: { kind: "forward", maxAgeDays } } : ind));
+
+function policyScenario() {
+  const dateAxis = buildAxis("2020-01-01", REAL_DAYS + 60);
+  const series: { date: string; value: number }[] = [];
+  for (let i = 0; i < REAL_DAYS; i++) {
+    series.push({ date: dateAxis[i], value: 1 + Math.sin(i / 7) }); // genuine spread, band ~[0,2]
+  }
+  const recoveryIdx = REAL_DAYS + CAP + 15; // well past the horizon
+  const recoveryValue = 9.5; // far outside the oscillation band — unmistakably a NEW print
+  series.push({ date: dateAxis[recoveryIdx], value: recoveryValue });
+
+  // Every OTHER registry indicator has no rows, so prepareRegimeInputs gives it
+  // an all-NaN series and TARGET_ID is the only valid macro indicator.
+  const prepare = (maxAgeDays: number) =>
+    prepareRegimeInputs({ [TARGET_ID]: series }, { start: dateAxis[0]!, asof: dateAxis[dateAxis.length - 1]!, indicators: withTargetPolicy(maxAgeDays) });
+  return { dateAxis, prepare, recoveryIdx };
+}
+
+// A forward policy far longer than any gap here: the unbounded forward-fill a
+// reverted ("planted uncapped") implementation would compute.
+const UNBOUNDED = 1_000_000;
+
+test("a per-indicator forward policy: the carried value contributes through its maxAgeDays, is excluded immediately after, and resumes on a fresh real observation", () => {
+  const { dateAxis, prepare, recoveryIdx } = policyScenario();
+  const cappedInputs = prepare(CAP);
+  expect(cappedInputs.dateAxis).toEqual(dateAxis);
+  const capped = computeRegime(cappedInputs.transformed, dateAxis, ["macro"]);
+  const uncapped = computeRegime(prepare(UNBOUNDED).transformed, dateAxis, ["macro"]);
+
+  const atHorizon = REAL_DAYS - 1 + CAP; // age === CAP exactly (inclusive boundary)
+  const beforeHorizon = atHorizon - 1; // age === CAP - 1
+  const justPastHorizon = atHorizon + 1; // age === CAP + 1
+  expect(cappedInputs.ages[TARGET_ID]![atHorizon]).toBe(CAP);
+
+  // No divergence is possible yet at or before the horizon: neither run has
+  // masked anything through this index, so the two pipelines see identical
+  // inputs and must agree exactly.
+  expect(Number.isFinite(capped.macroIndex![beforeHorizon])).toBe(true);
+  expect(capped.macroIndex![beforeHorizon]).toBeCloseTo(uncapped.macroIndex![beforeHorizon]!, 9);
+
+  expect(Number.isFinite(capped.macroIndex![atHorizon])).toBe(true);
+  expect(capped.macroIndex![atHorizon]).toBeCloseTo(uncapped.macroIndex![atHorizon]!, 9);
+
+  // Immediately past the horizon: TARGET_ID is the ONLY valid macro indicator
+  // and has now gone stale beyond its declared maximum age, so the capped
+  // composite has nothing left to weight that day and reads NaN. The uncapped
+  // ("planted regression") pipeline keeps dragging the frozen value forward and
+  // stays finite — this assertion is exactly what fails if the policy is ignored.
+  expect(Number.isFinite(capped.macroIndex![justPastHorizon])).toBe(false);
+  expect(Number.isFinite(uncapped.macroIndex![justPastHorizon])).toBe(true);
+
+  // Recovery: a fresh real observation re-enters normally. The extreme
+  // recovery value (9.5, far outside the [0,2] oscillation band) ranks near
+  // the top of TARGET_ID's own history in EITHER pipeline, so both read a
+  // high, finite panel index again — contribution is restored, not carried
+  // forward from the stale frozen level.
+  expect(Number.isFinite(capped.macroIndex![recoveryIdx])).toBe(true);
+  expect(capped.macroIndex![recoveryIdx]!).toBeGreaterThan(0.9);
+  expect(uncapped.macroIndex![recoveryIdx]!).toBeGreaterThan(0.9);
+});
+
+test("a forward policy longer than every gap keeps the unbounded forward-fill exactly", () => {
+  const { dateAxis, prepare } = policyScenario();
+  const a = computeRegime(prepare(UNBOUNDED).transformed, dateAxis, ["macro"]);
+  const b = computeRegime(prepare(UNBOUNDED).transformed, dateAxis, ["macro"]);
+  const last = dateAxis.length - 1;
+  expect(a.macroIndex![last]).toBe(b.macroIndex![last]);
+  expect(Number.isFinite(a.macroIndex![last])).toBe(true); // still forward-filling, as before #402
 });
 
 // ─── AC3: exhausted forward-fill degrades visibly through the real production
