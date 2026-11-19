@@ -129,7 +129,7 @@ export function regimeDialTip(m, key) {
   const where = { risk_off: `below ${lo}`, neutral: `between ${lo} and ${hi}`, risk_on: `above ${hi}` }[key];
   const title = { risk_off: "Risk-off", neutral: "Neutral", risk_on: "Risk-on" }[key];
   const now = key === keyOf(m.regime) && m.value != null
-    ? `Today, at ${levelText(+m.value)}. A new label holds after five trading days.`
+    ? `Today, at ${levelText(+m.value)}. A new label holds after five trading days, or at once on a move larger than 2σ.`
     : null;
   return { title, body: `The composite is ${where}, on its scale of 0 to 1.`, now };
 }
