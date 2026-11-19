@@ -5171,6 +5171,50 @@ source id, each a single Yahoo symbol:
 
 Production still reads the stored ratio, so no published output changes.
 
+### Amendment (issue 1644, 2026-11-19) — both closes of every ratio symbol are legs
+
+**Status:** proposed
+
+**What changes.** The registry fetch records both Yahoo closes of every ratio
+symbol as source data, each under its own key, a single Yahoo symbol:
+
+| source_key | provider | tolerance |
+|---|---|---|
+| `yahoo:HG=F.close` | yahoo | relative 1e-6 |
+| `yahoo:HG=F.adjclose` | yahoo | relative 1e-6 |
+| `yahoo:GC=F.close` | yahoo | relative 1e-6 |
+| `yahoo:GC=F.adjclose` | yahoo | relative 1e-6 |
+| `yahoo:IWM.close` | yahoo | relative 1e-6 |
+| `yahoo:IWM.adjclose` | yahoo | relative 1e-6 |
+| `yahoo:SPY.close` | yahoo | relative 1e-6 |
+| `yahoo:SPY.adjclose` | yahoo | relative 1e-6 |
+| `yahoo:BTC-USD.close` | yahoo | relative 1e-6 |
+| `yahoo:BTC-USD.adjclose` | yahoo | relative 1e-6 |
+| `yahoo:ETH-USD.close` | yahoo | relative 1e-6 |
+| `yahoo:ETH-USD.adjclose` | yahoo | relative 1e-6 |
+| `yahoo:SPHB.close` | yahoo | relative 1e-6 |
+| `yahoo:SPHB.adjclose` | yahoo | relative 1e-6 |
+| `yahoo:SPLV.close` | yahoo | relative 1e-6 |
+| `yahoo:SPLV.adjclose` | yahoo | relative 1e-6 |
+| `yahoo:MTUM.close` | yahoo | relative 1e-6 |
+| `yahoo:MTUM.adjclose` | yahoo | relative 1e-6 |
+| `yahoo:IWF.close` | yahoo | relative 1e-6 |
+| `yahoo:IWF.adjclose` | yahoo | relative 1e-6 |
+| `yahoo:IWD.close` | yahoo | relative 1e-6 |
+| `yahoo:IWD.adjclose` | yahoo | relative 1e-6 |
+| `yahoo:XLU.close` | yahoo | relative 1e-6 |
+| `yahoo:XLU.adjclose` | yahoo | relative 1e-6 |
+| `yahoo:XLP.close` | yahoo | relative 1e-6 |
+| `yahoo:XLP.adjclose` | yahoo | relative 1e-6 |
+| `yahoo:XLY.close` | yahoo | relative 1e-6 |
+| `yahoo:XLY.adjclose` | yahoo | relative 1e-6 |
+
+The ratio fetch stops writing the nine issue 1514 keys `yahoo:IWM` ..
+`yahoo:XLY`. They keep their entries (`STORED_ONLY_KEYS`), because their stored
+rows are still compared. The eight `raw_indicator_history:<RATIO>` keys keep
+their `yahoo-ratio` tolerance: every ratio is declared `ratioInput: "stored"`,
+so ingestion keeps writing them.
+
 ### Amendment (issue 1514, 2026-10-29) — DefiLlama restatements stay exact
 
 **Status:** proposed
@@ -6106,6 +6150,8 @@ Acceptance comparisons cover complete serialized reports, daily portfolio values
 
 No change is retroactive. Stored rows, published reports, vintages and existing archives keep their bytes and meaning. Nothing is renamed, rewritten, re-chunked or backfilled to fit a new contract.
 
+**Backfill rule (issue 1644, 2026-11-19).** A backfill is allowed only as new versions stamped with the backfill's own `knowledge_time`: the database clock at write time (the `source_value_versions.knowledge_time` default), never a supplied earlier time, so no earlier run or vintage can appear to have read a backfilled row. A backfill writes a version only for a (key, date) that has none, with provenance `backfill`. A FRED backfill takes the ALFRED first-release value where ALFRED has a vintage for the date. A Yahoo backfill stores each close under its own leg key.
+
 _Removed 2026-10-25: the rule that the analytics and analyst SDK work adds no database migration was not an owner decision. Migrations follow the normal rules (D66, `docs/technical/smoke-production-spec.md` section 8)._
 
 This settles three points.
@@ -6137,6 +6183,31 @@ consumer keeps the key it reads.
   No consumer reads it. A vintage that holds it replays to its published
   report byte for byte, because the values were equal. The archive's run input
   keeps those rows under their storage key, an unread series.
+
+### Amendment (issue 1644, 2026-11-19) — ratio legs and the two per-ratio parameters
+
+**Status:** proposed
+
+- **Legs.** Point 3 is recorded as data: every symbol of the eight Yahoo ratios
+  is stored as two source series, one per Yahoo close, in the
+  `<provider>:<symbol>.<field>` form `coinmetrics:btc.CapMVRVCur` uses:
+  `yahoo:<SYMBOL>.close` (the raw close, `indicators.quote[0].close`) and
+  `yahoo:<SYMBOL>.adjclose` (the adjusted close `fetchYahoo` returns). The 28
+  leg ids cover HG=F, GC=F, IWM, SPY, BTC-USD, ETH-USD, SPHB, SPLV, MTUM, IWF,
+  IWD, XLU, XLP and XLY. Each storage key equals its source id, and no leg
+  shares a key with another stream.
+- **Two declared parameters per ratio** (`analyze/indicators.ts`, refused at
+  load when malformed: `InvalidRatioCloseError`). `ratioInput: "stored"` reads
+  the stored ratio when the input carries one, else computes it from the legs;
+  `"legs"` always computes it and ignores a stored ratio. `ratioClose:
+  "adjusted"` reads the `.adjclose` legs, `"raw"` the `.close` legs. All eight
+  ratios declare `"stored"` and `"adjusted"`, which reproduce every figure the
+  run computed before. Ingestion stores the ratio while it is declared
+  `"stored"`. The choices are research issue 1673.
+- **Older names.** An input may still carry an adjusted leg as before:
+  `yahoo:<SYMBOL>`, or the held-elsewhere keys `research:SPY`,
+  `research:BTC-USD` and `backtest:ETH-USD`. An input that carries the
+  `.adjclose` key reads that instead.
 
 ---
 

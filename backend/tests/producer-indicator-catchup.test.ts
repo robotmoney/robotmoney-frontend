@@ -93,6 +93,27 @@ test("catchUpMissedIndicatorDays: seedRawHistory receives ONLY points whose date
   });
 });
 
+test("issue 1644: the catch-up writes the registry ids and the stored ratios as on main, never a ratio leg", async () => {
+  const missing = [iso(5)];
+  const at = (value: number) => [{ date: iso(5), value }];
+  const fetched: Record<string, Point[]> = {
+    T10Y2Y: at(1.2),
+    VIX: at(18.4),
+    "yahoo:HG=F.close": at(4.1), // a leg: recorded in the ledger by the fetch, never raw history
+    "yahoo:GC=F.close": at(2050),
+    "yahoo:HG=F.adjclose": at(4.0),
+    COPPER_GOLD: at(0.002), // declared ratioInput "stored": written as on main
+    "research:SPY": at(500), // not a registry id
+  };
+  const seededCalls: RawIndicatorHistory[] = [];
+  const persistence = fakePersistence({
+    loadRawHistoryGapDates: async () => missing,
+    seedRawHistory: async (byIndicator) => { seededCalls.push(byIndicator); return { seededPoints: 2, existingPoints: 0, indicators: 2 }; },
+  });
+  await catchUpMissedIndicatorDays({ persistence, source: fakeSource(fetched), now: () => NOW });
+  expect(seededCalls).toEqual([{ T10Y2Y: at(1.2), VIX: at(18.4), COPPER_GOLD: at(0.002) }]);
+});
+
 test("catchUpMissedIndicatorDays: an empty gap list calls neither the fetcher nor seedRawHistory", async () => {
   let fetchCalled = false;
   let seedCalled = false;

@@ -9,6 +9,7 @@ import { bootstrapEdgarSeed } from "../analytics/edgar-seed-loader.ts";
 import type { AnalyticsPersistence } from "../analytics/persistence.ts";
 import type { AnalyticsDataSource } from "../analytics/access/data-source.ts";
 import { INDICATORS } from "../analytics/analyze/indicators.ts";
+import { RATIO_IDS, STORED_RATIO_IDS } from "../analytics/extras.ts";
 import type { RawIndicatorHistory } from "../analytics/types.ts";
 import { writeHeartbeat } from "../ops/heartbeat.ts";
 
@@ -230,7 +231,12 @@ export async function catchUpMissedIndicatorDays(deps: IndicatorCatchUpDeps = {}
 
   const onlyMissing: RawIndicatorHistory = {};
   let matched = 0;
+  // Issue 1644: only registry ids have raw_indicator_history rows, a ratio
+  // only while it is declared ratioInput "stored". A ratio leg is source data
+  // the fetch above already recorded in the ledger.
+  const rawIds = new Set(INDICATORS.map((i) => i.id).filter((id) => !RATIO_IDS.has(id) || STORED_RATIO_IDS.has(id)));
   for (const [id, pts] of Object.entries(fetched)) {
+    if (!rawIds.has(id)) continue;
     const hits = pts.filter((p) => missingSet.has(p.date));
     if (hits.length > 0) {
       onlyMissing[id] = hits;

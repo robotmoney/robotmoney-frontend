@@ -168,10 +168,16 @@ const REGISTRY_IDS = [
   "ETH_ACTIVE", "BTC_MVRV", "BTC_ETH", "ETH_TREND", "NEW_TOKENS", "DEFI_GROWTH", "STABLES_GROWTH", "SPHB_SPLV", "MTUM_SPY", "IWF_IWD",
   "XLU_SPY", "XLP_XLY", "SHILLER_CAPE",
 ];
+// Issue 1644: a ratio consumer also reads both closes of both its symbols.
+const RATIO_SYMBOLS: Record<string, [string, string]> = {
+  COPPER_GOLD: ["HG=F", "GC=F"], IWM_SPY: ["IWM", "SPY"], BTC_ETH: ["BTC-USD", "ETH-USD"], SPHB_SPLV: ["SPHB", "SPLV"],
+  MTUM_SPY: ["MTUM", "SPY"], IWF_IWD: ["IWF", "IWD"], XLU_SPY: ["XLU", "SPY"], XLP_XLY: ["XLP", "XLY"],
+};
+const legKeys = (id: string) => (RATIO_SYMBOLS[id] ?? []).flatMap((s) => [`yahoo:${s}.close`, `yahoo:${s}.adjclose`]);
 // The D74 amendment of 2026-10-28 (issue 1514) moves exactly two consumers.
 const AMENDED: Record<string, string> = { DEFI_GROWTH: "DEFI_TVL", STABLES_GROWTH: "STABLES" };
 const PINNED_CONSUMER_KEYS: Record<string, string[]> = {
-  ...Object.fromEntries(REGISTRY_IDS.map((id) => [`indicator:${id}`, [`raw_indicator_history:${AMENDED[id] ?? id}`]])),
+  ...Object.fromEntries(REGISTRY_IDS.map((id) => [`indicator:${id}`, [`raw_indicator_history:${AMENDED[id] ?? id}`, ...legKeys(id)].sort()])),
   correlations: ["backtest:ETH-USD", "backtest:^GSPC"],
   backtest: ["backtest:DTB3", "backtest:ETH-USD", "backtest:^GSPC"],
 };

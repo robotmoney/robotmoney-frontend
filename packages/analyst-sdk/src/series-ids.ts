@@ -17,12 +17,15 @@
 // provenance. The mapping is ambiguous, and rejected at load, only when ONE
 // consumer would read two storage keys for one source id.
 //
-// RATIOS. A ratio indicator (COPPER_GOLD and the other Yahoo pairs) stores a
-// calculated value, not source data, so its storage key maps to the
-// indicator id with kind "calculated". A source-only input carries the two
-// legs instead, and the run calculates the ratio from them with
-// mergeRatioSeries (transform/ratios.ts; analytics requirements 4.3, SDK-10).
-// A stored ratio, when present, is used unchanged.
+// RATIOS. A ratio indicator (COPPER_GOLD and the other Yahoo pairs) is a
+// calculation over source series. Each symbol is stored as two source series,
+// one per Yahoo close: `yahoo:<SYMBOL>.close` (raw) and
+// `yahoo:<SYMBOL>.adjclose` (adjusted), each stored under its own id (issue
+// 1644). The ratio consumer reads its four legs as source entries next to its
+// `calculated` entry, the stored ratio. The ratio's declared ratioInput and
+// ratioClose (analyze/indicators.ts) say whether the run reads the stored ratio
+// and which close the legs carry (transform/ratios.ts; analytics requirements
+// 4.3).
 //
 // SDK INPUT NAMES. The computation reads its inputs under the ids it reads
 // today (registry ids, and SPX, ETH, TBILL3M for the correlations and the
@@ -49,8 +52,8 @@ export interface SeriesMapping {
   readonly kind: SeriesKind;
   /** The id the computation reads the stream under (registry id, or SPX, ETH, TBILL3M). */
   readonly inputId: string;
-  /** A calculated ratio's two source ids, numerator first. */
-  readonly legs?: readonly [string, string];
+  /** A calculated ratio's leg source ids: the numerator's two closes, then the denominator's. */
+  readonly legs?: readonly string[];
 }
 
 export class AmbiguousSeriesMappingError extends Error {
@@ -91,10 +94,15 @@ const SYMBOL_OF_PROVIDER: Readonly<Record<string, string>> = {
   shiller_cape: "CAPE",
 };
 
-/** The source id a single-series registry indicator reads, or its legs for a ratio. */
-export function indicatorSourceIds(ind: Indicator): string | readonly [string, string] {
+export type LegClose = "close" | "adjclose";
+
+/** The source id of one close of one ratio symbol (issue 1644): `yahoo:<SYMBOL>.close` or `yahoo:<SYMBOL>.adjclose`. */
+export const ratioLegSourceId = (provider: string, symbol: string, close: LegClose): string => `${provider}:${symbol}.${close}`;
+
+/** The source id a single-series registry indicator reads, or a ratio's four legs (both closes of both symbols). */
+export function indicatorSourceIds(ind: Indicator): string | readonly string[] {
   const s = ind.series;
-  if (Array.isArray(s)) return [`${ind.source}:${s[0]}`, `${ind.source}:${s[1]}`];
+  if (Array.isArray(s)) return s.flatMap((sym) => (["close", "adjclose"] as const).map((c) => ratioLegSourceId(ind.source, sym, c)));
   if (typeof s === "string") return `${ind.source}:${s}`;
   if (s && typeof s === "object") return `${ind.source}:${(s as { asset: string }).asset}.${(s as { metric: string }).metric}`;
   const sym = SYMBOL_OF_PROVIDER[ind.source];
@@ -121,7 +129,13 @@ function buildMapping(): SeriesMapping[] {
   for (const ind of INDICATORS) {
     const ids = indicatorSourceIds(ind);
     const base = { consumer: indicatorConsumer(ind.id), storageKey: `raw_indicator_history:${storedIndicatorId(ind.id)}`, inputId: ind.id };
-    out.push(typeof ids === "string" ? { ...base, series: ids, kind: "source" } : { ...base, series: ind.id, kind: "calculated", legs: ids });
+    if (typeof ids === "string") {
+      out.push({ ...base, series: ids, kind: "source" });
+      continue;
+    }
+    out.push({ ...base, series: ind.id, kind: "calculated", legs: ids });
+    // Issue 1644: a leg's storage key, source id and input id are one name.
+    for (const leg of ids) out.push({ consumer: base.consumer, storageKey: leg, series: leg, kind: "source", inputId: leg });
   }
   const X = LEDGER_EXTRA_KEYS;
   for (const [consumer, extras] of [["correlations", [X.spx, X.eth]], ["backtest", [X.spx, X.eth, X.tbill3m]]] as const) {
@@ -163,31 +177,38 @@ export function validateSeriesMapping<T extends readonly SeriesMapping[]>(mappin
 /** The one shared mapping, validated when this module loads. */
 export const SERIES_MAPPING: readonly SeriesMapping[] = Object.freeze(validateSeriesMapping(buildMapping()));
 
-// RATIO LEGS (issue 1514, analytics requirements 4.3). Each run records both
-// legs of every Yahoo ratio as source data, from the fetch that produces the
-// stored ratio. A leg another collector already records keeps that key
-// (yahoo:SPY is research:SPY, yahoo:BTC-USD is research:BTC-USD, yahoo:ETH-USD
-// is backtest:ETH-USD); every other leg is stored under its own source id.
-// Production still reads the stored ratio, so these entries are not in
-// SERIES_MAPPING: they say where each leg's stream is stored, per ratio, and
-// which names a leg is read under (its source id or its storage key) when the
-// input stores no ratio (transform/ratios.ts).
+// RATIO LEGS (issue 1644, analytics requirements 4.3): the leg entries of
+// SERIES_MAPPING, four per ratio consumer (32 entries over 28 keys).
+const RATIO_CONSUMERS = new Set(SERIES_MAPPING.filter((m) => m.kind === "calculated").map((m) => m.consumer));
+
+/** Each ratio's legs as source streams, both closes of both symbols. */
+export const RATIO_LEG_MAPPING: readonly SeriesMapping[] = Object.freeze(SERIES_MAPPING.filter((m) => m.kind === "source" && RATIO_CONSUMERS.has(m.consumer)));
+
+/** The registry ids of the eight ratio indicators. */
+export const RATIO_IDS: ReadonlySet<string> = new Set(SERIES_MAPPING.filter((m) => m.kind === "calculated").map((m) => m.inputId));
+
+/** The 28 leg storage keys. */
+export const RATIO_LEG_KEYS: ReadonlySet<string> = new Set(RATIO_LEG_MAPPING.map((m) => m.storageKey));
+
+/** The ratio ids declared ratioInput "stored": ingestion stores them and the run reads them (issue 1644). */
+export const STORED_RATIO_IDS: ReadonlySet<string> = new Set(INDICATORS.filter((i) => RATIO_IDS.has(i.id) && i.ratioInput === "stored").map((i) => i.id));
+
+// OLDER LEG NAMES (issue 1514). An input may still carry an adjusted leg under
+// the name it used before issue 1644: the source id `yahoo:<SYMBOL>`, or the
+// key the collector that holds it records it under. An input that carries the
+// `.adjclose` key reads that and not these.
 const LEG_KEYS_HELD_ELSEWHERE: Readonly<Record<string, string>> = {
   "yahoo:SPY": "research:SPY",
   "yahoo:BTC-USD": "research:BTC-USD",
   [extraSourceId(LEDGER_EXTRA_KEYS.eth)]: LEDGER_EXTRA_KEYS.eth.ledgerKey,
 };
 
-/** The storage key a ratio leg (a source id) is recorded under. */
-export function ratioLegStorageKey(sourceId: string): string {
-  return LEG_KEYS_HELD_ELSEWHERE[sourceId] ?? sourceId;
+/** The older input names of one symbol's adjusted leg: `yahoo:<SYMBOL>`, and the key another collector holds it under. */
+export function olderAdjustedLegNames(provider: string, symbol: string): string[] {
+  const id = `${provider}:${symbol}`;
+  const held = LEG_KEYS_HELD_ELSEWHERE[id];
+  return held === undefined ? [id] : [id, held];
 }
-
-/** Each ratio's two legs as source streams, under their storage keys, validated when this module loads. */
-export const RATIO_LEG_MAPPING: readonly SeriesMapping[] = Object.freeze(validateSeriesMapping(
-  SERIES_MAPPING.filter((m) => m.kind === "calculated" && m.legs).flatMap((m) =>
-    m.legs!.map((leg): SeriesMapping => ({ consumer: m.consumer, storageKey: ratioLegStorageKey(leg), series: leg, kind: "source", inputId: leg }))),
-));
 
 /** Every consumer's storage keys, sorted: what each consumer reads. */
 export function consumerStorageKeys(mapping: readonly SeriesMapping[] = SERIES_MAPPING): Record<string, string[]> {

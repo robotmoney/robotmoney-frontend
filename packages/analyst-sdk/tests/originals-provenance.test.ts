@@ -9,6 +9,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { gunzipSync } from "node:zlib";
+import { RATIO_LEG_KEYS } from "../src/series-ids.ts";
 import {
   ORIGINALS_DIR,
   VARIANTS,
@@ -67,9 +68,13 @@ describe("original fixture provenance", () => {
     });
   }
 
-  test("the production input is the committed fixture recorded in PROVENANCE.md", () => {
+  test("the production input is the committed fixture recorded in PROVENANCE.md, without its ratio-leg rows (issue 1644)", () => {
     const provenance = readFileSync(join(import.meta.dir, "fixtures/PROVENANCE.md"), "utf8");
-    expect(provenance).toContain(`\`raw-indicator-history.csv\` sha256 \`${manifest.inputs.production.contentSha256}\``);
+    const fixture = readFileSync(join(import.meta.dir, "fixtures/raw-indicator-history.csv"), "utf8");
+    expect(provenance).toContain(`\`raw-indicator-history.csv\` sha256 \`${sha256(fixture)}\``);
+    const legRows = fixture.split("\n").filter((l) => RATIO_LEG_KEYS.has(l.split(",")[1] ?? ""));
+    expect(legRows.length).toBeGreaterThan(0);
+    expect(sha256(variantCsv("production"))).toBe(manifest.inputs.production.contentSha256);
   });
 
   test("red control: one changed byte in a fixture's content changes its sha256", () => {

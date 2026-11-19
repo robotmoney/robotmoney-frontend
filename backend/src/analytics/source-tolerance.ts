@@ -133,9 +133,9 @@ export const SOURCE_TOLERANCES: Readonly<Record<string, SourceTolerance>> = {
   "yahoo:HYPE32196-USD": YAHOO_FLOAT32,
   "yahoo:VIRTUAL-USD": YAHOO_FLOAT32,
 
-  // extract/sources.ts — the Yahoo ratio legs the registry fetch records under
-  // their own source id (issue 1514, analytics requirements 4.3). Single
-  // symbols, so Yahoo's float32 noise. The other legs keep their keys above.
+  // The Yahoo ratio legs issue 1514 recorded under their own source id, as
+  // adjusted closes. Nothing writes them since issue 1644 (STORED_ONLY_KEYS);
+  // their stored rows keep their meaning.
   "yahoo:IWM": YAHOO_FLOAT32,
   "yahoo:SPHB": YAHOO_FLOAT32,
   "yahoo:SPLV": YAHOO_FLOAT32,
@@ -145,7 +145,46 @@ export const SOURCE_TOLERANCES: Readonly<Record<string, SourceTolerance>> = {
   "yahoo:XLU": YAHOO_FLOAT32,
   "yahoo:XLP": YAHOO_FLOAT32,
   "yahoo:XLY": YAHOO_FLOAT32,
+
+  // extract/sources.ts — the ratio legs (issue 1644, analytics requirements
+  // 4.3): both Yahoo closes of every ratio symbol, each under its own source
+  // id. Single symbols, so Yahoo's float32 noise.
+  "yahoo:HG=F.close": YAHOO_FLOAT32,
+  "yahoo:HG=F.adjclose": YAHOO_FLOAT32,
+  "yahoo:GC=F.close": YAHOO_FLOAT32,
+  "yahoo:GC=F.adjclose": YAHOO_FLOAT32,
+  "yahoo:IWM.close": YAHOO_FLOAT32,
+  "yahoo:IWM.adjclose": YAHOO_FLOAT32,
+  "yahoo:SPY.close": YAHOO_FLOAT32,
+  "yahoo:SPY.adjclose": YAHOO_FLOAT32,
+  "yahoo:BTC-USD.close": YAHOO_FLOAT32,
+  "yahoo:BTC-USD.adjclose": YAHOO_FLOAT32,
+  "yahoo:ETH-USD.close": YAHOO_FLOAT32,
+  "yahoo:ETH-USD.adjclose": YAHOO_FLOAT32,
+  "yahoo:SPHB.close": YAHOO_FLOAT32,
+  "yahoo:SPHB.adjclose": YAHOO_FLOAT32,
+  "yahoo:SPLV.close": YAHOO_FLOAT32,
+  "yahoo:SPLV.adjclose": YAHOO_FLOAT32,
+  "yahoo:MTUM.close": YAHOO_FLOAT32,
+  "yahoo:MTUM.adjclose": YAHOO_FLOAT32,
+  "yahoo:IWF.close": YAHOO_FLOAT32,
+  "yahoo:IWF.adjclose": YAHOO_FLOAT32,
+  "yahoo:IWD.close": YAHOO_FLOAT32,
+  "yahoo:IWD.adjclose": YAHOO_FLOAT32,
+  "yahoo:XLU.close": YAHOO_FLOAT32,
+  "yahoo:XLU.adjclose": YAHOO_FLOAT32,
+  "yahoo:XLP.close": YAHOO_FLOAT32,
+  "yahoo:XLP.adjclose": YAHOO_FLOAT32,
+  "yahoo:XLY.close": YAHOO_FLOAT32,
+  "yahoo:XLY.adjclose": YAHOO_FLOAT32,
 };
+
+/**
+ * Keys with stored rows that no extractor writes any more: the nine issue 1514
+ * leg keys (issue 1644). They keep their tolerance because their stored rows
+ * are still compared.
+ */
+export const STORED_ONLY_KEYS: ReadonlySet<string> = new Set(["IWM", "SPHB", "SPLV", "MTUM", "IWF", "IWD", "XLU", "XLP", "XLY"].map((s) => `yahoo:${s}`));
 
 export function toleranceFor(sourceKey: string): SourceTolerance {
   return SOURCE_TOLERANCES[sourceKey] ?? EXACT;

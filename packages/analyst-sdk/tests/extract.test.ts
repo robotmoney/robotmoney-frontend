@@ -5,10 +5,10 @@ import { afterEach, expect, test } from "bun:test";
 import { join } from "node:path";
 import { configureHttp, fetchJson, fetchText, type FetchRecord } from "../src/extract/http.ts";
 import { fetchFred, parseFredCsv } from "../src/extract/fred.ts";
-import { fetchYahoo } from "../src/extract/yahoo.ts";
+import { fetchYahoo, fetchYahooClose, parseYahooClose } from "../src/extract/yahoo.ts";
 import { fetchEdgarMonthCount } from "../src/extract/edgar.ts";
-import { createFetchMemo, fetchAll, fetchOne, mergeRatioSeries, mergeYahooPlans, registryRecordedLegs, registryYahooPlan, type AcquisitionMeta } from "../src/extract/sources.ts";
-import { RATIO_LEG_MAPPING, ratioLegStorageKey } from "../src/series-ids.ts";
+import { createFetchMemo, fetchAll, fetchOne, mergeRatioSeries, mergeYahooPlans, registryYahooPlan, type AcquisitionMeta } from "../src/extract/sources.ts";
+import { RATIO_IDS } from "../src/series-ids.ts";
 import { CalculatedRowError, parseInput } from "../src/input/load.ts";
 import { INDICATORS } from "../src/analyze/indicators.ts";
 
@@ -136,7 +136,8 @@ function countingYahoo(counts: Map<string, number>) {
     counts.set(sym, n);
     const p1 = Number(url.match(/period1=(\d+)/)![1]);
     const ts = DAYS.map(day).filter((t) => t >= p1);
-    return Response.json({ chart: { result: [{ timestamp: ts, indicators: { adjclose: [{ adjclose: ts.map((t, i) => 100 + i + n / 1000) }] } }] } });
+    // The raw close differs from the adjusted close, so a test can tell which one a key holds (issue 1644).
+    return Response.json({ chart: { result: [{ timestamp: ts, indicators: { adjclose: [{ adjclose: ts.map((t, i) => 100 + i + n / 1000) }], quote: [{ close: ts.map((t, i) => 200 + i + n / 1000) }] } }] } });
   }) as unknown as typeof fetch;
 }
 
@@ -196,43 +197,67 @@ test("issue 1514: fetchAll with a memo requests each Yahoo symbol and DefiLlama 
   expect(mergeYahooPlans({ A: 5, B: 0 }, { A: 2, C: 7 })).toEqual({ A: 2, B: 0, C: 7 });
 });
 
-// ── Issue 1514: the ratio legs ──────────────────────────────────────────────
-test("issue 1514: one live fetch records both legs of every Yahoo ratio, and each stored ratio is mergeRatioSeries of those legs byte for byte", async () => {
+// ── Issue 1644: both closes of every ratio symbol are recorded as legs ──────
+const SYMBOLS = ["BTC-USD", "ETH-USD", "GC=F", "HG=F", "IWD", "IWF", "IWM", "MTUM", "SPHB", "SPLV", "SPY", "XLP", "XLU", "XLY"];
+const LEG_KEYS = SYMBOLS.flatMap((s) => [`yahoo:${s}.adjclose`, `yahoo:${s}.close`]).sort();
+
+test("issue 1644: fetchAll over the eight ratios records the 28 leg keys once each, both closes, and each stored ratio as before", async () => {
   const counts = new Map<string, number>();
   configureHttp({ fetch: countingYahoo(counts) });
   const ratios = INDICATORS.filter((i) => i.source === "yahoo" && Array.isArray(i.series));
   expect(ratios.map((i) => i.id).sort()).toEqual(["BTC_ETH", "COPPER_GOLD", "IWF_IWD", "IWM_SPY", "MTUM_SPY", "SPHB_SPLV", "XLP_XLY", "XLU_SPY"]);
   const memo = createFetchMemo(registryYahooPlan(ratios));
-  const recorded = new Map<string, { meta: AcquisitionMeta; points: { date: string; value: number }[] }>();
+  const recorded: { meta: AcquisitionMeta; points: { date: string; value: number }[] }[] = [];
   const out = await fetchAll({
     indicators: ratios, logger: {}, memo, requestedByRunId: 9,
-    acquire: async (meta, op) => { const points = await op(); recorded.set(meta.sourceKey, { meta, points }); return points; },
+    acquire: async (meta, op) => { const points = await op(); recorded.push({ meta, points }); return points; },
   });
-  const own = registryRecordedLegs(ratios);
+  const legs = recorded.filter((r) => r.meta.sourceKey.startsWith("yahoo:"));
+  expect(legs.map((r) => r.meta.sourceKey).sort()).toEqual(LEG_KEYS);
+  for (const { meta, points } of legs) {
+    const raw = meta.sourceKey.endsWith(".close");
+    expect(meta).toMatchObject({ provider: "yahoo", parserVersion: raw ? "yahoo-close:1" : "yahoo-adjclose:1", requestedByRunId: 9 });
+    // countingYahoo serves close = 200 + i + n/1000 and adjclose = 100 + i + n/1000, one request (n = 1) per symbol.
+    expect(points.length).toBeGreaterThan(0);
+    points.forEach((p, i) => expect(p.value).toBe((raw ? 200 : 100) + i + 0.001));
+    if (!raw) expect(points).toEqual(await memo.yahoo(meta.sourceKey.slice(6, -9), 0));
+  }
+  for (const sym of ["IWM", "SPHB", "SPLV", "MTUM", "IWF", "IWD", "XLU", "XLP", "XLY"]) expect(recorded.some((r) => r.meta.sourceKey === `yahoo:${sym}`)).toBe(false);
+  // Declared ratioInput "stored": each ratio is stored and returned as on main, mergeRatioSeries of the two fetchYahoo series.
   for (const ind of ratios) {
-    const [n, d] = (ind.series as [string, string]).map((sym) => `yahoo:${sym}`) as [string, string];
-    // Each leg is recorded under its mapped key: by this fetch for its own-id
-    // legs; the others (research:SPY, backtest:ETH-USD, ...) by their own
-    // collector from the same request, which the memo serves without a new one.
-    const legPoints = async (id: string) => {
-      const key = ratioLegStorageKey(id);
-      if (own.has(id)) {
-        expect(recorded.get(key)!.meta).toMatchObject({ provider: "yahoo", sourceKey: key, parserVersion: "yahoo:1", requestedByRunId: 9 });
-        return recorded.get(key)!.points;
-      }
-      expect(recorded.has(key)).toBe(false);
-      return memo.yahoo(id.slice(6), 0);
-    };
-    const ratio = JSON.stringify(mergeRatioSeries(await legPoints(n), await legPoints(d)));
-    expect({ id: ind.id, ratio: JSON.stringify(recorded.get(`raw_indicator_history:${ind.id}`)!.points) }).toEqual({ id: ind.id, ratio });
+    const [n, d] = ind.series as [string, string];
+    const ratio = JSON.stringify(mergeRatioSeries(await memo.yahoo(n, 0), await memo.yahoo(d, 0)));
+    expect({ id: ind.id, stored: JSON.stringify(recorded.find((r) => r.meta.sourceKey === `raw_indicator_history:${ind.id}`)!.points) }).toEqual({ id: ind.id, stored: ratio });
     expect(JSON.stringify(out[ind.id])).toBe(ratio);
   }
-  expect([...own].sort()).toEqual(["yahoo:IWD", "yahoo:IWF", "yahoo:IWM", "yahoo:MTUM", "yahoo:SPHB", "yahoo:SPLV", "yahoo:XLP", "yahoo:XLU", "yahoo:XLY"]);
+  expect(Object.keys(out).sort()).toEqual([...LEG_KEYS, ...RATIO_IDS].sort());
   for (const [sym, n] of counts) expect({ sym, n }).toEqual({ sym, n: 1 });
-  // Every leg has one storage key, the same for every ratio that reads it.
-  expect(RATIO_LEG_MAPPING.filter((m) => m.series === "yahoo:SPY").map((m) => m.storageKey)).toEqual(["research:SPY", "research:SPY", "research:SPY"]);
-  expect(ratioLegStorageKey("yahoo:HG=F")).toBe("yahoo:HG=F");
-  expect(ratioLegStorageKey("yahoo:ETH-USD")).toBe("backtest:ETH-USD");
+});
+
+test("issue 1644: fetchYahooClose returns the raw close and drops null or NaN closes; fetchYahoo is unchanged; one memo makes one request for both", async () => {
+  const ts = ["2024-01-02", "2024-01-03", "2024-01-04", "2024-01-05"].map(day);
+  const body = { chart: { result: [{ timestamp: ts, indicators: { adjclose: [{ adjclose: [9.5, 10.5, 11.5, 12.5] }], quote: [{ close: [10, null, null, 13] }] } }] } };
+  let requests = 0;
+  configureHttp({ fetch: (async () => { requests++; return new Response(JSON.stringify(body), { headers: { "content-type": "application/json" } }); }) as unknown as typeof fetch });
+  const close = await fetchYahooClose("SPY");
+  expect(close).toEqual([{ date: "2024-01-02", value: 10 }, { date: "2024-01-05", value: 13 }]);
+  expect((await fetchYahoo("SPY")).map((p) => p.value)).toEqual([9.5, 10.5, 11.5, 12.5]);
+  // A NaN close (a parsed body can carry one) is dropped like a null.
+  const nan = structuredClone(body) as any;
+  nan.chart.result[0].indicators.quote[0].close = [10, NaN, Infinity, 13];
+  expect(parseYahooClose(nan)).toEqual(close);
+  requests = 0;
+  const memo = createFetchMemo({ SPY: 0 });
+  const [adj, raw] = await Promise.all([memo.yahoo("SPY", 0), memo.yahooClose("SPY", 0)]);
+  expect(requests).toBe(1);
+  expect(adj.map((p) => p.value)).toEqual([9.5, 10.5, 11.5, 12.5]);
+  expect(raw).toEqual(close);
+});
+
+test("issue 1644: SPX_TREND's derivation names the trend_50_200 transform", () => {
+  const d = INDICATORS.find((i) => i.id === "SPX_TREND")!.derivation!;
+  expect(d).toContain("trend_50_200");
+  expect(d).not.toContain("Stored value is the ratio itself");
 });
 
 test("issue 1514: a source input naming the legs yahoo:HG=F and yahoo:GC=F loads, and a source row keyed COPPER_GOLD is still a calculated row", () => {

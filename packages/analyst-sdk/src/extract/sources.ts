@@ -10,7 +10,10 @@
 //                                    ETH_TREND/ETH-USD)
 //   - yahoo [num, den]            → num/den ratio on shared dates (COPPER_GOLD=HG/GC,
 //                                    IWM_SPY, BTC_ETH=BTC-USD/ETH-USD, SPHB_SPLV,
-//                                    MTUM_SPY, IWF_IWD, XLU_SPY, XLP_XLY)
+//                                    MTUM_SPY, IWF_IWD, XLU_SPY, XLP_XLY), for a ratio
+//                                    declared ratioInput "stored"; plus each symbol's
+//                                    two closes as legs, yahoo:<SYMBOL>.close and
+//                                    yahoo:<SYMBOL>.adjclose (issue 1644)
 //   - defillama_tvl               → DEFI_TVL / DEFI_GROWTH (raw TVL level; the
 //                                    change90 transform is applied downstream)
 //   - defillama_stables           → STABLES / STABLES_GROWTH (raw stable float)
@@ -29,10 +32,9 @@ import type { Point } from "../types.ts";
 import { INDICATORS, type Indicator } from "../analyze/indicators.ts";
 import { isoDay } from "../transform/math.ts";
 import { mergeRatioSeries } from "../transform/grid.ts";
-import { ratioLegStorageKey, STORED_UNDER } from "../series-ids.ts";
-import { inventoryCollection } from "../inventory.ts";
+import { ratioLegSourceId, STORED_UNDER, type LegClose } from "../series-ids.ts";
 import { fetchFred } from "./fred.ts";
-import { fetchYahoo } from "./yahoo.ts";
+import { fetchYahoo, fetchYahooChart, fetchYahooClose, parseYahoo, parseYahooClose } from "./yahoo.ts";
 import { fetchDefillamaTvl, fetchDefillamaStables } from "./defillama.ts";
 import { fetchBlockchainComChart } from "./blockchain-com.ts";
 import { fetchCoinmetrics } from "./coinmetrics.ts";
@@ -113,6 +115,8 @@ type Logger = {
 export interface FetchMemo {
   /** fetchYahoo(symbol, startUnix), served from the run's one request for `symbol`. */
   yahoo(symbol: string, startUnix?: number): Promise<Point[]>;
+  /** fetchYahooClose(symbol, startUnix), the raw close, from the same request as `yahoo` (issue 1644). */
+  yahooClose(symbol: string, startUnix?: number): Promise<Point[]>;
   defillamaTvl(): Promise<Point[]>;
   defillamaStables(): Promise<Point[]>;
 }
@@ -138,24 +142,28 @@ export function mergeYahooPlans(...plans: YahooPlan[]): Record<string, number> {
 }
 
 export function createFetchMemo(plan: YahooPlan = {}): FetchMemo {
-  const yahoo = new Map<string, { start: number; points: Promise<Point[]> }>();
+  const yahoo = new Map<string, { start: number; chart: Promise<unknown> }>();
   let tvl: Promise<Point[]> | null = null;
   let stables: Promise<Point[]> | null = null;
+  // The adjusted close and the raw close (issue 1644) read the one chart
+  // response per symbol, so both closes of a day come from one request.
+  const serve = async (symbol: string, startUnix: number, parse: (j: unknown) => Point[]) => {
+    let hit = yahoo.get(symbol);
+    // A start the plan did not foresee is fetched again rather than cut
+    // short: a wrong plan costs a request, never a missing row.
+    if (!hit || hit.start > startUnix) {
+      const start = Math.min(plan[symbol] ?? startUnix, startUnix);
+      hit = { start, chart: fetchYahooChart(symbol, start) };
+      yahoo.set(symbol, hit);
+    }
+    const points = parse(await hit.chart);
+    if (startUnix <= hit.start) return points;
+    const from = isoDay(startUnix * 1000);
+    return points.filter((p) => p.date >= from);
+  };
   return {
-    async yahoo(symbol, startUnix = 0) {
-      let hit = yahoo.get(symbol);
-      // A start the plan did not foresee is fetched again rather than cut
-      // short: a wrong plan costs a request, never a missing row.
-      if (!hit || hit.start > startUnix) {
-        const start = Math.min(plan[symbol] ?? startUnix, startUnix);
-        hit = { start, points: fetchYahoo(symbol, start) };
-        yahoo.set(symbol, hit);
-      }
-      const points = await hit.points;
-      if (startUnix <= hit.start) return points.slice();
-      const from = isoDay(startUnix * 1000);
-      return points.filter((p) => p.date >= from);
-    },
+    yahoo: (symbol, startUnix = 0) => serve(symbol, startUnix, parseYahoo),
+    yahooClose: (symbol, startUnix = 0) => serve(symbol, startUnix, parseYahooClose),
     defillamaTvl: () => (tvl ??= fetchDefillamaTvl(15000, dayClose("defillama_tvl"))).then((p) => p.slice()),
     defillamaStables: () => (stables ??= fetchDefillamaStables(15000, dayClose("defillama_stables"))).then((p) => p.slice()),
   };
@@ -164,43 +172,43 @@ export function createFetchMemo(plan: YahooPlan = {}): FetchMemo {
 // The one ratio function lives in the transform stage (SDK-10).
 export { mergeRatioSeries };
 
-// Resolve ONE indicator to its raw series. Throws on fetch/parse failure so the
-// caller decides whether to fall back to persisted history.
-// Both legs of a Yahoo ratio, full history, and the ratio on their shared dates.
-async function fetchYahooRatio(series: readonly [string, string], memo?: FetchMemo): Promise<{ legs: [Point[], Point[]]; ratio: Point[] }> {
+// Both legs of a Yahoo ratio (adjusted closes), full history, and the ratio on their shared dates.
+async function fetchYahooRatio(series: readonly [string, string], memo?: FetchMemo): Promise<Point[]> {
   const yahoo = (symbol: string) => (memo ? memo.yahoo(symbol, 0) : fetchYahoo(symbol));
   const [a, b] = await Promise.all([yahoo(series[0]), yahoo(series[1])]);
   if (a.length === 0) throw new Error(`Yahoo numerator ${series[0]} empty`);
   if (b.length === 0) throw new Error(`Yahoo denominator ${series[1]} empty`);
-  return { legs: [a, b], ratio: mergeRatioSeries(a, b) };
+  return mergeRatioSeries(a, b);
 }
 
-/**
- * The ratio legs the registry fetch records itself (issue 1514): a leg stored
- * under its own source id that no shipped inventory collects. The other legs
- * (yahoo:SPY, yahoo:BTC-USD, yahoo:ETH-USD, yahoo:HG=F, yahoo:GC=F) are
- * recorded by the collector that holds their key, from the run's same request.
- */
-export function registryRecordedLegs(indicators: readonly Indicator[] = INDICATORS): Set<string> {
-  const held = new Set(inventoryCollection().map((s) => s.storageKey));
-  const out = new Set<string>();
+/** Each ratio leg the registry fetch records (issue 1644): both closes of every ratio symbol, by source id. */
+export function registryRatioLegs(indicators: readonly Indicator[] = INDICATORS): { id: string; symbol: string; close: LegClose }[] {
+  const out = new Map<string, { id: string; symbol: string; close: LegClose }>();
   for (const ind of indicators) {
     if (ind.source !== "yahoo" || !Array.isArray(ind.series)) continue;
-    for (const sym of ind.series) {
-      const id = `yahoo:${sym}`;
-      if (ratioLegStorageKey(id) === id && !held.has(id)) out.add(id);
+    for (const symbol of ind.series) {
+      for (const close of ["close", "adjclose"] as const) {
+        const id = ratioLegSourceId(ind.source, symbol, close);
+        out.set(id, { id, symbol, close });
+      }
     }
   }
-  return out;
+  return [...out.values()];
 }
 
+// Resolve ONE indicator to its raw series. Throws on fetch/parse failure so the
+// caller decides whether to fall back to persisted history.
 export async function fetchOne(ind: Indicator, logger: Logger = console, ext: SourceExtensions = {}, memo?: FetchMemo): Promise<Point[]> {
   const yahoo = (symbol: string) => (memo ? memo.yahoo(symbol, 0) : fetchYahoo(symbol));
   switch (ind.source) {
     case "fred":
       return fetchFred(ind.series as string);
     case "yahoo": {
-      if (Array.isArray(ind.series)) return (await fetchYahooRatio(ind.series as [string, string], memo)).ratio;
+      if (Array.isArray(ind.series)) {
+        // Issue 1644: a ratio declared "legs" is never computed at ingestion.
+        if (ind.ratioInput === "legs") throw new Error(`${ind.id} is declared ratioInput "legs": it is calculated from its legs in the transform stage, never fetched`);
+        return fetchYahooRatio(ind.series as [string, string], memo);
+      }
       return yahoo(ind.series as string);
     }
     case "defillama_tvl":
@@ -227,7 +235,8 @@ export async function fetchOne(ind: Indicator, logger: Logger = console, ext: So
 
 // Fetch every registry indicator's raw history concurrently. A failed/empty
 // series returns [] (logged loudly) — the orchestrator falls back to persisted
-// history for that id. Returns { [indicatorId]: Point[] }.
+// history for that id. Returns { [indicatorId]: Point[] }, plus each ratio
+// leg under its source id (issue 1644), and no ratio declared "legs".
 // `provenance` (issue #979) is the data-source label these values carry into
 // source_value_versions.provenance. Omitted means 'live', matching both
 // captureSourceAcquisition()'s and saveRawIndicatorHistory()'s defaults; the
@@ -249,62 +258,50 @@ export async function fetchAll(
   // D74 amendment (issue 1514): DEFI_GROWTH and STABLES_GROWTH read the
   // DEFI_TVL and STABLES series, so nothing is fetched or written for them.
   const inds = (opts.indicators ?? INDICATORS).filter((ind) => !Object.hasOwn(STORED_UNDER, ind.id));
-  const legsToRecord = registryRecordedLegs(inds);
-  const recordedLegs = new Set<string>();
-  // Issue 1514: a Yahoo ratio's legs are recorded as source data from the
-  // same fetch the ratio is calculated from. The ratio is still calculated
-  // from the fetched legs and stored as before, so no published output
-  // changes. A leg that fails to record is logged and does not fail the ratio.
-  const recordLegs = async (ind: Indicator, legs: [Point[], Point[]]) => {
-    const acquire = opts.acquire!;
-    const series = ind.series as [string, string];
-    for (let i = 0; i < 2; i++) {
-      const legKey = `yahoo:${series[i]}`;
-      if (!legsToRecord.has(legKey) || recordedLegs.has(legKey)) continue;
-      recordedLegs.add(legKey);
-      const points = legs[i]!;
-      try {
-        await acquire({
-          provider: "yahoo",
-          sourceKey: legKey,
-          parserVersion: "yahoo:1",
-          cacheIdentity: `${series[i]}:ratio-leg:${ind.id}`,
-          requestedByRunId: opts.requestedByRunId,
-          provenance: opts.provenance,
-        }, async () => points);
-      } catch (e: any) {
-        logger.error?.(`[extract] record ${ind.id} leg ${legKey} FAILED: ${e?.message ?? e}`);
-      }
+  const record = (meta: AcquisitionMeta, operation: () => Promise<Point[]>) => (opts.acquire ? opts.acquire(meta, operation) : operation());
+  // Issue 1644: each ratio symbol's two closes are recorded once per run, from
+  // full history, as source data. A ratio declared ratioInput "stored" is
+  // still calculated and stored exactly as before; one declared "legs" is not.
+  const fetchLeg = async ({ id: legKey, symbol, close }: { id: string; symbol: string; close: LegClose }): Promise<[string, Point[]]> => {
+    try {
+      const points = await record({
+        provider: "yahoo",
+        sourceKey: legKey,
+        parserVersion: close === "close" ? "yahoo-close:1" : "yahoo-adjclose:1",
+        cacheIdentity: `${symbol}:${close}`,
+        requestedByRunId: opts.requestedByRunId,
+        provenance: opts.provenance,
+      }, async () => {
+        const memo = opts.memo;
+        const pts = close === "close" ? await (memo ? memo.yahooClose(symbol, 0) : fetchYahooClose(symbol)) : await (memo ? memo.yahoo(symbol, 0) : fetchYahoo(symbol));
+        if (pts.length === 0) throw new Error(`Yahoo ${symbol} ${close} empty`);
+        return pts;
+      });
+      return [legKey, points];
+    } catch (e: any) {
+      logger.error?.(`[extract] fetch leg ${legKey} FAILED: ${e?.message ?? e}`);
+      return [legKey, []];
     }
   };
-  const results = await Promise.all(
-    inds.map(async (ind): Promise<[string, Point[]]> => {
+  const results = await Promise.all([
+    ...inds.filter((ind) => ind.ratioInput !== "legs").map(async (ind): Promise<[string, Point[]]> => {
       try {
-        const ratioLegs = ind.source === "yahoo" && Array.isArray(ind.series) && opts.acquire ? (ind.series as [string, string]) : null;
-        const operation = ratioLegs
-          ? async () => {
-              const { legs, ratio } = await fetchYahooRatio(ratioLegs, opts.memo);
-              await recordLegs(ind, legs);
-              return ratio;
-            }
-          : () => fetchOne(ind, logger, opts.extensions, opts.memo);
-        const points = opts.acquire
-          ? await opts.acquire({
-              provider: ind.source,
-              sourceKey: `raw_indicator_history:${ind.id}`,
-              parserVersion: `${ind.source}:1`,
-              cacheIdentity: JSON.stringify(ind.series ?? null),
-              requestedByRunId: opts.requestedByRunId,
-              provenance: opts.provenance,
-            }, operation)
-          : await operation();
+        const points = await record({
+          provider: ind.source,
+          sourceKey: `raw_indicator_history:${ind.id}`,
+          parserVersion: `${ind.source}:1`,
+          cacheIdentity: JSON.stringify(ind.series ?? null),
+          requestedByRunId: opts.requestedByRunId,
+          provenance: opts.provenance,
+        }, () => fetchOne(ind, logger, opts.extensions, opts.memo));
         return [ind.id, points];
       } catch (e: any) {
         logger.error?.(`[extract] fetch ${ind.id} (${ind.source}) FAILED: ${e?.message ?? e}`);
         return [ind.id, []];
       }
     }),
-  );
+    ...registryRatioLegs(inds).map(fetchLeg),
+  ]);
   const out: Record<string, Point[]> = {};
   for (const [id, data] of results) out[id] = data;
   logger.log?.("[extract] fetch summary:");

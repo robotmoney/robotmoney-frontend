@@ -18,6 +18,7 @@ import { join } from "node:path";
 import { gunzipSync } from "node:zlib";
 import type { BacktestPayload } from "../../src/analyze/backtest.ts";
 import type { Point } from "../../src/types.ts";
+import { RATIO_LEG_KEYS } from "../../src/series-ids.ts";
 
 export const SDK_TESTS = join(import.meta.dir, "..");
 export const ORIGINALS_DIR = join(SDK_TESTS, "fixtures/originals");
@@ -36,7 +37,11 @@ export const MISSING_LABEL_WINDOW = { from: "2024-03-01", to: "2024-08-31" } as 
 export const sha256 = (b: Uint8Array | string): string => createHash("sha256").update(b).digest("hex");
 
 /** The CSV text of one input variant, derived from the production fixture. */
-export function variantCsv(variant: Variant, productionCsv = readFileSync(PRODUCTION_CSV, "utf8")): string {
+// The originals were captured before the fixture carried the ratio legs
+// (issue 1644): every variant is derived from the fixture without its leg rows,
+// which is the fixture the originals were captured from, byte for byte.
+export function variantCsv(variant: Variant, fixtureCsv = readFileSync(PRODUCTION_CSV, "utf8")): string {
+  const productionCsv = fixtureCsv.split("\n").filter((l) => !RATIO_LEG_KEYS.has(l.split(",")[1] ?? "")).join("\n");
   if (variant === "production") return productionCsv;
   const [header, ...rest] = productionCsv.split("\n");
   const rows = rest.filter((l) => l.length > 0);

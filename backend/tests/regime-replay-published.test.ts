@@ -34,7 +34,7 @@ import { loadFrozenVintage, type FrozenVintage } from "../src/analytics/store/ru
 import { loadRawIndicatorHistory, saveRawIndicatorHistory } from "../src/analytics/store/raw-history-store.ts";
 import { noopTelemetrySink } from "../src/analytics/telemetry.ts";
 import { INDICATORS } from "../src/analytics/analyze/indicators.ts";
-import { STORED_UNDER, inputHistoryFromStorage } from "../src/analytics/extras.ts";
+import { RATIO_IDS, RATIO_LEG_KEYS, STORED_UNDER, inputHistoryFromStorage } from "../src/analytics/extras.ts";
 import { withinTolerance } from "../src/analytics/source-tolerance.ts";
 import { requireComplete, runRegime } from "../../packages/analyst-sdk/src/run.ts";
 import { CURRENT_REGIME_VERSION, isRegimeVersion, type RegimeVersion } from "../src/analytics/analyze/regime-versions.ts";
@@ -118,7 +118,8 @@ describe("regime replay of every published run from 2026-09-21", () => {
     try {
       for (const run of runs) {
         const input = inputOf(run);
-        expect(Object.keys(input).length).toBe(INDICATORS.length + 3);
+        // Every registry id, the 28 ratio legs (issue 1644), and SPX, ETH, TBILL3M.
+        expect(Object.keys(input).length).toBe(INDICATORS.length + RATIO_LEG_KEYS.size + 3);
         expect(run.asofRow.regime).not.toBeNull();
         const outcome = replayPublishedHistory(input, run.asof, run.asofRow, run.version);
         expect({ run: run.id, asof: run.asof, differing: outcome.differing }).toEqual({ run: run.id, asof: run.asof, differing: [] });
@@ -146,6 +147,19 @@ describe("regime replay of every published run from 2026-09-21", () => {
     for (const id of Object.keys(STORED_UNDER)) expect(raw[id]).toBeUndefined();
     expect(runs.length).toBe(4);
     for (const run of runs) expect(run.vintage.members.filter((m) => GROWTH_KEYS.includes(m.sourceKey))).toEqual([]);
+  });
+
+  test("issue 1644: each run writes its stored ratios as before, and its vintage holds the 28 legs and the eight ratio keys", async () => {
+    const ratioKeys = [...RATIO_IDS].map((id) => `raw_indicator_history:${id}`);
+    const raw = await loadRawIndicatorHistory();
+    for (const id of RATIO_IDS) expect(raw[id]?.length ?? 0, id).toBeGreaterThan(0);
+    expect(runs.length).toBe(4);
+    for (const run of runs) {
+      const keys = new Set(run.vintage.members.map((m) => m.sourceKey));
+      for (const key of [...RATIO_LEG_KEYS, ...ratioKeys]) expect({ run: run.id, key, member: keys.has(key) }).toEqual({ run: run.id, key, member: true });
+      // The vintage carries the stored ratios, so the replay reads them (ratioInput "stored").
+      for (const id of RATIO_IDS) expect(Object.hasOwn(inputOf(run), id)).toBe(true);
+    }
   });
 
   test("the raw-versus-ledger mismatch run replays to its published as-of row in every field, and the raw value would not", async () => {

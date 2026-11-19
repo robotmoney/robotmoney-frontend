@@ -24,7 +24,7 @@ Non-goals:
 - **Same inputs, same bytes.** Given identical effective input observations, dates, schedules and options, backend and SDK produce byte-identical report payloads, and a payload published before D78 replays up to rounding: the same structure, field order, labels and nulls, with numbers that differ only in their last bits.
 - **One source of truth.** The backend runs the package's source files.
 - **One calculation contract.** This refactor exposes and generalizes the established shared computation without changing its methodology. D78 changed its arithmetic separately: every published reduction is computed in error-free arithmetic and rounded once. There is no alternate methodology selector and no backend-only calculation retained to produce different numbers. Existing reports preserve every date, label, null and field, including field ordering and number formatting; a report published before D78 replays its numbers up to rounding. New inputs and APIs use these same rules; input mappings and preparation preserve the observations each existing calculation receives. Provenance is separate from the original report payload.
-- **No retroactive change.** Stored rows, published reports, vintages and existing archives keep their bytes and meaning. Nothing is renamed, rewritten, re-chunked or backfilled (D74 clarification, 2026-10-22).
+- **No retroactive change.** Stored rows, published reports, vintages and existing archives keep their bytes and meaning. Nothing is renamed, rewritten or re-chunked (D74 clarification, 2026-10-22). A backfill is allowed only as new versions stamped with the backfill's own `knowledge_time`, the database clock at write time, so no earlier run or vintage can appear to have read a backfilled row. A FRED backfill takes the ALFRED first-release value where ALFRED has a vintage for the date. A Yahoo backfill stores each close under its own leg key (D74 amendment, issue 1644).
 
 ## 3. Components
 
@@ -74,7 +74,7 @@ The input holds source data only. A ratio of two source series is a calculated i
 
 Eight indicators are ratios of two Yahoo series: `COPPER_GOLD`, `IWM_SPY`, `BTC_ETH`, `SPHB_SPLV`, `MTUM_SPY`, `IWF_IWD`, `XLU_SPY` and `XLP_XLY`. For each of them:
 
-- each leg is its own source data, with its own source id (for example `yahoo:HG=F` and `yahoo:GC=F`),
+- each leg is its own source data, stored as two source series, one per Yahoo close: `yahoo:<SYMBOL>.close` (the raw close) and `yahoo:<SYMBOL>.adjclose` (the adjusted close), for example `yahoo:HG=F.close` and `yahoo:HG=F.adjclose`. Two per-ratio parameters in the registry (`analyze/indicators.ts`) select what the run reads: `ratioInput` (`stored` reads the stored ratio when the input carries one, `legs` always computes it from the legs) and `ratioClose` (`adjusted` or `raw`, the close both legs carry). All eight ratios declare `stored` and `adjusted` (issue 1644; the choices are research issue 1673),
 - the transform step calculates the ratio on the dates both legs share, and skips any date where either leg is not a finite number or the denominator is 0,
 - a missing leg is a missing input.
 

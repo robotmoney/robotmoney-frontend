@@ -17,13 +17,29 @@
 export const MAX_FORWARD_FILL_DAYS = 120;
 
 export type Panel = "macro" | "onchain" | "factor";
+export type RatioInput = "stored" | "legs";
+export type RatioClose = "adjusted" | "raw";
 
 export interface Indicator {
   id: string;
   name: string;
   panel: Panel;
   source: string;
+  // A two-symbol `series` ([numerator, denominator], source "yahoo") is a
+  // ratio of the two symbols' closes, calculated with mergeRatioSeries in the
+  // transform stage (transform/ratios.ts). Each symbol is stored as two source
+  // series, `yahoo:<SYMBOL>.close` (raw) and `yahoo:<SYMBOL>.adjclose`
+  // (adjusted) (issue 1644, analytics requirements 4.3).
   series?: string | string[] | { asset: string; metric: string };
+  // A ratio's two declared methodology parameters (issue 1644; the choices are
+  // research issue 1673). Required on a ratio, refused on any other indicator.
+  // ratioInput "stored": read the stored ratio when the input carries one,
+  // else compute it from the legs; ingestion keeps storing the ratio.
+  // ratioInput "legs": always compute it from the legs and ignore a stored
+  // ratio; nothing stores it. ratioClose selects the legs: "adjusted" reads
+  // the .adjclose legs, "raw" the .close legs.
+  ratioInput?: RatioInput;
+  ratioClose?: RatioClose;
   sign: 1 | -1;
   transform: string;
   // How a day without a real observation is treated (issue 1655). Required:
@@ -230,6 +246,8 @@ export const INDICATORS: Indicator[] = [
     panel: "macro",
     source: "yahoo",
     series: ["HG=F", "GC=F"],
+    ratioInput: "stored",
+    ratioClose: "adjusted",
     sign: +1,
     transform: "level",
     unit: "ratio4",
@@ -258,7 +276,7 @@ export const INDICATORS: Indicator[] = [
     description:
       "Ratio of the S&P 500's 50-day simple moving average to its 200-day simple moving average. The classic \"golden cross / death cross\" trend indicator on the broadest equity benchmark.",
     derivation:
-      "Yahoo ^GSPC daily closes. We compute SMA(50) ÷ SMA(200) for each day. Stored value is the ratio itself (above 1 = uptrend, below 1 = downtrend).",
+      "Yahoo ^GSPC daily closes. The stored value is the ^GSPC close; the trend_50_200 transform computes SMA(50) ÷ SMA(200) for each day downstream (above 1 = uptrend, below 1 = downtrend).",
     interpretation:
       "Ratio above 1 (golden cross) = SPX in a sustained uptrend = risk-on. Ratio below 1 (death cross) = downtrend = risk-off. Trend signals lag price action but filter out short-term noise, which is desirable in a regime classifier.",
   },
@@ -268,6 +286,8 @@ export const INDICATORS: Indicator[] = [
     panel: "factor",
     source: "yahoo",
     series: ["IWM", "SPY"],
+    ratioInput: "stored",
+    ratioClose: "adjusted",
     sign: +1,
     transform: "level",
     unit: "ratio4",
@@ -378,6 +398,8 @@ export const INDICATORS: Indicator[] = [
     panel: "onchain",
     source: "yahoo",
     series: ["BTC-USD", "ETH-USD"],
+    ratioInput: "stored",
+    ratioClose: "adjusted",
     sign: -1,
     transform: "level",
     unit: "ratio2",
@@ -471,6 +493,8 @@ export const INDICATORS: Indicator[] = [
     panel: "factor",
     source: "yahoo",
     series: ["SPHB", "SPLV"],
+    ratioInput: "stored",
+    ratioClose: "adjusted",
     sign: +1,
     transform: "level",
     unit: "ratio4",
@@ -489,6 +513,8 @@ export const INDICATORS: Indicator[] = [
     panel: "factor",
     source: "yahoo",
     series: ["MTUM", "SPY"],
+    ratioInput: "stored",
+    ratioClose: "adjusted",
     sign: +1,
     transform: "level",
     unit: "ratio4",
@@ -507,6 +533,8 @@ export const INDICATORS: Indicator[] = [
     panel: "factor",
     source: "yahoo",
     series: ["IWF", "IWD"],
+    ratioInput: "stored",
+    ratioClose: "adjusted",
     sign: +1,
     transform: "level",
     unit: "ratio4",
@@ -525,6 +553,8 @@ export const INDICATORS: Indicator[] = [
     panel: "factor",
     source: "yahoo",
     series: ["XLU", "SPY"],
+    ratioInput: "stored",
+    ratioClose: "adjusted",
     sign: -1,
     transform: "level",
     unit: "ratio4",
@@ -543,6 +573,8 @@ export const INDICATORS: Indicator[] = [
     panel: "factor",
     source: "yahoo",
     series: ["XLP", "XLY"],
+    ratioInput: "stored",
+    ratioClose: "adjusted",
     sign: -1,
     transform: "level",
     unit: "ratio4",
@@ -574,6 +606,42 @@ export const INDICATORS: Indicator[] = [
       "High CAPE = expensive equity market = lower long-horizon expected returns and elevated drawdown risk = risk-off (sign -1). The signal is strongest at tails (top/bottom decile); between extremes it is a slow-moving level rather than a precise short-horizon timer.",
   },
 ];
+
+export class InvalidRatioCloseError extends Error {
+  override readonly name = "InvalidRatioCloseError";
+  constructor(readonly indicatorId: string, readonly field: "ratioInput" | "ratioClose", detail: string) {
+    super(`indicator ${indicatorId}: ${field} ${detail}`);
+  }
+}
+
+const RATIO_INPUTS: readonly string[] = ["stored", "legs"];
+const RATIO_CLOSES: readonly string[] = ["adjusted", "raw"];
+
+/** True for a two-symbol Yahoo indicator: a ratio of two closes. */
+export const isRatioIndicator = (ind: Indicator): boolean => ind.source === "yahoo" && Array.isArray(ind.series);
+
+/**
+ * Refuses a malformed ratio declaration (issue 1644): a ratio without
+ * ratioInput or ratioClose, a value outside the two names, or either field on
+ * an indicator that is not a ratio. Returns `indicators`.
+ */
+export function validateRatioDeclarations<T extends readonly Indicator[]>(indicators: T): T {
+  for (const ind of indicators) {
+    const ratio = isRatioIndicator(ind);
+    for (const [field, names] of [["ratioInput", RATIO_INPUTS], ["ratioClose", RATIO_CLOSES]] as const) {
+      const v = (ind as unknown as Record<string, unknown>)[field];
+      if (!ratio) {
+        if (v !== undefined) throw new InvalidRatioCloseError(ind.id, field, "is declared on an indicator that is not a ratio");
+        continue;
+      }
+      if (v === undefined) throw new InvalidRatioCloseError(ind.id, field, `is required on a ratio (${names.join(" or ")})`);
+      if (typeof v !== "string" || !names.includes(v)) throw new InvalidRatioCloseError(ind.id, field, `must be ${names.join(" or ")}, got ${JSON.stringify(v)}`);
+    }
+  }
+  return indicators;
+}
+
+validateRatioDeclarations(INDICATORS);
 
 export const PANELS: Panel[] = ["macro", "onchain"];
 
