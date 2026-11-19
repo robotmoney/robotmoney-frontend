@@ -12,7 +12,7 @@ import { fetchYahoo } from "../src/extract/yahoo.ts";
 import { MissingRatioLegError, RATIO_IDS, resolveInputHistory } from "../src/series-ids.ts";
 import { mergeRatioSeries } from "../src/transform/grid.ts";
 import { ratiosFromLegs } from "../src/transform/ratios.ts";
-import { runRegime } from "../src/run.ts";
+import { requireComplete, runRegime } from "../src/run.ts";
 import type { RawIndicatorHistory } from "../src/types.ts";
 import { fixture } from "./support/ratio-legs.ts";
 
@@ -103,7 +103,7 @@ test("non-vacuity: ratioInput legs and ratioClose raw each change the output aga
 // and not the ranks. "legs" with "raw" moves the composite.
 test("non-vacuity: the factor run's composite series with IWM_SPY from its raw legs differs from the shipped one", () => {
   const fromRaw = resolve(fixture, copyWith("IWM_SPY", { ratioInput: "legs", ratioClose: "raw" })).IWM_SPY!;
-  const composite = (h: RawIndicatorHistory) => runRegime(h, { factor: true }).factor!.composite;
+  const composite = (h: RawIndicatorHistory) => requireComplete(runRegime(h, { factor: true })).factor!.composite;
   const shipped = composite(fixture);
   expect(shipped.filter(Number.isFinite).length).toBeGreaterThan(100);
   expect(composite({ ...fixture, IWM_SPY: fromRaw })).not.toEqual(shipped);
