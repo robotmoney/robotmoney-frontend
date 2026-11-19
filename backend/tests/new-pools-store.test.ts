@@ -38,15 +38,15 @@ const same = (a: string, b: string) => instantMs(a) === instantMs(b);
 
 describe("new-pools store", () => {
   test("two polls that see the same pool store one row with the first poll's knowledge_time; every knowledge_time is the database clock", async () => {
-    const before = (await sql<{ t: string }[]>`SELECT clock_timestamp()::text AS t`)[0]!.t;
+    const before = (await sql<{ t: string }[]>`SELECT to_char(clock_timestamp() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS t`)[0]!.t;
     const first = await saveNewPoolPoll(submission([{ id: "base_a", at: "2026-11-18T22:50:00Z" }, { id: "base_b", at: "2026-11-18T22:51:00Z" }]));
     await Bun.sleep(20);
     const second = await saveNewPoolPoll(submission([{ id: "base_b", at: "2026-11-18T22:51:00Z" }, { id: "base_c", at: "2026-11-18T22:52:00Z" }]));
-    const after = (await sql<{ t: string }[]>`SELECT clock_timestamp()::text AS t`)[0]!.t;
+    const after = (await sql<{ t: string }[]>`SELECT to_char(clock_timestamp() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS t`)[0]!.t;
     expect([first.poolsNew, second.poolsNew]).toEqual([2, 1]);
     expect([first.gap, second.gap]).toEqual([null, null]);
     const rows = await sql<{ pool_id: string; acquisition_id: string; known: boolean }[]>`
-      SELECT pool_id, acquisition_id::text, knowledge_time BETWEEN ${before}::timestamptz AND ${after}::timestamptz AS known
+      SELECT pool_id, acquisition_id::text, knowledge_time BETWEEN ${before}::text::timestamptz AND ${after}::text::timestamptz AS known
       FROM new_pool_records ORDER BY pool_id`;
     expect(rows.map((r) => r.pool_id)).toEqual(["base_a", "base_b", "base_c"]);
     expect(rows.find((r) => r.pool_id === "base_b")!.acquisition_id).toBe(first.acquisitionId);
