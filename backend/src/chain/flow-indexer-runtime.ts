@@ -9,7 +9,9 @@ export async function indexFlowQueue(input: { address: string; fundAddress: stri
   if (!/^0x[0-9a-fA-F]{40}$/.test(input.fundAddress)) throw new Error("invalid fund address");
   const explorer = [...new Set((input.explorerAddresses ?? []).map((address) => address.toLowerCase()))].sort();
   if (explorer.some((address) => !/^0x[0-9a-f]{40}$/.test(address))) throw new Error("invalid explorer address");
-  const opts = { rpcUrl: config.baseRpcUrl };
+  // FLOW_RPC_URL: an RPC that serves eth_getLogs, for a deployment whose
+  // BASE_RPC_URL does not (the public mainnet.base.org refuses it, issue 1614).
+  const opts = { rpcUrl: process.env.FLOW_RPC_URL || config.baseRpcUrl };
   const chainId = 8453;
   await pipelineIngest("flow.bind_deployment", chainId, input.address, input.fundAddress, explorer);
   const parseHeader = (block: EthBlock, number: number): FlowHeader => {

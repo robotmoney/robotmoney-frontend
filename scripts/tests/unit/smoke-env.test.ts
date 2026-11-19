@@ -138,6 +138,8 @@ describe("the deposit queue stand-in", () => {
     expect(r.composeEnv.FLOW_QUEUE_ADDRESS).toBe(FLOW_SMOKE_STANDINS.queue);
     expect(r.composeEnv.FLOW_FUND_ADDRESS).toBe(FLOW_SMOKE_STANDINS.fund);
     expect(r.composeEnv.FLOW_INDEX_DEPLOY_BLOCK).toBe("940");
+    expect(r.composeEnv.FLOW_RPC_URL).toBe("https://base-rpc.publicnode.com");
+    expect("FLOW_RPC_URL" in resolveSmokeEnv({ BASE_RPC_URL: "http://private" }, { flowHeadBlock: 1000 }).composeEnv).toBe(false);
   });
 
   test("a standing, prod or operator-configured boot gets no stand-in", () => {

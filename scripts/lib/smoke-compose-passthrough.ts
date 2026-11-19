@@ -74,6 +74,7 @@ export const DEMO_COMPOSE_PASSTHROUGH = [
   "FLOW_FUND_ADDRESS",
   "FLOW_EXPLORER_ADDRESSES",
   "FLOW_INDEX_DEPLOY_BLOCK",
+  "FLOW_RPC_URL",
   // NO "RM_ENV". No container reads it (issue 1326, D69), and
   // buildComposeEnv() refuses to see it in the extras map.
   // NO "WORKER_DATABASE_URL" either. The pipeline worker holds no database

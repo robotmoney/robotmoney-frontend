@@ -65,7 +65,11 @@ than invented state. List cursors use `afterBlock` and `afterLogIndex`.
 The v0.9 queue and fund are not on Base mainnet yet. A local `bun smoke` boot
 that is neither the standing stack nor `RM_ENV=prod` therefore indexes the
 live deploy-2 gateway and rmUSD vault as stand-ins, from 60 blocks below the
-head the boot read (`scripts/lib/smoke-env.ts`). The smoke seed enables the
+head the boot read (`scripts/lib/smoke-env.ts`). The public `mainnet.base.org` answers every
+`eth_getLogs` with 429, so the stand-in scans through `FLOW_RPC_URL`
+(`https://base-rpc.publicnode.com`) unless `BASE_RPC_URL` or `FLOW_RPC_URL` is
+exported. `FLOW_RPC_URL` is optional everywhere; unset, the indexer uses
+`BASE_RPC_URL`. The smoke seed enables the
 `flow.index` schedule. The live-smoke check (`bun --no-env-file
 scripts/smoke-ci-checks.ts --check live-smoke`, run by `e2e-swarm`) fails unless
 `health` answers 200 with `status: "ok"`. The stand-ins exercise the deployed

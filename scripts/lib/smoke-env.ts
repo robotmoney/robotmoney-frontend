@@ -82,6 +82,13 @@ export const FLOW_SMOKE_STANDINS = Object.freeze({
   fund: "0x28Bf6E6EDAD526191e8652ee631B56EAd4cE7435",
 });
 export const FLOW_SMOKE_START_LAG = 60;
+/**
+ * The public mainnet.base.org answers every eth_getLogs with 429 "request
+ * limit reached" (seen from CI and locally, issue 1614), so the stand-in scans
+ * through a public RPC that serves logs. Only the flow indexer uses it; an
+ * exported BASE_RPC_URL or FLOW_RPC_URL wins.
+ */
+export const FLOW_SMOKE_RPC_URL = "https://base-rpc.publicnode.com";
 
 /** Whether this boot configures the stand-in deposit queue index (and so must read the chain head first). */
 export function wantsFlowStandIn(
@@ -163,6 +170,7 @@ export function resolveSmokeEnv(
       FLOW_QUEUE_ADDRESS: FLOW_SMOKE_STANDINS.queue,
       FLOW_FUND_ADDRESS: FLOW_SMOKE_STANDINS.fund,
       FLOW_INDEX_DEPLOY_BLOCK: String(head - FLOW_SMOKE_START_LAG),
+      ...(env.BASE_RPC_URL || env.FLOW_RPC_URL ? {} : { FLOW_RPC_URL: FLOW_SMOKE_RPC_URL }),
     };
   }
 
