@@ -95,12 +95,23 @@ export function fillScript(readme: string, folder: string): string | undefined {
   return block.replace(/^fill api-copy$/m, `fill ${folder}`);
 }
 
-/** The README quickstart's `fill` into `folder` (relative to the SDK folder) against the target's API. */
+/**
+ * csvb, which the README's `fill` runs (`csvb backup --source api`, issue 1436): this checkout's packages/csvb, with its
+ * dependencies installed. The sparse clone holds the SDK alone, as an analyst's does before adding csvb.
+ */
+export const CSVB_COMMAND = `bun run --cwd ${join(import.meta.dir, "..", "..", "packages", "csvb")} csvb`;
+
+/**
+ * The README quickstart's `fill` into `folder` (relative to the SDK folder) against the target's API. The README's
+ * copies live in `$ARCHIVES`, here the SDK folder of the sparse clone, which holds no csvb (csvb refuses to write
+ * inside a checkout that does).
+ */
 export async function fillInto(deps: SdkDeps, sdkDir: string, folder: string): Promise<string | null> {
   const readme = readFileSync(join(sdkDir, "README.md"), "utf8");
   const script = fillScript(readme, folder);
   if (script === undefined) return "the SDK README at this commit no longer has the API-only `fill` block (<!-- readme-test: acquire -->) the check runs";
-  const r = await deps.run(["bash", "-euo", "pipefail", "-c", script], { cwd: sdkDir, env: { API: `${deps.net.origin}${PUBLIC_API}` } });
+  const env = { API: deps.net.origin, ARCHIVES: sdkDir, CSVB: CSVB_COMMAND };
+  const r = await deps.run(["bash", "-euo", "pipefail", "-c", script], { cwd: sdkDir, env });
   return r.code === 0 ? null : `fill ${folder} exited ${r.code}: ${tail(r.stderr)}`;
 }
 

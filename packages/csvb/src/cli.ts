@@ -3,8 +3,10 @@
 // the data lives in a separate checkout of robotmoney/csv-backups, named with --repo. A backup is never written
 // inside a robotmoney-frontend checkout.
 //
-//   bun run csvb backup  [--repo DIR] [--part-mb 64] [--pause-ms 50] [--max-seconds 3600] [--statement-timeout-s 90]
+//   bun run csvb backup  [--repo DIR] [--source db] [--part-mb 64] [--pause-ms 50] [--max-seconds 3600] [--statement-timeout-s 90]
 //                        [--max-rss-mb 1500] [--only table,table] [--env-file PATH]
+//   bun run csvb backup  --source api [--repo DIR] [--api https://robotmoney.network] [--max-requests 500]
+//                        (issue 1436: fill from the public archive routes, no credentials; exit 3 at the request cap)
 //   bun run csvb serve   [--repo DIR] [--remote URL] [--branch main] [--once] [--env-file PATH] [--max-rss-mb 3000] [--pause-ms 250] [--max-seconds 1800]
 //                        [--stale-days 3] [--interval-s 3600] [--health-port 8091] [--push-key PATH]
 //                        (the scheduled backup, issue 1608: fast-forward the clone, cut every sealed UTC boundary,
@@ -37,6 +39,9 @@ import { analyseRevisions } from "./audit/revisions.ts";
 import { analyseRuns, loadRuns } from "./audit/runs.ts";
 import { verifyRepo } from "./verify.ts";
 import { SERVE_MAX_SECONDS, SERVE_PAUSE_MS, serveForever, serveOnce, sshEnvForKey, staleness } from "./serve.ts";
+
+/** A command line csvb refuses before doing anything: exit 2. */
+class UsageError extends Error {}
 
 interface Args {
   cmd: string;
@@ -94,7 +99,24 @@ async function main(): Promise<number> {
   const layout = { root: repo };
   switch (a.cmd) {
     case "backup": {
-      known(a, ["--repo", "--part-mb", "--pause-ms", "--max-seconds", "--statement-timeout-s", "--max-rss-mb", "--only", "--env-file"]);
+      const source = one(a, "--source") ?? "db";
+      if (source !== "db" && source !== "api") throw new UsageError(`--source must be db or api, not ${source}`);
+      if (source === "api") {
+        for (const f of ["--env-file", "--statement-timeout-s", "--part-mb", "--only", "--pause-ms", "--max-seconds", "--max-rss-mb"]) {
+          if (a.flags.has(f)) throw new UsageError(`${f} reads the replica; it is refused with --source api`);
+        }
+        known(a, ["--repo", "--source", "--api", "--max-requests"]);
+        const maxRequests = num(a, "--max-requests", 500);
+        if (!(Number.isSafeInteger(maxRequests) && maxRequests >= 1)) throw new UsageError("--max-requests must be a whole number of at least 1");
+        // Loaded only here: it reads the contract's budgets, which the scheduled backup image does not hold.
+        const { apiFill } = await import("./api-fill.ts");
+        const ac = new AbortController();
+        for (const sig of ["SIGINT", "SIGTERM"] as const) process.on(sig, () => ac.abort(sig));
+        const r = await apiFill({ repo, api: one(a, "--api"), maxRequests, signal: ac.signal });
+        return r.status === "capped" ? 3 : 0;
+      }
+      for (const f of ["--api", "--max-requests"]) if (a.flags.has(f)) throw new UsageError(`${f} is for --source api; it is refused with --source db`);
+      known(a, ["--repo", "--source", "--part-mb", "--pause-ms", "--max-seconds", "--statement-timeout-s", "--max-rss-mb", "--only", "--env-file"]);
       const partMb = num(a, "--part-mb", 64);
       if (!(partMb >= 1 && partMb <= 90)) throw new Error("--part-mb must be 1..90 (GitHub rejects files over 100 MB)");
       const only = one(a, "--only")?.split(",").filter(Boolean);
@@ -279,6 +301,6 @@ main().then(
   (code) => process.exit(code),
   (e) => {
     console.error(`csvb: ${(e as Error).message}`);
-    process.exit(1);
+    process.exit(e instanceof UsageError ? 2 : 1);
   },
 );

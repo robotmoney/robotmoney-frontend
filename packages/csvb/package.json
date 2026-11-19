@@ -1,5 +1,6 @@
 {
   "name": "@robotmoney/csvb",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
   "description": "csvb: makes and reads format 1 backups of the Robot Money analytics tables (D72, D80). Data lives in a separate checkout named with --repo.",
