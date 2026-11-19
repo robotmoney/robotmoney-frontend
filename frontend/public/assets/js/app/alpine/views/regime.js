@@ -8,7 +8,6 @@ import { fmtUsdCompact } from "../lib/dash-format.js";
 import { sessionBrief } from "../../lib/session-brief.js";
 import { PALETTE, SERIES, REGIME } from "../../lib/chart-theme.js";
 import { regimeDialValid } from "../../lib/regime-dial.js";
-import { readOnComposite } from "../../lib/regime-scale.js";
 import { denseDays, sampleDays, yScale, lineChartSvg, bandRuns, dateTicks, nearestSample, stepAt, logTicks, dragWindow } from "../../lib/line-chart.js";
 import {
   alignToDates,
@@ -169,11 +168,11 @@ export function registerRegimeView(Alpine) {
         this.fullLoaded = true;
       }
     },
-    // Every label is cut on the composite itself (lib/regime-scale.js). Market
-    // context is fed the index levels where the session page feeds it
-    // percentiles: the composite and each panel's index, on one 0 to 1 scale.
-    _apply(raw) {
-      const data = readOnComposite(raw);
+    // The labels are the API's: since methodology v5 (D84) the regime is cut on
+    // the composite and each panel on its own index. Market context is fed the
+    // index levels where the session page feeds it percentiles: the composite
+    // and each panel's index, on one 0 to 1 scale.
+    _apply(data) {
       const l = data.latest;
       this.latest = l;
       this.setBackdrop(l && { ...l, compositePercentile: l.composite, macroPercentile: l.macroIndex, onchainPercentile: l.onchainIndex, factorPercentile: l.factorIndex }, { date: l?.date });

@@ -1,13 +1,12 @@
 // The market regime under the home page's model portfolio (Lex: the portfolio,
 // then the regime it is read against): the dial with the regime beside it, and
 // the last year on the site's chart. The composite is plotted on its own 0 to
-// 1 scale, and every label is cut on it (lib/regime-scale.js), so the dial,
+// 1 scale, and the API's label is cut on it (methodology v5), so the dial,
 // the bands and the axis read on one scale. One read of the
 // regime snapshots, made as the section nears the viewport: a visitor who never
 // scrolls this far never pays for it.
 import { api, ROUTES } from "../../lib/api.js";
 import { regimeDialValid } from "../../lib/regime-dial.js";
-import { readOnComposite } from "../../lib/regime-scale.js";
 import { bandRuns, dateTicks, denseDays, lineChartSvg, nearestSample, stepAt } from "../../lib/line-chart.js";
 import { REGIME } from "../../lib/chart-theme.js";
 import { COMPOSITE_AREA, REGIME_BAND_BG, REGIME_BG_LEGEND } from "./shared.js";
@@ -77,7 +76,7 @@ export function registerHomeRegime(Alpine) {
       destroy() { near?.disconnect(); },
       async loadRegime() {
         try {
-          const data = readOnComposite(await api.get(ROUTES.dashboards.regimeSnapshots, { range: FETCH_DAYS }));
+          const data = await api.get(ROUTES.dashboards.regimeSnapshots, { range: FETCH_DAYS });
           const l = data.latest;
           this.latest = l ? { regime: l.regime, composite: l.composite ?? null, bucketThresholds: l.bucketThresholds } : null;
           rows = (data.history || []).slice().sort((a, b) => (a.date < b.date ? -1 : 1));

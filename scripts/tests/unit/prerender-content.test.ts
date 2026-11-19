@@ -164,6 +164,10 @@ describe("research pages ship their structured data", () => {
     const noscript = html.slice(html.indexOf('<section id="agent-data">'));
     expect(noscript).toContain("The regime on ");
     expect(noscript).toContain(`Composite ${latest.composite.toFixed(2)}`);
+    // The label is cut on the composite itself (methodology v5): no ranking of
+    // the composite is read out as the reading.
+    expect(noscript).toContain("on a scale of 0 (risk-off) to 1 (risk-on)");
+    expect(noscript).not.toContain("percentile of its last");
     expect((noscript.match(/regime\/indicators#/g) || []).length).toBe(latest.indicators.length);
     expect(noscript).not.toContain("Predictive power and alignment");
     const doc = JSON.parse(ld(html)[0]!);
@@ -171,6 +175,7 @@ describe("research pages ship their structured data", () => {
     expect(ds.dateModified).toBe(latest.date);
     const composite = ds.variableMeasured.find((v: { name: string }) => v.name === "Composite");
     expect(composite.value).toBeCloseTo(latest.composite, 3);
+    expect(ds.variableMeasured.some((v: { name: string }) => /percentile/i.test(v.name))).toBe(false);
   });
 
   test("a page that is not research carries none", () => {
