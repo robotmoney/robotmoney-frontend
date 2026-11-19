@@ -92,7 +92,8 @@ export interface JudgeInput {
   /** Rollup facts off the aggregated session. Digested, never shown to the model, never recomputed. */
   byStance: Record<string, number>;
   meanConfidence: number | null;
-  regimeSummary: { composite_percentile?: number } | null;
+  /** The stored regime_summary. The digest reads one field of it, chosen by the scheme. */
+  regimeSummary: { composite?: number | null; composite_percentile?: number | null } | null;
 }
 
 // ── The judged output ───────────────────────────────────────────────────────
@@ -320,30 +321,44 @@ function promptPayload(input: JudgeInput) {
  * in prose nothing checks. Both forms are built from promptPayload(), so the
  * prompt's field list exists once and the two cannot drift.
  *
- * WHAT IS DELIBERATELY NOT IN HERE. `regimeSummary` is digested as the single
- * `composite_percentile` the retired templates read, not whole: digesting the
- * rest would move the digest of an unchanged opinion whenever an unread field
- * of the regime snapshot moved, which is the same "binds too much" defect as
- * the live member name #765 also names.
+ * WHAT IS DELIBERATELY NOT IN HERE. `regimeSummary` is digested as one field,
+ * not whole: digesting the rest would move the digest of an unchanged opinion
+ * whenever an unread field of the regime snapshot moved, which is the same
+ * "binds too much" defect as the live member name #765 also names. Under
+ * `derivation-v1` that field is `composite_percentile`, the number the retired
+ * templates read. Under `derivation-v2` (issue 1660) it is `composite`, the
+ * number members and judges are served: a session aggregated after 1660 stores
+ * a null percentile, so v1 would digest a constant there.
+ *
+ * THE SCHEME IS AN ARGUMENT. Submission digests under `DIGEST_SCHEME` only;
+ * replay and the consensus receipt recompute a stored row under the scheme
+ * stamped on THAT row, so a v1 row stays reproducible. An unknown scheme
+ * throws: guessing a rule would turn "written under a rule this code does not
+ * know" into a silent mismatch.
  *
  * `byStance` is digested as key-SORTED pairs. It arrives out of the
  * `swarm_recommendation` jsonb, and postgres does not preserve the key order it
  * was written in — an unsorted object would make the digest a function of
  * postgres's internal jsonb ordering rather than of the stance counts.
  */
-export function canonicalizeDigestInputs(input: JudgeInput): string {
+export function canonicalizeDigestInputs(input: JudgeInput, scheme: string): string {
+  let regimeComposite: number | null;
+  if (scheme === "derivation-v2") regimeComposite = input.regimeSummary?.composite ?? null;
+  else if (scheme === "derivation-v1") regimeComposite = input.regimeSummary?.composite_percentile ?? null;
+  else throw new Error(`unknown digest scheme: ${scheme}`);
   return JSON.stringify({
     ...promptPayload(input),
     subjectLabel: input.subjectLabel,
     minTakes: input.minTakes,
     byStance: Object.keys(input.byStance ?? {}).sort().map((stance) => [stance, input.byStance[stance]]),
     meanConfidence: input.meanConfidence ?? null,
-    regimeComposite: input.regimeSummary?.composite_percentile ?? null,
+    regimeComposite,
   });
 }
 
-export function inputsDigest(input: JudgeInput): string {
-  return sha256(canonicalizeDigestInputs(input));
+/** The digest of `input` under `scheme`; the current scheme unless a stored row names its own. */
+export function inputsDigest(input: JudgeInput, scheme: string = DIGEST_SCHEME): string {
+  return sha256(canonicalizeDigestInputs(input, scheme));
 }
 
 /**
@@ -364,7 +379,13 @@ export function inputsDigest(input: JudgeInput): string {
  * change that edits it. Forgetting to bump it makes the two schemes
  * indistinguishable to the audit, exactly the gap this issue closes.
  */
-export const DIGEST_SCHEME = "derivation-v1" as const;
+//
+// derivation-v1: `regimeComposite` is `regimeSummary.composite_percentile`.
+// derivation-v2 (issue 1660): `regimeComposite` is `regimeSummary.composite`.
+export const DIGEST_SCHEME = "derivation-v2" as const;
+
+/** Every scheme `canonicalizeDigestInputs()` can still recompute, oldest first. */
+export const DIGEST_SCHEMES: readonly string[] = ["derivation-v1", DIGEST_SCHEME];
 
 // The fence around member-authored content. Same idea as
 // scripts/lib/contribution-reviewer-diff.ts's UNTRUSTED_DIFF markers: a take

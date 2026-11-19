@@ -44,7 +44,7 @@ import { handleSwarmAdmin } from "../src/api/routes/swarm-admin.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
 import { fixtureDb } from "./support/fixture-db.ts";
 import {
-  DIGEST_SCHEME, inputsDigest, JUDGE_PROMPT_HASH, parseJudgeResponse, REASON_MAX_CHARS, renderJudgePrompt,
+  canonicalizeDigestInputs, DIGEST_SCHEME, inputsDigest, JUDGE_PROMPT_HASH, parseJudgeResponse, REASON_MAX_CHARS, renderJudgePrompt,
   UNTRUSTED_INPUTS_BEGIN, UNTRUSTED_INPUTS_END,
   type JudgeInput,
 } from "../src/swarm/judge.ts";
@@ -1143,6 +1143,73 @@ test("the replay COMPARES a participant judgement's stored inputs_digest — rep
   const broken = (await replaySessionJudge(session.id))!;
   expect(broken.digestVerdict).toBe("mismatch");
   expect(broken.digestStored).not.toBe(broken.digestRederived);
+});
+
+// ── Issue 1660 (D86): the digest reads the composite under derivation-v2 ────
+
+test("canonicalizeDigestInputs digests the composite under derivation-v2, the percentile under v1, and throws on anything else", async () => {
+  expect(DIGEST_SCHEME).toBe("derivation-v2");
+  const { session } = await aggregatedSession("digest-schemes");
+  const base = await frozenInput(session.id);
+  const input: JudgeInput = { ...base, regimeSummary: { composite: 0.3767, composite_percentile: 0.0306 } };
+  expect(JSON.parse(canonicalizeDigestInputs(input, "derivation-v2")).regimeComposite).toBe(0.3767);
+  expect(JSON.parse(canonicalizeDigestInputs(input, "derivation-v1")).regimeComposite).toBe(0.0306);
+  expect(JSON.parse(canonicalizeDigestInputs({ ...input, regimeSummary: null }, "derivation-v2")).regimeComposite).toBeNull();
+  expect(() => canonicalizeDigestInputs(input, "derivation-v3")).toThrow();
+  expect(() => canonicalizeDigestInputs(input, "")).toThrow();
+  // The default is the current scheme.
+  expect(inputsDigest(input)).toBe(inputsDigest(input, "derivation-v2"));
+  expect(inputsDigest(input, "derivation-v1")).not.toBe(inputsDigest(input, "derivation-v2"));
+});
+
+test("a v2 digest is stored stamped derivation-v2, and a v1 digest is refused 409 and writes nothing", async () => {
+  const { session } = await judgingSession("digest-v2-submit");
+  const judge = await seatJudge();
+  const input = await frozenInput(session.id);
+  // A new session's summary has a composite and a null percentile, so the two schemes differ.
+  expect(input.regimeSummary?.composite).not.toBeNull();
+  expect(input.regimeSummary?.composite_percentile ?? null).toBeNull();
+
+  const v1 = await signedJudgement(judge, session.id, STUB_JUDGE_REPLY, { inputsDigest: inputsDigest(input, "derivation-v1") });
+  expect(await ic.submitJudgement(judge.token, v1)).toEqual({ ok: false, status: 409, error: "inputs_digest_mismatch" });
+  expect(await judgementCount(session.id)).toBe(0);
+
+  const v2 = await signedJudgement(judge, session.id, STUB_JUDGE_REPLY, { inputsDigest: inputsDigest(input, "derivation-v2") });
+  expect((await ic.submitJudgement(judge.token, v2)).ok).toBe(true);
+  const row = await latestRow(session.id);
+  expect(row.digest_scheme).toBe("derivation-v2");
+  expect(row.inputs_digest).toBe(inputsDigest(input, "derivation-v2"));
+});
+
+test("the replay recomputes each row under its own stamped scheme: v1 and v2 reproduce, an altered v2 is a mismatch", async () => {
+  const { session } = await judgingSession("digest-replay-schemes");
+  expect((await submitSigned(await seatJudge(), session.id, STUB_JUDGE_REPLY)).ok).toBe(true);
+  const v2 = (await replaySessionJudge(session.id))!;
+  expect(v2.digestScheme).toBe("derivation-v2");
+  expect(v2.digestVerdict).toBe("reproduced");
+
+  // A row written before 1660: same take set, stamped and digested under v1.
+  const stored = await latestRow(session.id);
+  const input = await frozenInput(session.id, Number(stored.min_takes));
+  const copyAs = async (scheme: string, digest: string) => fixtureDb`
+    INSERT INTO swarm_session_judgements
+      (session_id, mode, source, model, prompt_hash, inputs_digest, digest_scheme, take_count, min_takes,
+       applied, judged_by, judged_by_member_id, opinion)
+    VALUES (${session.id}, 'enforce', 'model', ${stored.model}, ${stored.prompt_hash}, ${digest}, ${scheme},
+            ${stored.take_count}, ${stored.min_takes}, ${false}, ${stored.judged_by}, ${stored.judged_by_member_id},
+            ${fixtureDb.json(stored.opinion)})`;
+  await copyAs("derivation-v1", inputsDigest(input, "derivation-v1"));
+  const v1 = (await replaySessionJudge(session.id))!;
+  expect(v1.digestScheme).toBe("derivation-v1");
+  expect(v1.digestVerdict).toBe("reproduced");
+  expect(v1.digestRederived).toBe(inputsDigest(input, "derivation-v1"));
+
+  // A v2 row whose digest was altered: a real finding, not history.
+  await copyAs("derivation-v2", inputsDigest({ ...input, minTakes: input.minTakes + 1 }, "derivation-v2"));
+  const altered = (await replaySessionJudge(session.id))!;
+  expect(altered.digestScheme).toBe("derivation-v2");
+  expect(altered.digestVerdict).toBe("mismatch");
+  expect(altered.digestReproducible).toBe(false);
 });
 
 test("a session never judged reports digest `not_applicable`, not a false mismatch", async () => {

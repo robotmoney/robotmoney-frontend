@@ -22,8 +22,9 @@ import { sql } from "../db/client.ts";
 import { on, registerQuery } from "../db/registry.ts";
 import {
   buildRationale, judgeInputFromFrozen, latestJudgement, loadFrozenTakeSet, majorityStance, meanTakeWeights,
+  type RegimeTextSummary,
 } from "./domain.ts";
-import { DIGEST_SCHEME, inputsDigest } from "./judge.ts";
+import { DIGEST_SCHEMES, inputsDigest } from "./judge.ts";
 import { DRAW_RULE, recomputeDrawnIndex } from "./judge-draw.ts";
 import { getJudgeConfig } from "./judge-config.ts";
 
@@ -154,12 +155,13 @@ const judgeableSessions = registerQuery({
 //      digest commits to, which made a divergence EXPECTED for any row
 //      written before that change and unremarkable for one written after —
 //      and the tool could not tell an operator which they were looking at.
-//      `digest_scheme` (migration 0052) is the discriminator: a row stamped
-//      with the scheme this code implements NOW that fails to reproduce is a
-//      real finding (`mismatch`, fails the run); a row stamped with anything
-//      else is expected history (`historical_divergence`, reports and exits
-//      0) — see D44 (docs/decisions.md) for the decision and judge.ts's
-//      `DIGEST_SCHEME` for the constant both sides compare against.
+//      `digest_scheme` (migration 0052) is the discriminator: a row is
+//      recomputed under the scheme stamped on IT (issue 1660), so a row
+//      stamped with any scheme this code still implements that fails to
+//      reproduce is a real finding (`mismatch`, fails the run); a row stamped
+//      with a scheme this code does not know is expected history
+//      (`historical_divergence`, reports and exits 0) — see D44 and the
+//      derivation-v2 entry (docs/decisions.md) and judge.ts's `DIGEST_SCHEMES`.
 
 /** Which of the three verdicts the weight-reproducibility check reached. */
 export type WeightsVerdict =
@@ -182,9 +184,9 @@ export type WeightsVerdict =
 export type DigestVerdict =
   /** The row's OWN stamped `digest_scheme` reproduces exactly. */
   | "reproduced"
-  /** Differs, and the row is stamped with the scheme this code implements NOW — a real finding. */
+  /** Differs under the row's own stamped scheme, which this code implements — a real finding. */
   | "mismatch"
-  /** Differs, and the row is stamped with an older (or absent) scheme — expected, not a fault. */
+  /** Differs, and the row is stamped with a scheme this code does not implement (or none) — expected, not a fault. */
   | "historical_divergence"
   /** No judgement is on file for this session at all: nothing to compare. */
   | "not_applicable";
@@ -221,7 +223,7 @@ export interface JudgeReplayResult {
   // COMPARISON, not printed as a bare value.
   /** `swarm_session_judgements.inputs_digest` for the session's latest judgement, or null if never judged. */
   digestStored: string | null;
-  /** `inputsDigest()` recomputed now, over the same frozen set, under that row's own recorded `min_takes`. */
+  /** `inputsDigest()` recomputed now, over the same frozen set, under that row's own recorded `min_takes` and stamped scheme. */
   digestRederived: string | null;
   /** The scheme the stored row was stamped with (`swarm_session_judgements.digest_scheme`), or null if never judged. */
   digestScheme: string | null;
@@ -417,18 +419,21 @@ export async function replaySessionJudge(
     // digest mismatch, which is a different fact than "this opinion can no
     // longer be re-derived from what produced it".
     const digestInput = await judgeInputFromFrozen(frozen, Number(judgement.min_takes));
-    digestRederived = inputsDigest(digestInput);
+    // THAT ROW'S OWN stamped scheme too (issue 1660): a `derivation-v1` row is
+    // recomputed under v1 and a `derivation-v2` row under v2, so a scheme bump
+    // never turns honest history into noise.
+    const known = digestScheme !== null && DIGEST_SCHEMES.includes(digestScheme);
+    digestRederived = known ? inputsDigest(digestInput, digestScheme!) : inputsDigest(digestInput);
     const matches = digestRederived === digestStored;
-    // THE DISCRIMINATOR (D44): a mismatch is a real finding only when the row
-    // claims to be stamped with the scheme this code implements right now.
-    // Any other stamped value (an older scheme, or one this deployment has
-    // never seen) means the row was written under a DIFFERENT canonical
-    // form, so failing to reproduce it under today's formula is expected —
-    // it is history, not a fault, and reported rather than failed exactly as
-    // D42's tie-break drift is (see the file header).
+    // THE DISCRIMINATOR (D44): a mismatch is a real finding whenever the row
+    // is stamped with a scheme this code can recompute. Any other stamped
+    // value (one this deployment has never seen, or none) means the row was
+    // written under a canonical form this code cannot rebuild, so failing to
+    // reproduce it is expected — history, not a fault, and reported rather
+    // than failed exactly as D42's tie-break drift is (see the file header).
     digestVerdict = matches
       ? "reproduced"
-      : digestScheme === DIGEST_SCHEME
+      : known
       ? "mismatch"
       : "historical_divergence";
   }
@@ -571,7 +576,7 @@ export function checkRationaleLadder(
       byStance,
       submitted,
       typeof rec.meanConfidence === "number" ? rec.meanConfidence : null,
-      (regimeSummary as { composite_percentile?: number } | null) ?? null,
+      (regimeSummary as RegimeTextSummary | null) ?? null,
     )
     : null;
 

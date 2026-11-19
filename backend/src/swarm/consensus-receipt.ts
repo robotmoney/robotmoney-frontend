@@ -114,7 +114,7 @@ const readAdoptedCandidates = registerQuery({
   callers: PUBLISH_CALLERS,
   probe: {
     statement:
-      "SELECT id, mode, source, prompt_hash, inputs_digest, opinion FROM swarm_session_judgements " +
+      "SELECT id, mode, source, prompt_hash, inputs_digest, digest_scheme, opinion FROM swarm_session_judgements " +
       "WHERE session_id = $1 AND mode = 'enforce' AND prompt_hash = $2 AND inputs_digest = $3 ORDER BY id DESC",
     params: [SESSION_ID_PROBE, "probe", "probe"],
   },
@@ -169,7 +169,7 @@ import { sql } from "../db/client.ts";
 import { on, registerQuery } from "../db/registry.ts";
 import { verifyDetachedSignature } from "../lib/signing.ts";
 import { bucketOrderForSession, frameworkAsOf, judgeInputFromFrozen, loadFrozenTakeSet, normalizedTakeWeights, takeRevision } from "./domain.ts";
-import { inputsDigest, type JudgeOpinion } from "./judge.ts";
+import { DIGEST_SCHEME, inputsDigest, type JudgeOpinion } from "./judge.ts";
 
 /** One contributing analyst, as the assembler needs them. */
 export interface ConsensusReceiptAnalystInput {
@@ -823,12 +823,13 @@ async function loadAssemblyInput(
     );
   }
   const candidates = (await on(sql, readAdoptedCandidates)`
-    SELECT id, mode, source, prompt_hash, inputs_digest, opinion
+    SELECT id, mode, source, prompt_hash, inputs_digest, digest_scheme, opinion
     FROM swarm_session_judgements
     WHERE session_id = ${sessionId} AND mode = 'enforce'
       AND prompt_hash = ${adopted.prompt_hash} AND inputs_digest = ${adopted.inputs_digest}
     ORDER BY id DESC`) as unknown as {
-      id: string | number; mode: string; source: string; prompt_hash: string; inputs_digest: string; opinion: JudgeOpinion;
+      id: string | number; mode: string; source: string; prompt_hash: string; inputs_digest: string;
+      digest_scheme: string | null; opinion: JudgeOpinion;
     }[];
   // The three fields applyOpinion() copies onto the session, and nothing else:
   // `judge`, `weights`, `quorum` and the rest of the recommendation are not
@@ -878,7 +879,9 @@ async function loadAssemblyInput(
   // stranger could not detect it: inputs_digest covers member_name and the
   // brief, neither of which the receipt carries.
   const rebuilt = await judgeInputFromFrozen(frozen, Number(judgement.opinion?.release_safety?.min_takes ?? 1));
-  const rebuiltDigest = inputsDigest(rebuilt);
+  // Under the scheme stamped on THAT row (issue 1660): a judgement written
+  // under `derivation-v1` is rebuilt under v1, not under today's rule.
+  const rebuiltDigest = inputsDigest(rebuilt, judgement.digest_scheme ?? DIGEST_SCHEME);
   if (rebuiltDigest !== String(judgement.inputs_digest)) {
     throw new ConsensusReceiptRefusal(
       "judgement_stale",
