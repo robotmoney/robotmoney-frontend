@@ -1254,6 +1254,10 @@ a[target="_blank"]:not(:has(img, svg, picture, div, p)):not([class*="btn"]):not(
 .a2-hero__lede, .sv__lede, .rv__hero-sub, .tok__lede,
 .md-hero__lede, .cl__lede, .sk__lede, .blog-idx__lede {
   color: #aeb6c6 !important;
+  /* The lede runs the full width of the hero column. Each page's inline <style>
+     capped it at 40-44rem, so it wrapped with empty space to its right.
+     !important because those inline styles are injected after this sheet. */
+  max-width: none !important;
 }
 
 /* ════════ Select (alpine/select.js) ════════
