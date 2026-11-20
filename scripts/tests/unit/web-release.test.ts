@@ -318,6 +318,7 @@ function harness(f: Fixture, state: Partial<State> = {}): Harness {
       if (argv[2] === "down") { if (s.stageDownFails) return { status: 1, stdout: "", stderr: "down failed" }; s.stageUp = false; return ok("down ok"); }
     }
     if (argv[0] === "rm" || argv[0] === "bash" || cmd === "bun install") return ok();
+    if (argv[0] === "env" && argv.includes("GIT_CONFIG_VALUE_0=40") && argv.includes("bash")) return ok();
     if (cmd === "git worktree") { if (argv[2] === "add") packing = argv.at(-1); return ok(); }
     if (argv[0] === "bun" && argv[1]!.endsWith("scripts/lib/web-bundle.ts")) {
       if (argv[2] === "pack") { pack(argv[4]!); return ok(); }
@@ -976,7 +977,7 @@ describe("W03 packs and signs the bundle on the control machine after the gate p
       ["rm", "-rf", `${dir}/tree`, `${dir}/site`],
       ["git", "worktree", "add", "--force", "--detach", `${dir}/tree`, rel.commit],
       ["bun", "install", "--frozen-lockfile", "--cwd", `${dir}/tree`],
-      ["bash", `${dir}/tree/scripts/static-assembly.sh`, `${dir}/site`],
+      ["env", "GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=core.abbrev", "GIT_CONFIG_VALUE_0=40", "bash", `${dir}/tree/scripts/static-assembly.sh`, `${dir}/site`],
       ["bun", `${dir}/tree/scripts/lib/web-bundle.ts`, "pack", `${dir}/site`, dir],
       ["bun", `${dir}/tree/scripts/lib/web-bundle.ts`, "sign", `${dir}/robotmoney-web-0.2.0-${rel.commit}.tar.gz`, "/k"],
       ["git", "worktree", "remove", "--force", `${dir}/tree`],

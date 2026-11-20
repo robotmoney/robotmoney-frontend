@@ -996,7 +996,9 @@ export function bundleCommands(inputs: Pick<Inputs, "workDir" | "signingKey">, r
     ["rm", "-rf", tree, site],
     ["git", "worktree", "add", "--force", "--detach", tree, rel.commit],
     ["bun", "install", "--frozen-lockfile", "--cwd", tree],
-    ["bash", join(tree, "scripts", "static-assembly.sh"), site],
+    // core.abbrev=40: version.json's commit is `git rev-parse --short HEAD` (scripts/web-client/version.ts), and the
+    // bundle's file name, which pack takes from version.json, must carry the full release commit (bundlePathOf).
+    ["env", "GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=core.abbrev", "GIT_CONFIG_VALUE_0=40", "bash", join(tree, "scripts", "static-assembly.sh"), site],
     ["bun", join(tree, "scripts", "lib", "web-bundle.ts"), "pack", site, dir],
     ["bun", join(tree, "scripts", "lib", "web-bundle.ts"), "sign", bundlePathOf(inputs, rel), inputs.signingKey],
     ["git", "worktree", "remove", "--force", tree],
