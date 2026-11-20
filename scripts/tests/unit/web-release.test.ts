@@ -519,7 +519,7 @@ describe("W01-preflight refuses before any push", () => {
     const h = harness(f);
     const r = await preflight(inputs(f, [f.m1, f.m2]), h.deps);
     expect(errorsOf(r)).toContain(`does not descend from the base ${f.c0.slice(0, 12)} (production's API commit)`);
-    expect(errorsOf(r)).toContain("Ship on a new line: bump A.B in frontend/package.json on main and name that commit too");
+    expect(errorsOf(r)).toContain("Ship on a new line: pass --version with a new A.B");
     expect(h.pushes).toEqual([]);
     expect(f.refs()).toBe(before);
   });
@@ -587,6 +587,19 @@ describe("W02-branch", () => {
     expect(bodies).toContain(`(cherry picked from commit ${f.m1})`);
     expect(bodies).toContain(`(cherry picked from commit ${f.m2})`);
     expect(h.out.join("\n")).toContain("FAILED at W03-gate");
+  });
+
+  test("--version sets frontend/package.json on the release branch, with no main commit for the bump (owner, 2026-11-20)", async () => {
+    const f = fixture();
+    const h = harness(f, { ci: { "web-client.yml": "failure" } });
+    expect(await runWebRelease(runbook, inputs(f, [f.m1], { version: "0.2.0" }), h.deps)).toBe(1);
+    expect(sh(f.bare, "log", "--format=%s", "v0.7.0..web/releases-0.2.x").split("\n")).toEqual(["chore(web): the web client is version 0.2.0", "feat(web): copy"]);
+    expect(JSON.parse(sh(f.bare, "show", "web/releases-0.2.x:frontend/package.json")).version).toBe("0.2.0");
+    expect(sh(f.bare, "diff", "--name-only", "web/releases-0.2.x~1", "web/releases-0.2.x")).toBe("frontend/package.json");
+    const tip = remoteRef(f, "refs/heads/web/releases-0.2.x")!;
+    const again = harness(f, { ci: { "web-client.yml": "running" } });
+    expect(await runWebRelease(runbook, inputs(f, [f.m1], { version: "0.2.0", dryRun: true }), again.deps)).toBe(0);
+    expect(again.out.join("\n")).toContain(`[W02-branch] already done: origin/web/releases-0.2.x is at ${tip}`);
   });
 
   test("refuses a named main commit that touches only backend/src/** before any push", async () => {

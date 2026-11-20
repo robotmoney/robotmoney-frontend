@@ -908,8 +908,9 @@ platform release builds. The steps run in order:
   message keeps the `(cherry picked from commit <sha>)` line and names the left-out paths. A
   conflict in a content or test path stops the run. A conflict in a left-out path is resolved to
   the base's content. The version is `--version`, else `frontend/package.json` at the last named
-  commit. It must be A.B.C, equal the version in the cherry-picked tree and be above every `web-v*`
-  tag. The eligibility base is the last `web-v*` tag below the version when it descends from the API
+  commit. It must be A.B.C and be above every `web-v*` tag. When the cherry-picked tree's
+  `frontend/package.json` names another version, the runner adds one commit on the branch that sets
+  it, and changes nothing else (owner, 2026-11-20). The version is never bumped on `main` first. The eligibility base is the last `web-v*` tag below the version when it descends from the API
   commit, else the API commit. The cherry-picked commit must descend from the base, and its tree
   must differ from the base and from the API commit only inside `WEB_CONTENT_PATHS` and test paths. A
   tag that W11 rolled back is refused (below). The operator must hold the admin permission on the
@@ -923,7 +924,7 @@ platform release builds. The steps run in order:
   fast-forward. A missing branch is created at the base: the commit production's API runs, or the
   last web tag on top of it, so content already shipped stays shipped. After a platform release
   moves production's API commit, the old branch no longer descends from it and W01 refuses it: the
-  next web release bumps A.B in `frontend/package.json` on `main` and names that commit too. No pull request, never a
+  next web release passes `--version` with a new A.B, so it ships on a new line. No pull request, never a
   force push.
 - **W03-gate.** The `web-client.yml` push run (job `web-client`) and an `e2e-web.yml`
   `workflow_dispatch` run (job `e2e-web`) on the branch at the commit conclude success. `web-client`
@@ -1013,10 +1014,15 @@ reports the steps already done and continues at the first one that is not. `--dr
 preflight and every step's read-only done check, and writes nothing to `origin`, GitHub or the host.
 
 **Branch.** A web content release ships from `web/releases-A.B.x`, where A.B comes from
-`frontend/package.json`'s own semver. `--version` does not override it: W01 requires the version in
-the cherry-picked tree to equal it, so a new version is a `frontend/package.json` bump merged to
-`main` and named with `--commit`. The `web/` prefix keeps it off the platform's `releases-*`
-glob. Changes reach it from `main` only, by the runner's cherry-picks. Feature PRs never target it.
+`frontend/package.json`'s own semver. A new version is `--version A.B.C`: the runner sets
+`frontend/package.json` to it in one commit on the release branch (owner, 2026-11-20: "this should not
+require a PR"). The `web/` prefix keeps it off the platform's `releases-*` glob. Content reaches it
+from `main` only, by the runner's cherry-picks. Feature PRs never target it.
+
+**Version backport.** After W12, the version line reaches `main` by one backport PR that changes only
+`frontend/package.json`'s `version` (§7). The production report lists it as a backport TODO until it
+merges. Until then `main` names an older version, which is harmless: the next release passes
+`--version` again.
 
 **Tag.** A release is the tag `web-vA.B.C`, only on a commit of `web/releases-A.B.x`. Its version
 equals `version` in `frontend/package.json` at that commit and is above every other `web-v*` tag.
