@@ -1,0 +1,86 @@
+<!-- One deposit or redemption request, /deposit/requests/:id (RM-146, under
+     RM-205; canvas board 7): where it stands, what happened, what happens
+     next. The link a person bookmarks and an agent returns to its owner. Same
+     stage words as the deposit page and the skill (lib/deposit/stages.js).
+     Open without an early access code: it is the link people bookmark.
+     Styles: assets/css/sections/deposit.css. Factory: depositRequestView()
+     (alpine/views/deposit-request.js). Never indexed (seo.js). -->
+
+<section class="dp" x-data="depositRequestView()">
+  <div class="dp__wrap dp__wrap--narrow">
+    <nav class="dp__lbl dp__crumbs" aria-label="Breadcrumb"><a href="/deposit">Deposit</a><span aria-hidden="true">/</span><a href="/deposit/requests">Your requests</a><span aria-hidden="true">/</span><span aria-current="page" x-text="`Request ${id}`"></span></nav>
+
+    <p class="dp__err" x-show="loadError" x-text="loadError" x-cloak></p>
+
+    <template x-if="loaded && !r && !loadError">
+      <div class="dp__stack">
+        <h1 class="dp__title dp__title--page">Request not found</h1>
+        <p class="dp__soft" x-show="simulated()">Simulated requests live in the browser that made them. Open this link there, or make a request on the <a href="/deposit">deposit page</a>.</p>
+        <p class="dp__soft" x-show="!simulated()">No request on the Robot Money queue has this number. Check the link, or find it under <a href="/deposit/requests">Your requests</a>.</p>
+      </div>
+    </template>
+
+    <template x-if="r">
+      <div class="dp__stack dp__stack--loose">
+        <div class="dp__stack">
+          <p class="dp__eyebrow"><span class="dp__lbl">Public status</span><template x-if="sample()"><span class="dp__tag">Sample data</span></template></p>
+          <h1 class="dp__title dp__title--page" x-text="title()"></h1>
+          <p class="dp__lede" x-text="summary()"></p>
+          <div class="dp__progress" aria-hidden="true"><i :style="`width:${pct()}%`"></i></div>
+        </div>
+
+        <div class="dp__facts dp__facts--grid">
+          <template x-for="f in facts()" :key="f.key">
+            <div class="dp__fact"><span class="dp__lbl" x-text="f.label"></span>
+              <template x-if="f.stage"><b class="dp__stage dp__stage--big" :class="`is-${tone()}`"><i aria-hidden="true"></i><span x-text="f.value"></span></b></template>
+              <template x-if="!f.stage"><b x-text="f.value"></b></template>
+            </div>
+          </template>
+        </div>
+
+        <section aria-labelledby="tl-h">
+          <h2 class="dp__h2" id="tl-h">Timeline</h2>
+          <ol class="dp__events">
+            <template x-for="e in events()" :key="e.key"><li :class="e.next ? 'is-next' : ''"><span class="dp__mono" x-text="e.when"></span><span><span x-text="e.what"></span><template x-if="e.sub"><span class="dp__sub" x-text="e.sub"></span></template></span></li></template>
+          </ol>
+        </section>
+
+        <section aria-labelledby="tx-h">
+          <h2 class="dp__h2" id="tx-h">Transactions</h2>
+          <div class="dp__txs">
+            <template x-if="!txs().length"><p class="dp__fine dp__txempty">Listed here once the vault's indexer is live. Until then, the owner's wallet history on Basescan has them.</p></template>
+            <template x-for="t in txs()" :key="t.key">
+              <div class="dp__tx"><span class="dp__mono dp__muted" x-text="t.short"></span><template x-if="t.url"><a class="dp__txt" :href="t.url" target="_blank" rel="noopener noreferrer">Basescan</a></template></div>
+            </template>
+          </div>
+        </section>
+
+        <!-- Cancel in place (board 17), only for the owner -->
+        <template x-if="asking">
+          <div class="dp__confirm" role="group" aria-label="Confirm cancel">
+            <p>Cancel the unfilled <span class="dp__mono" x-text="cancelAmount()"></span>? It comes back to your wallet.</p>
+            <span class="dp__confirmb">
+              <button type="button" class="dp__btn2 dp__btn2--sm" :disabled="busy" @click="cancel()" x-text="busy ? busyText : 'Cancel it'"></button>
+              <button type="button" class="dp__txt" :disabled="busy" @click="asking = false">Keep</button>
+            </span>
+          </div>
+        </template>
+
+        <div class="dp__btnrow dp__btnrow--wrap dp__btnrow--center">
+          <button type="button" class="dp__btn2" @click="copyLink()" x-text="copied ? 'Copied' : 'Copy link'"></button>
+          <template x-if="canCancel() && isOwner() && !asking"><button type="button" class="dp__txt" @click="asking = true">Cancel the request</button></template>
+          <template x-if="canWithdrawExpired() && isOwner()"><button type="button" class="btn-primary dp__btn dp__btn--auto" :disabled="busy" @click="withdrawExpired()" x-text="busy ? busyText : 'Withdraw what did not fill'"></button></template>
+          <template x-if="canGiveNotice() && isOwner()"><button type="button" class="btn-primary dp__btn dp__btn--auto" :disabled="busy" @click="giveNotice()" x-text="busy ? busyText : 'Ask for the unfilled shares back'"></button></template>
+          <template x-if="canTakeBack() && isOwner()"><button type="button" class="btn-primary dp__btn dp__btn--auto" :disabled="busy" @click="takeBack()" x-text="busy ? busyText : 'Take back the unfilled shares'"></button></template>
+          <template x-if="ownerAction() && !isOwner()"><span class="dp__fine">Only the owner's wallet can <span x-text="ownerAction()"></span>. <button type="button" class="dp__txt" @click="connect()">Connect</button></span></template>
+        </div>
+        <p class="dp__err" x-show="errText" x-text="errText" x-cloak></p>
+      </div>
+    </template>
+
+    <footer class="dp__foot">
+      <span>Robot Money is software that builds transactions your wallet signs. Nothing here is investment advice.</span>
+      <nav aria-label="Legal"><a href="/terms">Terms</a><a href="/privacy">Privacy</a><a href="/disclaimer">Disclaimer</a><a href="/smart-contract-risks">Smart contract risks</a></nav>
+    </footer>
+  </div>
+</section>
