@@ -10,7 +10,9 @@
 //     0.67) on every day whose bucket has held CONFIRM_READINGS (5) consecutive days, the engine's own confirmation rule.
 //     A label cut on the composite's rank would differ from the bucket on such days. Days before the first v4 run
 //     are frozen (D83) and keep the label they were published under, so they are not graded;
-//   - the served composite is on its own 0 to 1 scale.
+//   - the served composite is on its own 0 to 1 scale;
+//   - (PR 1709, issue 1708, D89) the newest served snapshot, stamped v4, has a composite equal to the 1/n mean of its
+//     macro, onchain and factor indices that are finite (factor included), within 1e-9.
 // The check waits (polls the ledger) for the first v4 run: stage runs analytics hourly (D87), production every 3 hours,
 // so the first v4 run is at most one slot after the boot. It gives up at --wait-minutes.
 import type { VersionCheck } from "../../version-check.ts";
@@ -64,6 +66,19 @@ export function labelProblems(history: readonly Point[], v4Start: string, cuts: 
   return { problems: out, graded };
 }
 
+export const INCLUDED_PANELS = ["macroIndex", "onchainIndex", "factorIndex"] as const;
+
+/** PURE. Why the latest snapshot's composite is not the 1/n mean of its included panels (D89); empty when it is. */
+export function compositeMeanProblems(latest: unknown): string[] {
+  const l = (latest ?? {}) as Record<string, unknown>;
+  if (l.version !== "v4") return [`the latest served snapshot is stamped ${String(l.version ?? "(none)")}, not v4`];
+  const xs = INCLUDED_PANELS.map((k) => l[k]).filter((v): v is number => typeof v === "number" && Number.isFinite(v));
+  if (typeof l.composite !== "number") return ["the latest served snapshot has no composite"];
+  if (!INCLUDED_PANELS.every((k) => typeof l[k] === "number")) return [`the latest served snapshot (${String(l.date)}) lacks a panel index: ${INCLUDED_PANELS.filter((k) => typeof l[k] !== "number").join(", ")}`];
+  const mean = xs.reduce((a, b) => a + b, 0) / xs.length;
+  return Math.abs(mean - l.composite) > 1e-9 ? [`${String(l.date)}: composite ${l.composite} is not the 1/n mean ${mean} of macro, onchain and factor`] : [];
+}
+
 export interface LedgerRead {
   /** The newest run's methodology label, or null when the ledger holds no run. */
   readonly newestLabel: string | null;
@@ -108,9 +123,11 @@ export default (async (ctx) => {
       const res = await ctx.http(`/api/dashboards/regime-snapshots?range=${MAX_RANGE}&rm-v0100-regime=${Date.now()}`);
       let cuts = { ...DEFAULT_CUTS };
       try {
-        cuts = cutsOf((JSON.parse(res.text) as { latest?: { bucketThresholds?: unknown } }).latest?.bucketThresholds);
+        const latest = (JSON.parse(res.text) as { latest?: { bucketThresholds?: unknown } }).latest;
+        cuts = cutsOf(latest?.bucketThresholds);
+        problems.push(...compositeMeanProblems(latest));
       } catch {
-        // the defaults stand
+        problems.push("the regime snapshot answer is not JSON");
       }
       const r = labelProblems([...served.history].sort((a, b) => (a.date < b.date ? -1 : 1)), ledger.v4Start, cuts);
       graded = r.graded;
