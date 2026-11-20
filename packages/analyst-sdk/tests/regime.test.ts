@@ -274,11 +274,11 @@ describe("two stored streams for one source id stay separate", async () => {
   });
 });
 
-// Issue 1652 (methodology v5): the regime label is cut on the composite itself
+// Issue 1652 (methodology v4): the regime label is cut on the composite itself
 // and each panel label on its panel index, never on a second rolling rank of
 // it. The 5-day confirmation and the 2σ fast switch act on that same series.
 // A run under v3 keeps the rank-then-cut path, so a v3 run replays exactly.
-describe("v5: labels are cut on the composite and the panel indices (issue 1652)", async () => {
+describe("v4: labels are cut on the composite and the panel indices (issue 1652)", async () => {
   const { bucketFn, smoothRegimes, regimeLabels } = await import("../src/analyze/compute.ts");
   const { rollingPercentileRank } = await import("../src/transform/math.ts");
   const { ROLLING_WINDOW_DAYS } = await import("../src/analyze/indicators.ts");
@@ -286,10 +286,10 @@ describe("v5: labels are cut on the composite and the panel indices (issue 1652)
   const run = runRegime(toHistory(parseRawHistory(csvText)));
   const v3 = runRegime(toHistory(parseRawHistory(csvText)), { version: "v3" });
 
-  test("the current version is v5, and the report and run carry the version they computed", () => {
-    expect(CURRENT_REGIME_VERSION).toBe("v5");
-    expect(run.version).toBe("v5");
-    expect(reportObject.version).toBe("v5");
+  test("the current version is v4, and the report and run carry the version they computed", () => {
+    expect(CURRENT_REGIME_VERSION).toBe("v4");
+    expect(run.version).toBe("v4");
+    expect(reportObject.version).toBe("v4");
     expect(v3.version).toBe("v3");
     expect(buildReport(v3).version).toBe("v3");
   });
@@ -319,7 +319,7 @@ describe("v5: labels are cut on the composite and the panel indices (issue 1652)
       expect(run.result.panelRegimes[p]).toEqual(smoothRegimes(run.result.panelIndices[p]!, bucketFn));
     }
     expect(run.result.macroRegime).toEqual(smoothRegimes(run.result.macroIndex!, bucketFn));
-    // Non-vacuity: the fixture's last macro index 0.662 ranks 0.897; v3 reads risk-on, v5 neutral.
+    // Non-vacuity: the fixture's last macro index 0.662 ranks 0.897; v3 reads risk-on, v4 neutral.
     const last = run.dateAxis.length - 1;
     expect(run.result.panelRegimes.macro![last]).toBe("neutral");
     expect(v3.result.panelRegimes.macro![last]).toBe("risk_on");
@@ -354,7 +354,7 @@ describe("v5: labels are cut on the composite and the panel indices (issue 1652)
   });
 
   test("an unknown version is rejected", () => {
-    expect(() => runRegime(toHistory(parseRawHistory(csvText)), { version: "v4" as never })).toThrow(RangeError);
+    expect(() => runRegime(toHistory(parseRawHistory(csvText)), { version: "v5" as never })).toThrow(RangeError);
   });
 });
 
@@ -369,7 +369,7 @@ describe("lookback windows are methodology parameters (issue 1659)", async () =>
   const { BACKFILL_START } = await import("../src/run.ts");
   const { resolveInputHistory } = await import("../src/series-ids.ts");
   const { ratiosFromLegs } = await import("../src/transform/ratios.ts");
-  type Lookback = (typeof REGIME_LOOKBACK)["v5"];
+  type Lookback = (typeof REGIME_LOOKBACK)["v4"];
   type Window = Lookback["rank"];
 
   // The fixture's regime inputs, built the way runRegime builds them.
@@ -382,7 +382,7 @@ describe("lookback windows are methodology parameters (issue 1659)", async () =>
   const T1095: Window = { kind: "trailing", days: 1095 };
   const INCEPTION: Window = { kind: "inception" };
   const lb = (rank: Window, weight: Window, percentile: Window): Lookback => ({ rank, weight, percentile });
-  const run = (lookback?: Lookback, version: "v3" | "v5" = "v5") =>
+  const run = (lookback?: Lookback, version: "v3" | "v4" = "v4") =>
     computeRegime(transformed, dateAxis, PANELS, undefined, undefined, version, lookback);
 
   const base = run();
@@ -411,21 +411,21 @@ describe("lookback windows are methodology parameters (issue 1659)", async () =>
     return out;
   };
 
-  test("REGIME_LOOKBACK declares every version; v3 and v5 are the trailing 1095 days for every window", () => {
+  test("REGIME_LOOKBACK declares every version; v3 and v4 are the trailing 1095 days for every window", () => {
     expect(Object.keys(REGIME_LOOKBACK).sort()).toEqual([...REGIME_VERSIONS].sort());
-    for (const v of ["v3", "v5"] as const) {
+    for (const v of ["v3", "v4"] as const) {
       expect(REGIME_LOOKBACK[v]).toEqual({ rank: T1095, weight: T1095, percentile: T1095 });
     }
   });
 
-  test("the version stays v5 and the versions stay [v3, v5]", () => {
-    expect(CURRENT_REGIME_VERSION).toBe("v5");
-    expect([...REGIME_VERSIONS]).toEqual(["v3", "v5"]);
+  test("the version stays v4 and the versions stay [v3, v4]", () => {
+    expect(CURRENT_REGIME_VERSION).toBe("v4");
+    expect([...REGIME_VERSIONS]).toEqual(["v3", "v4"]);
   });
 
   test("no lookback argument equals the version's declared lookback, field by field", () => {
-    for (const v of ["v3", "v5"] as const) {
-      const a = v === "v5" ? base : run(undefined, "v3");
+    for (const v of ["v3", "v4"] as const) {
+      const a = v === "v4" ? base : run(undefined, "v3");
       const b = run(REGIME_LOOKBACK[v], v);
       sameRecord(a.ranks, b.ranks);
       sameRecord(a.signed, b.signed);
@@ -483,7 +483,7 @@ describe("lookback windows are methodology parameters (issue 1659)", async () =>
     for (let d = 1095 + ((21 - (1095 % 21)) % 21); d < n; d += 21) {
       const cut: Record<string, number[]> = {};
       for (const id in transformed) cut[id] = transformed[id]!.slice(0, d + 1);
-      const r = computeRegime(cut, dateAxis.slice(0, d + 1), PANELS, undefined, undefined, "v5", lb(INCEPTION, INCEPTION, INCEPTION));
+      const r = computeRegime(cut, dateAxis.slice(0, d + 1), PANELS, undefined, undefined, "v4", lb(INCEPTION, INCEPTION, INCEPTION));
       for (const ind of INDICATORS) expect(Object.is(r.ranks[ind.id]![d], allInc.ranks[ind.id]![d])).toBe(true);
       for (const p of PANELS) expect(Object.is(r.panelIndices[p]![d], allInc.panelIndices[p]![d])).toBe(true);
       expect(Object.is(r.composite[d], allInc.composite[d])).toBe(true);
@@ -504,7 +504,7 @@ describe("lookback windows are methodology parameters (issue 1659)", async () =>
     const late = INDICATORS.find((i) => i.panel === "macro")!;
     data[late.id] = data[late.id]!.map((v, i) => (i < k ? NaN : v));
     const inc = lb(INCEPTION, INCEPTION, INCEPTION);
-    const full = computeRegime(data, axis, PANELS, undefined, undefined, "v5", inc);
+    const full = computeRegime(data, axis, PANELS, undefined, undefined, "v4", inc);
     const own = rollingPercentileRank(data[late.id]!.slice(k), Infinity);
     for (let i = 0; i < N; i++) {
       const r = full.ranks[late.id]![i]!;
@@ -516,7 +516,7 @@ describe("lookback windows are methodology parameters (issue 1659)", async () =>
     for (let r = 0; r < N; r += 21) {
       const cut: Record<string, number[]> = {};
       for (const id in data) cut[id] = data[id]!.slice(0, r + 1);
-      const w = computeRegime(cut, axis.slice(0, r + 1), PANELS, undefined, undefined, "v5", inc).weightsByPanel.macro![late.id]!;
+      const w = computeRegime(cut, axis.slice(0, r + 1), PANELS, undefined, undefined, "v4", inc).weightsByPanel.macro![late.id]!;
       const finite = full.signed[late.id]!.slice(0, r + 1).filter(Number.isFinite).length;
       if (finite < 60) expect(w).toBe(0);
       else if (firstFull < 0) {
@@ -531,7 +531,7 @@ describe("lookback windows are methodology parameters (issue 1659)", async () =>
     const tiny = { dateAxis: dateAxis.slice(0, 40), data: {} as Record<string, number[]> };
     for (const id in transformed) tiny.data[id] = transformed[id]!.slice(0, 40);
     const call = (l: unknown) => () =>
-      computeRegime(tiny.data, tiny.dateAxis, PANELS, undefined, undefined, "v5", l as Lookback);
+      computeRegime(tiny.data, tiny.dateAxis, PANELS, undefined, undefined, "v4", l as Lookback);
     expect(call({ rank: T1095, weight: T1095 })).toThrow(/percentile/);
     expect(call({ rank: T1095, weight: T1095 })).toThrow(RangeError);
     expect(call({ rank: { kind: "rolling", days: 10 }, weight: T1095, percentile: T1095 })).toThrow(/rank/);

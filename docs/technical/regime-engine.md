@@ -111,7 +111,7 @@ a gap.
 
 The rolling percentile rank below is applied once, to each indicator. The panel
 indices and the composite built from the ranks are not ranked again before the
-labels are cut (§5, methodology `v5`).
+labels are cut (§5, methodology `v4`).
 
 **Lookback windows are methodology parameters (issue 1659).** The engine has
 three lookback windows: the indicator **rank** window (step 1), the panel
@@ -127,7 +127,7 @@ takes one of two value forms:
   with no cap. A rank counts only finite values, so an indicator ranks against
   its own observations only.
 
-`v3` and `v5` both declare the trailing 1095 days (`ROLLING_WINDOW_DAYS`) for
+`v3` and `v4` both declare the trailing 1095 days (`ROLLING_WINDOW_DAYS`) for
 all three windows, so the figures below read "1095-day" for both. Either value
 form is point in time: every figure for day *i* reads only data dated on or
 before day *i*. `computeRegime` throws `RangeError` naming the window for a
@@ -180,7 +180,7 @@ a published number ships with a new methodology version.
   (`analyze/compute.ts`): `< 0.33 → risk_off`, `> 0.67 → risk_on` (strict,
   exclusive upper), else `neutral`. `NaN → null`. The composite is already a
   normalized 0..1 number (a mean of weighted means of percentile ranks), so it
-  is not ranked a second time before the cut (methodology `v5`,
+  is not ranked a second time before the cut (methodology `v4`,
   [D84](../decisions.md#d84), issue 1652). Each panel label (macro, on-chain,
   factor) is cut the same way on its own panel index. The composite's
   `rollingPercentileRank` over the percentile lookback window (§4; declared:
@@ -356,7 +356,7 @@ flowchart TD
     K --> L["weights: inverseCorrelationWeights +\ncapWeights (0.25 cap, 21d refresh)\ntransform/math.ts"]
     L --> N["panel index: weightedMeanOnDay\nanalyze/compute.ts::weightedMeanOnDay"]
     N --> O["composite: mean of panel indices\nanalyze/compute.ts::computeRegime"]
-    O --> P["bucket: bucketFn(composite) (0.33/0.67, v5)\nanalyze/compute.ts::regimeLabels"]
+    O --> P["bucket: bucketFn(composite) (0.33/0.67, v4)\nanalyze/compute.ts::regimeLabels"]
     P --> Q["smooth: smoothRegimes\n(5d confirm OR 2σ fast-track)\nanalyze/compute.ts::smoothRegimes"]
     Q --> R["store: saveRegimeSnapshots\nstore/regime-store.ts"]
     R --> S["report: fetchRegimeSnapshots\nreport/projections.ts"]
@@ -525,7 +525,7 @@ recomputation for every day.
 history carries one methodology version. Only the artifacts whose run carries the
 methodology version of the newest regime artifact publish, so the ledger start is the
 as-of day of that version's first artifact, and the days before it are served from
-that artifact. A new version (`v5`) therefore restates the served history once, from
+that artifact. A new version (`v4`) therefore restates the served history once, from
 its first run, and the chart has one scale. A version change is the one event that
 moves a past day's served figure.
 
@@ -1381,7 +1381,7 @@ computed-but-unpublished candidate alongside the published row is therefore a
 schema change and not merely a code change — an unavoidable cost of the model —
 and retaining a *superseded* version is a further one, which is PD12.
 
-#### 11.8.3 This reverses v3's stated semantics, and should be v4
+#### 11.8.3 This reverses v3's stated semantics, and takes a new methodology tag
 
 Today `version` is a **methodology tag**: which algorithm produced the row. It is
 not a publication vintage. `regime-versions.ts` said so directly when this section
@@ -1413,23 +1413,25 @@ does not contain v0.)*
 So the decided model returns to freezing, and adds an explicit publish gate v0
 did not have. Because that changes **what a published number means** — from "the
 current best recomputation" to "the figure published as version N" — it is a
-methodology-level change and should be tagged **v4**.
+methodology-level change and takes a new methodology tag: the next unused one when it
+is built ([D88](../decisions.md#d88)).
 
 **Recommendation: record it as a `docs/decisions.md` entry, not only here.** A
 change to the meaning of a published figure is exactly the class of thing
 `decisions.md` exists for, and the negative example is already in this document:
 "Open Question 9" is load-bearing and has no canonical record anywhere (PD3),
 which is why reversing it is awkward. Do not create a second instance of that
-problem. The entry should state the model of §11.8.1, tag the methodology `v4`, and
+problem. The entry should state the model of §11.8.1, give the methodology its new tag, and
 name the `regime-versions.ts` comment it displaces — which, as with PD3, **must
-be edited in the same diff**, or the repo ships a `v4` whose own version file
+be edited in the same diff**, or the repo ships a new tag whose own version file
 still says there is no frozen lockout.
 
-**`v4` stays reserved for this model.** The label-cut change of issue 1652 (the
+**No tag is reserved for this model.** The label-cut change of issue 1652 (the
 regime label cut on the composite, not on a second rolling rank of it) is a
-methodology change of its own. It is tagged **`v5`** ([D84](../decisions.md#d84)) so
-that `v4` keeps meaning the frozen, versioned publication model of this section and
-PD10.
+methodology change of its own. It is tagged **`v4`** ([D84](../decisions.md#d84),
+[D88](../decisions.md#d88)). It was tagged `v5` before D88, which dropped the
+reservation so tags stay consecutive. This model takes the next unused tag when it
+is built.
 
 #### 11.8.4 Noop-as-audit is a first-class verification instrument
 
@@ -1507,7 +1509,7 @@ one table; the detail follows.
 | PD7 | SP500 in the backfill? | OPEN | Skip, do not approximate |
 | PD8 | Fill the two seed-omission days? | OPEN | Leave them |
 | PD9 | Who builds the remediation dispatcher? | OPEN | The Class A reconciler |
-| PD10 | Restate, or freeze, published reports? | DECIDED | Frozen, versioned, publish-gated; ratify as `v4` |
+| PD10 | Restate, or freeze, published reports? | DECIDED | Frozen, versioned, publish-gated; ratify under the next unused tag (D88) |
 | PD11 | Version granularity | OPEN | Whole snapshot series |
 | PD12 | Retain and serve superseded versions? | OPEN | Retain unbounded |
 | PD13 | Candidate recompute: scheduled, or on demand? | OPEN | Scheduled, never auto-publishing |
@@ -1979,12 +1981,12 @@ the revision log is a prerequisite of quarantine itself, independent of
 publication — [markets §4.3] and §11.5 both state it must not be deferred.
 
 **Remaining recommendation, since the decision itself is settled: ratify it as a
-`docs/decisions.md` entry tagged v4.** Today `version` is a *methodology* tag and
+`docs/decisions.md` entry under the next unused methodology tag (D88).** Today `version` is a *methodology* tag and
 v3 explicitly disclaims freezing (`regime-versions.ts:1-7`), so this changes what
 a published number means and is not a mere workflow addition. Recording it only
 in this document would recreate the PD3 problem — a load-bearing position with no
 canonical record — and the entry must edit the `regime-versions.ts` comment in
-the same diff, or the repo ships a `v4` whose own version file still says there
+the same diff, or the repo ships a new tag whose own version file still says there
 is no frozen lockout. Reasoning and evidence: §11.8.3.
 
 **Adjustments this decision makes elsewhere in this register.** It strengthens

@@ -203,12 +203,13 @@ C01-backup captures production's backup new, from the read replica, as the cutov
 C03-restore-proof restores it into a throwaway container and records the restore time, before the
 first irreversible step (C05-migrate).
 
-**Stage's starting dump (owner, 2026-10-08; issue 1564; SR.0).** Step Q02-dump always captures a
-new dump (`bun smoke:capture --out <new directory>`, read-only against production's replica as
-`rm_readonly`, as C01-backup does). It never reuses a dump already on the capture host, whatever
-its age: reuse was for rapid hand turnaround only, and v0.7.1 QA's Q13-log-baseline failed on
-reused dumps 8 to 31 hours old. Step Q03-stage-up restores the newest dump, which is the one Q02
-just captured. `up` still refuses a dump older than 24 hours (`manifest.json` `capturedAt`), so an
+**Stage's starting dump (owner, 2026-10-08; issue 1564; SR.0).** Step Q02-dump reuses the newest dump
+on the capture host that is at most 24 hours old (`manifest.json` `capturedAt`), and logs the dump
+and its age. A dump with no readable or a future `capturedAt` is never reused. With none, it
+captures a new dump (`bun smoke:capture --out <new directory>`, read-only against production's
+replica as `rm_readonly`, as C01-backup does). Q13-log-baseline measures session liveness from the
+later of the last published session and the stack's start, so a reused dump grades like a fresh one
+(owner, 2026-11-19; issue 1701). Step Q03-stage-up restores the newest dump, which is the one Q02 used. `up` still refuses a dump older than 24 hours (`manifest.json` `capturedAt`), so an
 operator-named dump must be fresh too. Never point rehearsal preparation at the production database.
 
 ### 4.4. Stage QA
@@ -707,7 +708,7 @@ recorded owner decision.
 | ID | Check | Steps |
 |---|---|---|
 | SP.1 | Position: which release, which commit, which phase; clean checkouts | Q06-checkout to Q11-capture-install, P01-checkout to P06-capture-install |
-| SP.2 | Backup taken and restore proven, with the restore time | Q14-backup to Q16-restore-proof, C01-backup to C03-restore-proof |
+| SP.2 | Backup taken and restore proven, with the restore time (on stage Q14 hard-links the dump Q02 used, no second capture; production C01 captures fresh) | Q14-backup to Q16-restore-proof, C01-backup to C03-restore-proof |
 | SP.3 | The ledger reconciles with `backend/migrations` and the running tag's bytes (D67) | Q12-state-baseline, P07-state-baseline |
 | SP.4 | Smoke preflight: role auth, privileges, manifest, compat, `~/.env` keys, identity | Q22-rolling-boot, C10-rolling-boot |
 | SP.5 | Log baseline, triaged before the cutover | Q13-log-baseline, P08-log-baseline |
@@ -715,7 +716,7 @@ recorded owner decision.
 | SP.7 | CI green on the commit, or on the stage commit with the same tree (§4.2) | preflight `P.ci` |
 | SP.8 | Production runs only what stage passed: same step-list hash, same tree, every step ok, skipped or accepted, every earlier stage commit check-only apart (§4.6). An accepted stage step carries to production with its reason and issue, and is reported (§4.2); its production twin still runs on its own | preflight `P.stage` |
 | SP.9 | The commit carries a freshly resolved lockfile | Q01-lockfile |
-| SR.0 | Stage's starting dump freshly captured by Q02; `up` refuses one over 24 hours old | Q02-dump, Q03-stage-up |
+| SR.0 | Stage's starting dump reused or captured by Q02; `up` refuses one over 24 hours old | Q02-dump, Q03-stage-up |
 | SR.1 | Stage's role passwords set through its own database, as `role-passwords` sets production's | Q04-role-passwords |
 | SR.2 | Every PR the release ships is in its scope, with a check or a reason | Q05-scope |
 | SC.1 | Recovery decided before the cutover | the release YAML's `recovery:`, preflight `P.recovery` |

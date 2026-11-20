@@ -49,7 +49,7 @@ import { fileURLToPath } from "node:url";
 import { SMOKE_SUBJECTS } from "./lib/smoke-mode.ts";
 import { classify, inventory, inventoryVerdict, renderInventory, validateRules, type ClassifiedGroup, type InventoryMode } from "./lib/gate/log-inventory.ts";
 import { containerLogs, dbQuery, projectContainers, sh, type ContainerState } from "./lib/gate/io.ts";
-import { DEFAULT_STUCK_AFTER_MIN, evaluateContainers, evaluateJudgeConfig, evaluateParticipants, evaluateSessions, logWindowStart, type CheckRecord, type SessionRow } from "./lib/gate/grade.ts";
+import { DEFAULT_STUCK_AFTER_MIN, evaluateContainers, evaluateJudgeConfig, evaluateParticipants, evaluateSessions, logWindowStart, stackStartMs, type CheckRecord, type SessionRow } from "./lib/gate/grade.ts";
 import { resolveGateStack } from "./lib/gate/stack.ts";
 import { CLASSIFICATIONS_PATH, JUDGED_COLUMN_SQL, toSessionRow } from "./twin-gate.ts";
 
@@ -275,7 +275,7 @@ async function main(): Promise<number> {
     add("sessions", "Every subject published a judged, attended session in the window, and sessions have not stopped", v.failures.length ? "FAIL" : v.warnings.length ? "WARN" : "PASS",
       [...v.failures, ...v.warnings, `${rows.filter((r) => r.state === "published").length} session(s) published in the window`, [...v.goodBySubject].map(([s, n]) => `${s}: ${n} good`).join("; "), `active analysts ${active}`]);
   } else {
-    const v = evaluateSessions(rows, subjects, active, { ...args, minSessions: 0, nowMs: Date.parse(now) });
+    const v = evaluateSessions(rows, subjects, active, { ...args, minSessions: 0, nowMs: Date.parse(now), livenessSinceMs: stackStartMs(containers) });
     add("sessions", `No session is open more than ${args.stuckAfterMin} min past its own deadline, and none published unjudged`, v.failures.length ? "FAIL" : "PASS",
       [...v.failures, `${rows.length} session(s) in or open during the window`]);
   }

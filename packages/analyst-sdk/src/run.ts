@@ -87,7 +87,7 @@ export interface RunOptions {
   factor?: boolean;
   // The methodology version to compute (issue 1652). Default
   // CURRENT_REGIME_VERSION. A published run replays under the version it was
-  // stamped with: "v3" cuts the labels on the rolling percentile, "v5" on the
+  // stamped with: "v3" cuts the labels on the rolling percentile, "v4" on the
   // composite and panel indices.
   version?: RegimeVersion;
   // The scoring registry (issue 1653). Default INDICATORS. A list holding a

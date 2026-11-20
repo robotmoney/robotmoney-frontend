@@ -654,20 +654,15 @@ describe("the templates follow the owner's stage rules (issue 1684)", () => {
     return out;
   });
 
-  test("Q02-dump says it captures a fresh dump, in both templates and in stage-target.ts; the old text stays for earlier releases", () => {
+  test("Q02-dump reuses a dump at most 24 hours old, in both templates and in stage-target.ts (issue 1701); no command changes", () => {
     for (const t of [template, web]) {
       const q02 = step(t, "Q02-dump");
-      expect(q02.description).toContain("fresh");
-      expect(q02.description).not.toContain("24 hours old");
-      expect(q02.changedSince).toBe(VF);
-      expect(q02.before?.description).toContain("24 hours old");
-      // No command, host or flag of Q02-dump changes.
-      expect(q02.before?.cmds).toEqual(q02.cmds);
+      expect(q02.description).toContain("at most 24 hours old");
+      expect(q02.changedSince).toBeUndefined();
       expect(q02.cmds).toEqual([["bun", "scripts/release/stage-target.ts", "dump"]]);
     }
     const line5 = readFileSync(join(repoRoot, "scripts", "release", "stage-target.ts"), "utf8").split("\n")[4]!;
-    expect(line5).toContain("fresh dump");
-    expect(line5).not.toContain("24 h");
+    expect(line5).toContain("at most 24 h");
     for (const release of ["v0.6.2", "v0.7.0"]) expect(() => loadReleaseRunbook(release), release).not.toThrow();
   });
 
@@ -705,7 +700,7 @@ describe("the templates follow the owner's stage rules (issue 1684)", () => {
     expect(checkAddOnly(template, runbook(asRanBeforeVF("v0.9.1"), "v0.9.1"))).toEqual([]);
     expect(checkAddOnly(template, runbook(boundBy("v0.9.1"), "v0.9.1"))).toEqual([]);
     const old = checkAddOnly(template, runbook(asRanBeforeVF(VF), VF)).join("\n");
-    for (const id of ["Q02-dump", "Q28-log-verdict", "Q34a-analytics-load", "Q35-archive-routes", "Q37a-db-stats", "C16-log-verdict", "C25a-db-stats"]) expect(old).toContain(`${id} differs from the template's step`);
+    for (const id of ["Q28-log-verdict", "Q34a-analytics-load", "Q35-archive-routes", "Q37a-db-stats", "C16-log-verdict", "C25a-db-stats"]) expect(old).toContain(`${id} differs from the template's step`);
     expect(checkAddOnly(template, runbook(boundBy(VF), VF))).toEqual([]);
     for (const release of ["v0.6.2", "v0.7.0"]) expect(checkAddOnly(template, loadReleaseRunbook(release)), release).toEqual([]);
   });

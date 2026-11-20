@@ -169,7 +169,7 @@ function boundedTelemetrySummary(raw: Record<string, unknown>): Record<string, u
 //
 // METHODOLOGY (issue 1652): `regimeVersion` is the regime methodology the run
 // computes and stamps (methodology label, every row's `version`). Production
-// never passes it, so a run is CURRENT_REGIME_VERSION (v5). A replay of a run
+// never passes it, so a run is CURRENT_REGIME_VERSION (v4). A replay of a run
 // stamped with an earlier version passes that version (v3) and computes it
 // exactly as published.
 export async function runAnalytics(

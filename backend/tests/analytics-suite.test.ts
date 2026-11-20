@@ -87,7 +87,7 @@ test(
     await fixtureDb`DELETE FROM research_signals WHERE date = ${ASOF}`;
 
     // The ground truth (regime-history.csv, regime-snapshot.json) is methodology
-    // v3; issue 1652 made v5 current, so this run replays v3. The v5 stamp of a
+    // v3; issue 1652 made v4 current, so this run replays v3. The v4 stamp of a
     // default run is covered by tests/api/regime-snapshots.test.ts.
     const results = await runAnalytics(ASOF, undefined, await fixtureSource(), directAnalyticsPersistence, undefined, undefined, "v3");
     expect(Object.keys(results).sort()).toEqual(["channel-divergence", "late-cycle-signals", "regime"]);

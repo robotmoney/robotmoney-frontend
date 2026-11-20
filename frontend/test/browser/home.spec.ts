@@ -57,16 +57,19 @@ const CATEGORICAL_RGB = [
 const SESSION_ID = "8f0d6c21-4a5e-4a1c-9f2b-7c1de2a44b10";
 
 // A year and a bit of the regime, on a slow wave that stays between the cuts,
-// ending ten days below 0.33 with the composite at 0.31.
+// ending ten days below 0.33 with the composite at 0.31. The label is cut on
+// the composite, as the API cuts it since methodology v4; the percentile rides
+// along as information only, and here would call the wave risk-on and risk-off.
 function regimeSnapshots(days = 400) {
   const end = Date.parse("2026-11-09T00:00:00Z");
   const history = Array.from({ length: days }, (_, i) => {
     const compositePercentile = i >= days - 10 ? 0.03 : 0.5 + 0.35 * Math.sin(i / 30);
+    const composite = 0.3 + compositePercentile * 0.4;
     return {
       date: new Date(end - (days - 1 - i) * 86_400_000).toISOString().slice(0, 10),
-      composite: 0.3 + compositePercentile * 0.4,
+      composite,
       compositePercentile,
-      regime: compositePercentile < 0.33 ? "risk_off" : compositePercentile > 0.67 ? "risk_on" : "neutral",
+      regime: composite < 0.33 ? "risk_off" : composite > 0.67 ? "risk_on" : "neutral",
     };
   });
   return { latest: { ...history[days - 1], bucketThresholds: { risk_off: 0.33, risk_on: 0.67 } }, history };

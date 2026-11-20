@@ -2,7 +2,7 @@
 // The stage target: a production-shaped target on stage-2 for unmodified
 // rehearsals (D61 rule 2, docs/runbooks/stage-target.md).
 //
-//   bun scripts/release/stage-target.ts dump      (Q02-dump: capture a fresh dump from production's read replica)
+//   bun scripts/release/stage-target.ts dump      (Q02-dump: reuse the newest dump at most 24 h old, else capture one from production's read replica)
 //   bun scripts/release/stage-target.ts up --dump <dir on stage-2 | newest> [--replace] [--connection-limits <max>/<su>/<reserved>]
 //   bun scripts/release/stage-target.ts status
 //   bun scripts/release/stage-target.ts down
@@ -556,17 +556,24 @@ function listDumps(): { dir: string; capturedAt?: string }[] {
 }
 
 /**
- * Q02-dump (SR.0, issue 1564): always a new capture from production's read replica
- * by the capture checkout (the same `bun smoke:capture` C01-backup runs). It never
- * reuses a dump already on this host, whatever its age (`dumpPlan`).
+ * Q02-dump (SR.0): reuses the newest dump on this host that is at most 24 h old
+ * (`dumpPlan`), else captures a new one from production's read replica with the
+ * capture checkout's `bun smoke:capture` (the same C01-backup runs).
  */
 async function remoteDump(): Promise<number> {
-  const plan = dumpPlan(listDumps(), new Date());
+  const now = new Date();
+  const dumps = listDumps();
+  const plan = dumpPlan(dumps, now);
+  if (plan.action === "reuse") {
+    const at = dumps.find((d) => d.dir === plan.dir)?.capturedAt;
+    log(`reuse: ${plan.dir}, capturedAt ${at}, ${dumpAgeHours({ capturedAt: at }, now)?.toFixed(1)} h old (at most ${T.maxDumpAgeHours} h); nothing captured`);
+    return 0;
+  }
   const checkout = CAPTURE_CHECKOUT.checkout;
   if (!existsSync(join(checkout, ".git"))) throw new Refusal(`the capture checkout ${checkout} is absent: clone it, then run this again`);
-  const stamp = new Date().toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z");
+  const stamp = now.toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z");
   const out = join(process.env.HOME ?? "", `rm-backup-prod-${stamp}`);
-  log(`${plan}: ${out} from production's read replica (Q02 never reuses a dump)`);
+  log(`capture: ${out} from production's read replica (no dump on this host is at most ${T.maxDumpAgeHours} h old)`);
   await stream(["bun", "run", "smoke:capture", "--out", out], "smoke:capture", { cwd: checkout, env: { RM_ENV: "stage" } });
   return 0;
 }

@@ -6574,7 +6574,7 @@ its amendments stand.
 
 <a id="d84"></a>
 
-## D84 — Regime methodology `v5`: the label is cut on the composite, not on a second ranking of it (amends D83; issue 1652 decisions, 2026-11-17)
+## D84 — Regime methodology `v4`: the label is cut on the composite, not on a second ranking of it (amends D83; issue 1652 decisions, 2026-11-17; tag amended by D88)
 
 **Status:** Accepted 2026-11-17 (the Decisions of issue 1652, from the 17 Nov sync). Built by issue 1652. `packages/analyst-sdk/src/analyze/compute.ts` (`computeRegime`, `regimeLabels`), `packages/analyst-sdk/src/analyze/regime-versions.ts`, `packages/analyst-sdk/src/run.ts` (`runRegime`'s `version`), `packages/analyst-sdk/src/allocate/signals.ts`, `backend/src/analytics/index.ts` (`runAnalytics`'s `regimeVersion`), `backend/src/analytics/cutover/ledger-current.ts` (one method served). Methodology in [`docs/technical/regime-engine.md` §5](technical/regime-engine.md#5-panel--composite--bucketing--smoothing).
 
@@ -6583,15 +6583,15 @@ its amendments stand.
 1. **The cut.** The regime label is `bucketFn` applied to the composite itself (0.33 / 0.67). Each panel label (macro, on-chain, factor) is cut on its own panel index. The composite and the panel indices are not ranked a second time before the cut.
 2. **Smoothing.** The 5-day confirmation and the 2σ fast switch of `smoothRegimes` act on the series the label is cut on: the composite for the regime label, the panel index for a panel label.
 3. **Readers of the label.** The backtest strategies read that label. The model portfolio's `composite` signal reads the composite and a panel signal its panel index. `compositePercentile` and the panel percentiles stay in the SDK output and the dashboards DTO as information only.
-4. **The version tag.** The change is methodology `v5` (`CURRENT_REGIME_VERSION`). `v4` stays reserved for the frozen, versioned publication model (`regime-engine.md` §11.8.3, PD10).
+4. **The version tag.** The change is methodology `v4` (`CURRENT_REGIME_VERSION`). It was tagged `v5` until [D88](#d88), which renamed it so tags stay consecutive. The frozen, versioned publication model (`regime-engine.md` §11.8.3, PD10) takes the next unused tag when it is built.
 5. **Replay.** `runRegime` (`version`) and `runAnalytics` (`regimeVersion`) compute a given version. A run stamped `v3` takes the rank-then-cut path and replays exactly as it published.
-6. **One method served.** Every row of the served regime history carries one methodology version (D83 amended above). The first `v5` run restates the history once.
+6. **One method served.** Every row of the served regime history carries one methodology version (D83 amended above). The first `v4` run restates the history once.
 7. **Cut-offs.** 0.33 / 0.67 stay. A retune is a separate change.
-8. **The lookback (issue 1659).** It stamps the same `v5` tag, so history restates once. No release tag is cut with one of the two merged and the other not.
+8. **The lookback (issue 1659).** It stamps the same `v4` tag, so history restates once. No release tag is cut with one of the two merged and the other not.
 
 **Why.** The composite is already a normalized number, a mean of weighted means of percentile ranks. Ranking it again against its own trailing three years stretched a mild reading into an extreme one in a flat period: on 17 Nov the composite was 0.37, its rank the 3rd percentile, and the label risk-off. On 1,624 of 3,108 served days the composite sat between the cut-offs while the label was not neutral. The second ranking was in the original engine's first commit and the vendored reference; the port was faithful, the method changes.
 
-**Rejected.** Keeping the second ranking with a shorter lookback: it still re-normalizes a normalized number. Tagging the change `v4`: that tag already names the publication model.
+**Rejected.** Keeping the second ranking with a shorter lookback: it still re-normalizes a normalized number. Tagging the change `v5` to keep `v4` reserved for the publication model: chosen at first, then reversed by D88.
 
 **Left alone.** The cut-off values. The indicator ranks, weights, panel indices and composite. The vendored reference and the originals, which stay `v3` and are compared under `v3`.
 
@@ -6651,3 +6651,21 @@ The stage load check (`Q34a-analytics-load`, `scripts/release/analytics-load-che
 **Rejected.** A plain hourly cron (`0 * * * *`): the first tick could still land up to an hour after READY. Triggering a run after READY: it breaks the owner rule. Changing production's cadence: out of scope, and production's load is what the check models.
 
 **Enforced by** `scripts/tests/unit/smoke-env.test.ts`, `scripts/tests/unit/analytics-load-check.test.ts`, `scripts/tests/unit/schedule-parity.test.ts` and `scripts/tests/unit/release-runbook.test.ts`. Policy in [`docs/technical/release-runbooks.md` §4.4](technical/release-runbooks.md#44-stage-qa).
+
+---
+
+<a id="d88"></a>
+## D88 — The label-cut methodology is `v4`; methodology tags stay consecutive (amends D84; owner, 2026-11-20)
+
+**Status:** Accepted 2026-11-20 (owner). `packages/analyst-sdk/src/analyze/regime-versions.ts` (`REGIME_VERSIONS`, `CURRENT_REGIME_VERSION`), `packages/analyst-sdk/tests/regime-versions.test.ts`. Methodology in [`docs/technical/regime-engine.md` §11.8.3](technical/regime-engine.md).
+
+**Decision.**
+
+1. **The rename.** The methodology of D84 (the label cut on the composite, issue 1652) is `v4`. It was tagged `v5` in code before this decision.
+2. **Consecutive tags.** Methodology tags in the database increase by one with no gaps: `v3`, then `v4`. `REGIME_VERSIONS` lists them in order and `CURRENT_REGIME_VERSION` is its last entry.
+3. **No reservation.** The frozen, versioned publication model (`regime-engine.md` §11.8.3, PD10) no longer holds `v4`. It takes the next unused tag when it is built.
+4. **No migration.** Production has only ever stored `v3`, so no stored row carries `v5` and none is rewritten.
+
+**Why.** A gap in the stored tags reads as a lost methodology. A tag reserved for unbuilt work forced that gap.
+
+**Rejected.** Keeping `v5` and leaving `v4` reserved: the database would hold `v3` then `v5`.

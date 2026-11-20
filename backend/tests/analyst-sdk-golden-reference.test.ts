@@ -135,15 +135,15 @@ function diff(got: any, exp: any, path: string, out: string[], counter: { n: num
 }
 
 // The vendored reference is methodology v3 (labels cut on the rolling
-// percentile). Since issue 1652 the committed golden is v5, so the reference is
+// percentile). Since issue 1652 the committed golden is v4, so the reference is
 // compared with the SDK's v3 report over the same fixture, computed in process.
-// The v5 golden differs from it only in its labels (and the backtest that trades
+// The v4 golden differs from it only in its labels (and the backtest that trades
 // them), which the last test below checks.
 const { buildReport: sdkReport, runRegime: sdkRun, requireComplete: sdkComplete } = await import("../../packages/analyst-sdk/src/run.ts");
 const { parseRawHistory: sdkParse, toHistory: sdkHistory } = await import("../../packages/analyst-sdk/src/input/load.ts");
 const sdkFixture = sdkHistory(sdkParse(readFileSync(join(SDK, "fixtures", "raw-indicator-history.csv"), "utf8")));
 const golden = JSON.parse(JSON.stringify(sdkReport(sdkComplete(sdkRun(sdkFixture, { version: "v3" })))));
-const goldenV5 = JSON.parse(readFileSync(join(SDK, "golden", "regime-report.json"), "utf8"));
+const goldenV4 = JSON.parse(readFileSync(join(SDK, "golden", "regime-report.json"), "utf8"));
 const ref = referenceReport();
 
 describe("analyst-sdk golden equals the original JS reference", () => {
@@ -192,20 +192,20 @@ describe("analyst-sdk golden equals the original JS reference", () => {
   });
 });
 
-describe("issue 1652: the v5 golden keeps the reference's numbers and cuts its labels on them", () => {
+describe("issue 1652: the v4 golden keeps the reference's numbers and cuts its labels on them", () => {
   test("composite, percentiles, panel indices and indicators equal the v3 reference; the labels are cut on the composite and panel index", async () => {
     const { bucketFn } = await import("../../packages/analyst-sdk/src/analyze/compute.ts");
     expect(golden.version).toBe("v3");
-    expect(goldenV5.version).toBe("v5");
+    expect(goldenV4.version).toBe("v4");
     const out: string[] = [];
     const strip = (g: any) => ({ ...g.regime, label: null, panels: Object.fromEntries(Object.entries(g.regime.panels).map(([k, v]: [string, any]) => [k, { ...v, regime: null }])) });
-    diff(strip(goldenV5), strip(ref), "regime", out, { n: 0 });
-    diff(goldenV5.indicators, ref.indicators, "indicators", out, { n: 0 });
+    diff(strip(goldenV4), strip(ref), "regime", out, { n: 0 });
+    diff(goldenV4.indicators, ref.indicators, "indicators", out, { n: 0 });
     expect(out).toEqual([]);
     // The fixture's last day: composite 0.521 is neutral; the v3 rank 0.645 is too.
-    // macro index 0.662 is neutral under v5, its rank 0.897 risk-on under v3.
-    expect(bucketFn(goldenV5.regime.panels.macro.index)).toBe("neutral");
-    expect(goldenV5.regime.panels.macro.regime).toBe("neutral");
+    // macro index 0.662 is neutral under v4, its rank 0.897 risk-on under v3.
+    expect(bucketFn(goldenV4.regime.panels.macro.index)).toBe("neutral");
+    expect(goldenV4.regime.panels.macro.regime).toBe("neutral");
     expect((ref.regime.panels as any).macro.regime).toBe("risk_on");
   }, 120_000);
 });
@@ -218,10 +218,11 @@ describe("issue 1652: the v5 golden keeps the reference's numbers and cuts its l
 // 119b34cc561c59b33e53d27534ff64666e3cf30ee161684959517aee7545a8ce) and by
 // issue 1559 (one start date per market; was
 // 08b36777a0822838abfaae0b3cfc0319b7f503476ad71470646e309ba11be8ba), and by
-// issue 1652 (methodology v5, labels cut on the composite; was
+// issue 1652 (methodology v4, labels cut on the composite; was
 // 3480816a0d70850d4d7a3f9c9258f9de4aa0f17a2eb56000b219d6327094b206).
 describe("analyst-sdk report bytes are unchanged by the D74 storage mapping", () => {
-  const GOLDEN_SHA256 = "9466c9d14933291155d370d6256abf862585a8c2add554fb9134c157d74884ed";
+  // And by decision D88 (methodology renamed v5 to v4; was 9466c9d14933291155d370d6256abf862585a8c2add554fb9134c157d74884ed).
+  const GOLDEN_SHA256 = "c661b2e44fac9f1d1800160546a1b3a3f20e14efaef2b3321b6e8519f7e121ee";
 
   test("with fetch throwing, the full serialized report equals the pre-change golden bytes", async () => {
     const { createHash } = await import("node:crypto");

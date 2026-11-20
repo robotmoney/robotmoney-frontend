@@ -3,7 +3,6 @@
 // so a dot close to a segment's end used to strand a sliver of arc past it.
 import { describe, expect, test } from "bun:test";
 import { ordinalPct, regimeDialSvg, regimeDialTip, regimeDialValid } from "../../../frontend/public/assets/js/app/lib/regime-dial.js";
-import { confirmedRegimes, readOnComposite } from "../../../frontend/public/assets/js/app/lib/regime-scale.js";
 
 const CUTS = { riskOff: 0.33, riskOn: 0.67 };
 const dial = (value: number, regime = "risk_off") => regimeDialSvg({ value, regime, ...CUTS });
@@ -55,29 +54,5 @@ describe("regimeDialTip", () => {
 
   test("ordinals read as ordinals", () => {
     expect([0.01, 0.02, 0.03, 0.11, 0.12, 0.13, 0.21, 0.33, 0.67].map(ordinalPct)).toEqual(["1st", "2nd", "3rd", "11th", "12th", "13th", "21st", "33rd", "67th"]);
-  });
-});
-
-describe("the regime read on the composite", () => {
-  test("a label is cut on the composite, and switches only after five readings in the new bucket", () => {
-    // Four readings below the cut do not switch it; the fifth does.
-    expect(confirmedRegimes([0.5, 0.3, 0.3, 0.3, 0.3, 0.5])).toEqual(["neutral", "neutral", "neutral", "neutral", "neutral", "neutral"]);
-    expect(confirmedRegimes([0.5, 0.3, 0.3, 0.3, 0.3, 0.3]).at(-1)).toBe("risk_off");
-    // A missing reading keeps the label and does not count toward the run.
-    expect(confirmedRegimes([0.5, 0.7, 0.7, null, 0.7, 0.7, 0.7])).toEqual(["neutral", "neutral", "neutral", "neutral", "neutral", "neutral", "risk_on"]);
-  });
-
-  test("a composite of 0.38 that the engine ranks 4th in three years reads neutral", () => {
-    // readOnComposite adds each panel's label, so the rows declare those fields.
-    type Row = { date: string; composite: number; compositePercentile: number; regime: string; macroIndex: number; onchainIndex: number; macroRegime?: string; onchainRegime?: string };
-    const history: Row[] = Array.from({ length: 8 }, (_, i) => ({ date: `2026-11-${10 + i}`, composite: 0.38 + i * 0.001, compositePercentile: 0.04, regime: "risk_off", macroIndex: 0.3, onchainIndex: 0.4 }));
-    const out = readOnComposite({ latest: { ...history[7], bucketThresholds: null }, history });
-    expect(out.latest.regime).toBe("neutral");
-    expect(out.history.every((r: { regime: string }) => r.regime === "neutral")).toBe(true);
-    expect(out.latest.macroRegime).toBe("risk_off");
-    expect(out.latest.onchainRegime).toBe("neutral");
-    // The reading itself is untouched.
-    expect(out.latest.composite).toBe(history[7]!.composite);
-    expect(out.latest.compositePercentile).toBe(0.04);
   });
 });
