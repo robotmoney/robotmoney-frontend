@@ -21,7 +21,9 @@ import { citeTitle, isKnownPage } from "../seo.js";
 const surface = (self) => /** @type {any} */ (self);
 
 /** @param {any} v */
-const num = (v) => (Number.isFinite(Number(v)) ? Number(v) : null);
+// A missing value is null, never 0: Number(null) is 0, which drew an absent
+// reading as a dot at the bottom of the scale.
+const num = (v) => (v === null || v === undefined || v === "" || !Number.isFinite(Number(v)) ? null : Number(v));
 
 // One shape out of three inputs: the API's camelCase session DTO, the static
 // archive's snake_case file, and the brief's own `regime` object. They carry
@@ -31,13 +33,18 @@ export function normalizeRegime(raw) {
   if (!raw || typeof raw !== "object") return null;
   const pick = (/** @type {string} */ camel, /** @type {string} */ snake) =>
     num(raw[camel] !== undefined ? raw[camel] : raw[snake]);
+  // Levels only, never ranks (RM-211): the composite and each panel's index on
+  // their own 0 to 1 scale, as the regime page reads them since #1663. The
+  // percentiles a reading may also carry (`composite_percentile`, the panels'
+  // `*_percentile`) rank a level against its last three years, and nothing on
+  // the site draws them. A session's stored reading carries no panel index
+  // today, so its panels come through as labels only.
   const out = {
     composite: pick("composite", "composite"),
-    compositePercentile: pick("compositePercentile", "composite_percentile"),
     regime: String(raw.regime || ""),
-    macro: pick("macroPercentile", "macro_percentile"),
-    onchain: pick("onchainPercentile", "onchain_percentile"),
-    factor: pick("factorPercentile", "factor_percentile"),
+    macro: pick("macroIndex", "macro_index"),
+    onchain: pick("onchainIndex", "onchain_index"),
+    factor: pick("factorIndex", "factor_index"),
     macroRegime: String(raw.macroRegime || raw.macro_regime || ""),
     onchainRegime: String(raw.onchainRegime || raw.onchain_regime || ""),
     factorRegime: String(raw.factorRegime || raw.factor_regime || ""),
@@ -72,18 +79,19 @@ export function sessionBrief() {
       return this.backdrop;
     },
 
-    // ── the latest review's signal (RM-121) ──────────────────────────────
-    // Dots on one percentile axis: every reading is a position in its own
-    // three-year history, not an amount. Composite first, then its inputs.
+    // ── the latest review's signal (RM-121, RM-211) ──────────────────────
+    // Dots on one 0 to 1 scale: the composite first, then each panel's index.
+    // `v` is the level; a panel the reading has a label for but no level is a
+    // row with `v` null, which a surface draws as its label alone.
     // Factor is drawn apart as context on the published method, where it is
     // not an input; on a v0 reading it was one, so it is drawn as one.
     signalRows() {
       const b = this.backdrop;
       if (!b) return [];
-      const at = (/** @type {number} */ p) => `${(Math.max(0, Math.min(1, p)) * 100).toFixed(1)}%`;
+      const at = (/** @type {number} */ v) => `${(Math.max(0, Math.min(1, v)) * 100).toFixed(1)}%`;
       const rows = [];
-      if (b.compositePercentile !== null) {
-        rows.push({ key: "composite", label: "Composite", pct: b.compositePercentile, regime: b.regime, kind: "lead", at: at(b.compositePercentile),
+      if (b.composite !== null) {
+        rows.push({ key: "composite", label: "Composite", v: b.composite, regime: b.regime, kind: "lead", at: at(b.composite),
           href: "/regime#composite", about: "Macro and on-chain averaged. Its cuts set the regime." });
       }
       /** @type {Record<string, string>} */
@@ -95,10 +103,11 @@ export function sessionBrief() {
           : "Eight equity factor signals, shown for context. Not in the composite.",
       };
       for (const [key, label] of [["macro", "Macro"], ["onchain", "On-chain"], ["factor", "Equity factor"]]) {
-        const pct = b[key];
-        if (pct === null) continue;
+        const v = b[key];
+        const regime = b[`${key}Regime`];
+        if (v === null && !regime) continue;
         const kind = key === "factor" && !this.backdropV0 ? "context" : "input";
-        rows.push({ key, label, pct, regime: b[`${key}Regime`], kind, at: at(pct), href: `/regime#panel-${key}`, about: about[key] });
+        rows.push({ key, label, v, regime, kind, at: v === null ? "" : at(v), href: `/regime#panel-${key}`, about: about[key] });
       }
       return rows;
     },
