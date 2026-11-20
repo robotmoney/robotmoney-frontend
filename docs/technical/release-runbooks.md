@@ -708,7 +708,7 @@ recorded owner decision.
 | ID | Check | Steps |
 |---|---|---|
 | SP.1 | Position: which release, which commit, which phase; clean checkouts | Q06-checkout to Q11-capture-install, P01-checkout to P06-capture-install |
-| SP.2 | Backup taken and restore proven, with the restore time | Q14-backup to Q16-restore-proof, C01-backup to C03-restore-proof |
+| SP.2 | Backup taken and restore proven, with the restore time (on stage Q14 hard-links the dump Q02 used, no second capture; production C01 captures fresh) | Q14-backup to Q16-restore-proof, C01-backup to C03-restore-proof |
 | SP.3 | The ledger reconciles with `backend/migrations` and the running tag's bytes (D67) | Q12-state-baseline, P07-state-baseline |
 | SP.4 | Smoke preflight: role auth, privileges, manifest, compat, `~/.env` keys, identity | Q22-rolling-boot, C10-rolling-boot |
 | SP.5 | Log baseline, triaged before the cutover | Q13-log-baseline, P08-log-baseline |

@@ -249,15 +249,15 @@ steps:
     standing: ["SP.2"]
     host: "capture"
     phase: "qa"
-    description: "Fresh capture from production's read replica into a new dated directory (never a reused dump)"
+    description: "Backup for the restore proof, with no second capture: hard-link the dump Q02-dump used (the newest production capture on the capture host, at most 24 hours old) into a new dated directory, manifest, globals and passphrase included (owner, 2026-11-20). Production's C01-backup still captures fresh"
     cmds:
-      - ["bun", "run", "smoke:capture", "--out", "{captureHome}/rm-backup-{target}-{runTs}"]
+      - ["sh", "-c", "src=$(ls -1d {captureHome}/rm-backup-prod-2* | sort | tail -n 1) && test -f \"$src/manifest.json\" && cp -al -- \"$src\" {captureHome}/rm-backup-{target}-{runTs} && echo \"[Q14-backup] linked $src\""]
     expectExit: 0
     receipts:
       - {"dir": "{captureHome}/rm-backup-{target}-{runTs}", "pattern": "manifest.json", "required": true}
     irreversible: false
     onlyFor: "stage"
-    maxMinutes: 30
+    maxMinutes: 5
   - id: "Q15-backup-sums"
     standing: ["SP.2"]
     host: "capture"
