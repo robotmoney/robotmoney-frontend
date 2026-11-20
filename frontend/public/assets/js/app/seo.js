@@ -55,8 +55,8 @@ const RESEARCH_REVISED = "2026-09-24";
 const REGIME_DATA_URL = ORIGIN + "/api/dashboards/regime-snapshots?range=3650";
 const REGIME_VARIABLES = [
   { "@type": "PropertyValue", name: "Regime", description: "The composite's reading: risk-on, neutral or risk-off." },
-  { "@type": "PropertyValue", name: "Composite", minValue: 0, maxValue: 1, description: "The mean of the macro and on-chain panel indices." },
-  { "@type": "PropertyValue", name: "Composite percentile, 3 years", minValue: 0, maxValue: 1, description: "Where the composite ranks in its last 3 years; below 0.33 reads risk-off, above 0.67 risk-on." },
+  { "@type": "PropertyValue", name: "Composite", minValue: 0, maxValue: 1, description: "The mean of the macro and on-chain panel indices; below 0.33 reads risk-off, above 0.67 risk-on." },
+  { "@type": "PropertyValue", name: "Composite percentile, 3 years", minValue: 0, maxValue: 1, description: "Where the composite ranks in its last 3 years." },
   { "@type": "PropertyValue", name: "Macro index", minValue: 0, maxValue: 1, description: "A weighted mean of 8 macro indicators, 0 risk-off to 1 risk-on." },
   { "@type": "PropertyValue", name: "On-chain index", minValue: 0, maxValue: 1, description: "A weighted mean of 10 on-chain indicators, 0 risk-off to 1 risk-on." },
   { "@type": "PropertyValue", name: "Equity factor index", minValue: 0, maxValue: 1, description: "A weighted mean of 8 equity factor indicators, tracked for context and left out of the composite." },

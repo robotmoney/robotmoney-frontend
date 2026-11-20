@@ -61,9 +61,9 @@
             </span>
           </template>
           <template x-if="session.regimeSummary">
-            <!-- The percentile leads, as on the regime page; the raw composite is the
-                 reference beside it. An old reading without a percentile shows the raw one. -->
-            <span class="rr-meta__i">Composite <b x-text="session.regimeSummary?.compositePercentile != null ? `${ordinal(session.regimeSummary.compositePercentile)} percentile` : fmtNum(session.regimeSummary?.composite, 3)"></b><span x-show="session.regimeSummary?.compositePercentile != null && session.regimeSummary?.composite != null" x-text="`· ${fmtNum(session.regimeSummary?.composite, 3)}`"></span></span>
+            <!-- The composite itself, on its 0 to 1 scale, as the regime page reads
+                 it (RM-211). Its 3-year percentile is not shown. -->
+            <span class="rr-meta__i">Composite <b x-text="fmtNum(session.regimeSummary?.composite, 3)"></b></span>
           </template>
           <template x-if="session.regimeSummary?.regime">
             <span class="rr-meta__i">Regime
@@ -411,38 +411,48 @@
                       <h3 class="rr-subhead__h">Market context</h3>
                     </div>
                     <div class="sig" role="group"
-                         :aria-label="`Percentile against its own three-year history: ${signalRows().map((r) => `${r.label} ${ordinal(r.pct)}`).join(', ')}.`">
+                         :aria-label="`Index levels, on a scale of 0 to 1: ${signalRows().map((r) => `${r.label} ${r.v === null ? regimeLabel(r.regime) : fmtNum(r.v, 3)}`).join(', ')}.`">
                       <div class="sig__scale" aria-hidden="true">
                         <span></span>
                         <span class="sig__ticks">
                           <template x-for="z in signalZones()" :key="z.key">
                             <em class="sig__zone" :style="`left:${z.left};width:${z.width}`" x-text="z.label"></em>
                           </template>
-                          <b style="left:0">0</b><b style="left:50%">50th</b><b style="left:100%">100</b>
+                          <b style="left:0">0</b><b style="left:50%">0.50</b><b style="left:100%">1</b>
                         </span>
                         <span></span>
                       </div>
                       <template x-for="r in signalRows()" :key="r.key">
                         <div class="sig__row" :class="`is-${r.kind}`">
                           <a class="sig__l rr-lnk" :href="r.href" x-text="r.label"></a>
-                          <span class="sig__track">
-                            <b class="sig__mid"></b>
-                            <template x-for="c in signalCuts()" :key="c"><b class="sig__cut" :style="`left:${c}`"></b></template>
-                            <i class="sig__dot" :style="`left:${r.at};` + (r.kind === 'context' ? '' : `background:${regimeColor(r.regime)}`)"></i>
-                            <!-- The reading beside its dot, so it reads without a hover; it
-                                 turns to the dot's left near the top end. -->
-                            <span class="sig__v" :class="r.pct > 0.82 ? 'is-end' : ''" :style="`left:${r.at}`" x-text="ordinal(r.pct)"></span>
-                            <!-- What the dot is, on hover of its row: the percentile
-                                 says where it sits, this says what it reads. -->
-                            <span class="sig__tip" :class="r.pct < 0.2 ? 'is-start' : r.pct > 0.8 ? 'is-end' : ''" :style="`left:${r.at}`">
-                              <b x-text="[r.label + (r.key === 'composite' && backdrop?.composite != null ? ' ' + fmtNum(backdrop.composite, 3) : ''), `${ordinal(r.pct)} percentile`, r.kind === 'context' ? '' : (r.regime ? regimeLabel(r.regime) : '')].filter(Boolean).join(' · ')"></b>
-                              <span x-text="r.about"></span>
+                          <!-- A level is a dot on the scale. A panel this session's
+                               reading has a label for but no level reads as its label. -->
+                          <template x-if="r.v !== null">
+                            <span class="sig__track">
+                              <b class="sig__mid"></b>
+                              <template x-for="c in signalCuts()" :key="c"><b class="sig__cut" :style="`left:${c}`"></b></template>
+                              <i class="sig__dot" :style="`left:${r.at};` + (r.kind === 'context' ? '' : `background:${regimeColor(r.regime)}`)"></i>
+                              <!-- The level beside its dot, so it reads without a hover; it
+                                   turns to the dot's left near the top end, and just
+                                   under the midpoint, where it would sit on the mark. -->
+                              <span class="sig__v" :class="r.v > 0.82 || (r.v > 0.36 && r.v < 0.5) ? 'is-end' : ''" :style="`left:${r.at}`" x-text="fmtNum(r.v, 3)"></span>
+                              <!-- What the dot is, on hover of its row. -->
+                              <span class="sig__tip" :class="r.v < 0.2 ? 'is-start' : r.v > 0.8 ? 'is-end' : ''" :style="`left:${r.at}`">
+                                <b x-text="[`${r.label} ${fmtNum(r.v, 3)}`, r.kind === 'context' ? '' : (r.regime ? regimeLabel(r.regime) : '')].filter(Boolean).join(' · ')"></b>
+                                <span x-text="r.about"></span>
+                              </span>
                             </span>
-                          </span>
+                          </template>
+                          <template x-if="r.v === null">
+                            <span class="rr-meta__i" style="font-size:0.72rem" :title="r.about">
+                              <i :style="r.kind === 'context' ? 'background:var(--color-void);box-shadow:inset 0 0 0 1.5px var(--color-text-muted)' : `background:${regimeColor(r.regime)}`" aria-hidden="true"></i>
+                              <b style="font-weight:400;color:var(--color-text-muted)" x-text="regimeLabel(r.regime)"></b>
+                            </span>
+                          </template>
                         </div>
                       </template>
                     </div>
-                    <p class="rr-note">Each reading is a percentile of its own last three years, so the 50th is its median.</p>
+                    <p class="rr-note">Each index is a weighted mean of its indicators' percentiles, on a scale of 0 to 1.</p>
                   </div>
                 </div>
               </template>

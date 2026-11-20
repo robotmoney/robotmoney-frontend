@@ -832,14 +832,16 @@ test("the latest recommendation carries its session's reading and vote, and its 
   await cta.click();
   await expect(page).toHaveURL(new RegExp(`/swarm/sessions/${LR_ID}$`));
 
-  // SIGNAL, on the session page: dots on one percentile axis.
+  // SIGNAL, on the session page: the composite's level on one 0 to 1 scale
+  // (RM-211). The stored reading carries panel labels but no panel levels, so
+  // the panels read as their labels.
   const signal = page.locator(".rr-context");
   await expect(signal.locator(".sig__l")).toHaveText(["Composite", "Macro", "On-chain", "Equity factor"]);
-  await expect(signal.locator(".sig__v")).toHaveText(["83rd", "90th", "56th", "68th"]);
-  await expect(signal.locator(".sig__row").first().locator(".sig__dot")).toHaveAttribute("style", /left:\s*83\.2%/);
+  await expect(signal.locator(".sig__v")).toHaveText(["0.598"]);
+  await expect(signal.locator(".sig__row").first().locator(".sig__dot")).toHaveAttribute("style", /left:\s*59\.8%/);
   // On the published method factor is context, not an input, and is drawn so.
   await expect(signal.locator(".sig__row").nth(3)).toHaveClass(/is-context/);
-  await expect(signal.locator(".sig__row").nth(3).locator(".sig__tip")).toContainText("Not in the composite");
+  await expect(signal.locator(".sig__row").nth(3).locator(".rr-meta__i")).toHaveAttribute("title", /Not in the composite/);
   // This reading carries no cuts, and none are hard-coded in their place.
   await expect(signal.locator(".sig__zone")).toHaveCount(0);
 
