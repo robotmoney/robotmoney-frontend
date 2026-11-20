@@ -332,14 +332,41 @@ describe("the stage Postgres's connection limits", () => {
   });
 });
 
-describe("Q02 always captures a fresh dump; up refuses one over 24 h (issue 1564, SR.0)", () => {
+describe("Q02 reuses a dump at most 24 h old, else captures; up refuses one over 24 h (issue 1701, SR.0)", () => {
   const now = new Date("2026-11-04T12:00:00Z");
   const hoursAgo = (h: number) => new Date(now.getTime() - h * 3_600_000).toISOString();
 
-  test("dumpPlan captures for an empty list, a 1 h old dump and a 23 h old dump", () => {
-    expect(dumpPlan([], now)).toBe("capture");
-    expect(dumpPlan([{ dir: "/home/x/rm-backup-prod-1h", capturedAt: hoursAgo(1) }], now)).toBe("capture");
-    expect(dumpPlan([{ dir: "/home/x/rm-backup-prod-23h", capturedAt: hoursAgo(23) }], now)).toBe("capture");
+  test("dumpPlan reuses the newest dump for 1 h and 23 h old dumps and picks the newer of two", () => {
+    expect(dumpPlan([{ dir: "/h/1h", capturedAt: hoursAgo(1) }], now)).toEqual({ action: "reuse", dir: "/h/1h" });
+    expect(dumpPlan([{ dir: "/h/23h", capturedAt: hoursAgo(23) }], now)).toEqual({ action: "reuse", dir: "/h/23h" });
+    expect(dumpPlan([{ dir: "/h/5h", capturedAt: hoursAgo(5) }, { dir: "/h/2h", capturedAt: hoursAgo(2) }], now)).toEqual({ action: "reuse", dir: "/h/2h" });
+  });
+
+  test("dumpPlan captures for an empty list, 24.1 h, no capturedAt, unparseable and future capturedAt", () => {
+    expect(dumpPlan([], now)).toEqual({ action: "capture" });
+    expect(dumpPlan([{ dir: "/h/a", capturedAt: hoursAgo(24.1) }], now)).toEqual({ action: "capture" });
+    expect(dumpPlan([{ dir: "/h/b" }], now)).toEqual({ action: "capture" });
+    expect(dumpPlan([{ dir: "/h/c", capturedAt: "not a date" }], now)).toEqual({ action: "capture" });
+    expect(dumpPlan([{ dir: "/h/d", capturedAt: hoursAgo(-2) }], now)).toEqual({ action: "capture" });
+  });
+
+  test("the Q02 text states the 24 h reuse rule everywhere and never says 'never reuses'", async () => {
+    const { readFileSync } = await import("node:fs");
+    const { RELEASE_STEPS, stepListHash } = await import("../../release/steps.ts");
+    const root = join(import.meta.dir, "../../..");
+    const q02 = RELEASE_STEPS.find((st) => st.id === "Q02-dump")!;
+    const texts = [
+      q02.description,
+      readFileSync(join(root, "scripts/release/runbooks/templates/web.yaml"), "utf8").split('id: "Q02-dump"')[1]!.split("cmds:")[0]!,
+      readFileSync(join(root, "scripts/release/runbooks/templates/kitchen-sink.yaml"), "utf8").split('id: "Q02-dump"')[1]!.split("cmds:")[0]!,
+      readFileSync(join(root, "docs/technical/release-runbooks.md"), "utf8").split("**Stage's starting dump")[1]!.split("### 4.4")[0]!,
+      readFileSync(join(root, "scripts/release/stage-target.ts"), "utf8").split("import ")[0]!,
+    ];
+    for (const t of texts) {
+      expect(t).toContain("at most 24");
+      expect(t).not.toContain("never reuses");
+    }
+    expect(stepListHash(RELEASE_STEPS)).toBe(stepListHash(RELEASE_STEPS.map((st) => (st.id === "Q02-dump" ? { ...st, description: "other" } : st))));
   });
 
   test("dumpAgeRefusal names 24 h for a 25 h old manifest and passes a 23 h old one", () => {
