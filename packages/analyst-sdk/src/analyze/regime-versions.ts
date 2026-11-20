@@ -16,15 +16,16 @@ import { ROLLING_WINDOW_DAYS } from "./indicators.ts";
 // cut on a second rolling rank, over the declared percentile lookback, of the
 // composite and of each panel index.
 //
-// v4: reserved for the frozen, versioned publication model
-// (docs/technical/regime-engine.md section 11.8.3, PD10). Never stamped here.
-//
-// v5 (issue 1652, decision D86): v3 with the regime label cut on the composite
+// v4 (issue 1652, decisions D84 and D88; tagged v5 before D88): v3 with the regime label cut on the composite
 // itself and each panel label on its panel index. The rolling ranks of the
 // composite and the panel indices stay in the output as information only.
-export const REGIME_VERSIONS = ["v3", "v5"] as const;
+//
+// Tags increase by one with no gaps (D88). The frozen, versioned publication
+// model (docs/technical/regime-engine.md section 11.8.3, PD10) takes the next
+// unused tag when it is built.
+export const REGIME_VERSIONS = ["v3", "v4"] as const;
 export type RegimeVersion = (typeof REGIME_VERSIONS)[number];
-export const CURRENT_REGIME_VERSION: RegimeVersion = "v5";
+export const CURRENT_REGIME_VERSION: RegimeVersion = "v4";
 
 /** True for a methodology version this engine can compute (and so replay). */
 export function isRegimeVersion(v: unknown): v is RegimeVersion {
@@ -54,5 +55,5 @@ const TRAILING_3Y: LookbackWindow = Object.freeze({ kind: "trailing", days: ROLL
 /** The declared lookback of every methodology version (issue 1659). */
 export const REGIME_LOOKBACK: Readonly<Record<RegimeVersion, RegimeLookback>> = Object.freeze({
   v3: Object.freeze({ rank: TRAILING_3Y, weight: TRAILING_3Y, percentile: TRAILING_3Y }),
-  v5: Object.freeze({ rank: TRAILING_3Y, weight: TRAILING_3Y, percentile: TRAILING_3Y }),
+  v4: Object.freeze({ rank: TRAILING_3Y, weight: TRAILING_3Y, percentile: TRAILING_3Y }),
 });

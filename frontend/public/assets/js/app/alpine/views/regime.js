@@ -168,7 +168,7 @@ export function registerRegimeView(Alpine) {
         this.fullLoaded = true;
       }
     },
-    // The labels are the API's: since methodology v5 (D84) the regime is cut on
+    // The labels are the API's: since methodology v4 (D84) the regime is cut on
     // the composite and each panel on its own index. Market context is fed the
     // index levels where the session page feeds it percentiles: the composite
     // and each panel's index, on one 0 to 1 scale.

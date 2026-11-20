@@ -164,8 +164,9 @@ test(
 const SDK_TESTS = join(import.meta.dir, "..", "..", "packages", "analyst-sdk", "tests");
 // Regenerated on purpose by decision D78 (compensated arithmetic; was 119b34cc561c59b33e53d27534ff64666e3cf30ee161684959517aee7545a8ce)
 // and by issue 1559 (one start date per market; was 08b36777a0822838abfaae0b3cfc0319b7f503476ad71470646e309ba11be8ba)
-// and by issue 1652 (methodology v5, labels cut on the composite; was 3480816a0d70850d4d7a3f9c9258f9de4aa0f17a2eb56000b219d6327094b206).
-const GOLDEN_SHA256 = "9466c9d14933291155d370d6256abf862585a8c2add554fb9134c157d74884ed";
+// and by issue 1652 (methodology v4, labels cut on the composite; was 3480816a0d70850d4d7a3f9c9258f9de4aa0f17a2eb56000b219d6327094b206).
+// and by decision D88 (methodology renamed v5 to v4; was 9466c9d14933291155d370d6256abf862585a8c2add554fb9134c157d74884ed).
+const GOLDEN_SHA256 = "c661b2e44fac9f1d1800160546a1b3a3f20e14efaef2b3321b6e8519f7e121ee";
 
 test(
   "a frozen regime vintage reloads offline with unchanged membership and rebuilds the golden report bytes through the D74 mapping",

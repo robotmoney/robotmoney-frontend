@@ -1,7 +1,7 @@
 // The market regime under the home page's model portfolio (Lex: the portfolio,
 // then the regime it is read against): the dial with the regime beside it, and
 // the last year on the site's chart. The composite is plotted on its own 0 to
-// 1 scale, and the API's label is cut on it (methodology v5), so the dial,
+// 1 scale, and the API's label is cut on it (methodology v4), so the dial,
 // the bands and the axis read on one scale. One read of the
 // regime snapshots, made as the section nears the viewport: a visitor who never
 // scrolls this far never pays for it.

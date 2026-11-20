@@ -274,12 +274,12 @@ describe("parity: original, shared and generalized paths", () => {
     threeWay(run.dateAxis, run.factor!, extras);
   });
 
-  // Issue 1652: the composite strategy trades result.regime, which since v5 is
+  // Issue 1652: the composite strategy trades result.regime, which since v4 is
   // the label cut on the composite itself, never on its rolling percentile.
-  test("the composite strategy reads result.regime cut on the composite (v5)", async () => {
+  test("the composite strategy reads result.regime cut on the composite (v4)", async () => {
     const { bucketFn, smoothRegimes } = await import("../src/analyze/compute.ts");
     const run = runRegime(raw);
-    expect(run.version).toBe("v5");
+    expect(run.version).toBe("v4");
     expect(run.result.regime).toEqual(smoothRegimes(run.result.composite, bucketFn));
     const out = threeWay(run.dateAxis, run.result, extras);
     // The composite line is the schedule from those labels, nothing else.

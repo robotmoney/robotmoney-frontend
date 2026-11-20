@@ -17,7 +17,7 @@
 //      composite and of each panel index, over the percentile lookback, is
 //      still computed, as information.
 //
-// Methodology version (regime-versions.ts): v5 (current, issue 1652) cuts each
+// Methodology version (regime-versions.ts): v4 (current, issue 1652) cuts each
 // label on the composite or panel index itself. v3 cut it on the rolling
 // percentile of that series (a second ranking); it is kept so a run stamped v3
 // replays exactly.
@@ -91,7 +91,7 @@ export function computeRegime(
   // that date, so the indicator re-enters normally with no special-casing.
   ages?: Record<string, number[]>,
   maxForwardFillDays: number = MAX_FORWARD_FILL_DAYS,
-  // The methodology version to compute (issue 1652). v5 cuts each label on the
+  // The methodology version to compute (issue 1652). v4 cuts each label on the
   // composite or panel index; v3 on its rolling percentile.
   version: RegimeVersion = CURRENT_REGIME_VERSION,
   // The rank, weight and percentile windows (issue 1659). Defaults to the
@@ -218,7 +218,7 @@ function lookbackDays(lookback: RegimeLookback, name: keyof RegimeLookback): num
 
 /**
  * The smoothed labels of one series (the composite, or a panel index) under a
- * methodology version: since v5 cut on the series itself, under v3 on `rank`,
+ * methodology version: since v4 cut on the series itself, under v3 on `rank`,
  * its rolling percentile over the percentile lookback (issue 1652).
  */
 export function regimeLabels(series: number[], rank: number[], version: RegimeVersion = CURRENT_REGIME_VERSION): (string | null)[] {
@@ -230,7 +230,7 @@ export const CONFIRMATION_DAYS = 5;
 export const FAST_TRACK_SIGMA = 2.0;
 export const SIGMA_LOOKBACK_DAYS = 252;
 
-// `rankSeries` is the series the label is cut on: since v5 the composite or a
+// `rankSeries` is the series the label is cut on: since v4 the composite or a
 // panel index, under v3 its rolling percentile. The fast track measures σ on
 // that same series.
 export function smoothRegimes(

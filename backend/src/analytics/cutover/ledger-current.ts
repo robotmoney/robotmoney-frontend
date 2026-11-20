@@ -27,7 +27,7 @@
 //   - Regime only, one method (issue 1652): only artifacts whose run carries
 //     the methodology version of the newest carrying artifact publish. The
 //     ledger start is the first artifact of that version, so a new version
-//     (v5) restates the served history once, from its first run.
+//     (v4) restates the served history once, from its first run.
 //
 // The compatibility tables are NOT held to this rule: their writers still
 // upsert the newest run's rows (last write wins), and the parity sweep

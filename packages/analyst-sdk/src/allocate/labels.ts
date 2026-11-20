@@ -26,7 +26,7 @@ export type DecisionCadence = "weekly" | "daily";
 
 export interface PanelLabel {
   label: RegimeState | null;
-  /** The panel index the label is cut on (since v5, issue 1652), 0..1 with high meaning risk-on. */
+  /** The panel index the label is cut on (since v4, issue 1652), 0..1 with high meaning risk-on. */
   index: number | null;
   /** The panel index's 3y rolling percentile. Information only: no label or signal reads it. */
   percentile: number | null;
@@ -41,7 +41,7 @@ export interface AsofLabel {
   /** Panel labels combined: any risk_off wins (conservative), or the majority (aggressive). */
   conservative: RegimeState | null;
   aggressive: RegimeState | null;
-  /** The composite the label is cut on (since v5, issue 1652), 0..1 with high meaning risk-on. */
+  /** The composite the label is cut on (since v4, issue 1652), 0..1 with high meaning risk-on. */
   composite: number | null;
   /** The composite's 3y rolling percentile. Information only: no label or signal reads it. */
   compositePercentile: number | null;

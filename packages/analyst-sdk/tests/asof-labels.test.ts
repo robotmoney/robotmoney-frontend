@@ -3,7 +3,7 @@
 // indicator percentile is a number or null, never NaN; and on the 8-year
 // fixture (tests/fixtures/PROVENANCE.md) exactly 1 of 419 weekly as-of labels
 // differs from one full-history run, as published with the prototype (PR 1397)
-// under v3, and still 1 under v5 (issue 1652).
+// under v3, and still 1 under v4 (issue 1652).
 import { describe, expect, setDefaultTimeout, spyOn, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -182,10 +182,10 @@ describe("hindsight on the 8-year fixture", () => {
   });
 
   test(
-    // Issue 1652: under v5 (labels cut on the composite) one label still
+    // Issue 1652: under v4 (labels cut on the composite) one label still
     // differs, on 2021-07-19. Under v3, as published with the prototype, it
     // was 2018-10-22.
-    "1 of 419 weekly as-of labels differs from one full-history run (v5)",
+    "1 of 419 weekly as-of labels differs from one full-history run (v4)",
     () => {
       const labels = asofLabels(raw8y, { dates: decisionDates(START, END) });
       expect(labels.length).toBe(419);

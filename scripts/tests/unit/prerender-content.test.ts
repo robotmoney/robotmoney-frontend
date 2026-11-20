@@ -164,7 +164,7 @@ describe("research pages ship their structured data", () => {
     const noscript = html.slice(html.indexOf('<section id="agent-data">'));
     expect(noscript).toContain("The regime on ");
     expect(noscript).toContain(`Composite ${latest.composite.toFixed(2)}`);
-    // The label is cut on the composite itself (methodology v5): no ranking of
+    // The label is cut on the composite itself (methodology v4): no ranking of
     // the composite is read out as the reading.
     expect(noscript).toContain("on a scale of 0 (risk-off) to 1 (risk-on)");
     expect(noscript).not.toContain("percentile of its last");
