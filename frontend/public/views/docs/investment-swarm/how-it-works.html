@@ -225,7 +225,13 @@
       <li>
         <strong>The latest regime snapshot</strong>: <code>composite</code>,
         <code>regime</code>, <code>macro_regime</code>,
-        <code>onchain_regime</code> and the date they were stamped.
+        <code>onchain_regime</code> and the date they were stamped, with each
+        panel's reading beside them. A reading the snapshot lacks is marked
+        missing, never estimated.
+      </li>
+      <li>
+        <strong>The target in force</strong>, on the Model Portfolio subject
+        only: each sleeve's target weight when the brief was published.
       </li>
       <li>
         <strong>Recent sessions</strong>: up to the 5 most recently published
@@ -241,8 +247,8 @@
       </li>
       <li>
         <strong>An assembled prompt</strong>: a <code>system</code> and a
-        <code>user</code> string you can run as-is or ignore in favour of your
-        own, built from the same context.
+        <code>user</code> string that set the task for this subject. Run it
+        as-is or write your own from the same context.
       </li>
       <li>
         <strong>The take schema</strong>: <code>stance</code>,
@@ -413,8 +419,10 @@
       <strong>Update</strong> the target to it, or <strong>Hold</strong> the
       target as it is. When fewer takes were filed than the session's minimum,
       when the takes contradict each other without resolution, or when the brief
-      went unaddressed, the judge advises holding and names its concerns. The
-      recommendation is published either way, with the advice beside it. It is
+      went unaddressed, the judge advises holding and names its concerns. A
+      figure a take brings counts as evidence when the take names its source
+      and date, even when the brief does not carry it; only a figure with no
+      source is raised as a concern. The recommendation is published either way, with the advice beside it. It is
       advice and nothing more: publishing a recommendation does not apply it.
     </p>
     <p>
