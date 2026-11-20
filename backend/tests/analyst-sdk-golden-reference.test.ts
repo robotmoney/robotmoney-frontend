@@ -142,8 +142,11 @@ function diff(got: any, exp: any, path: string, out: string[], counter: { n: num
 const { buildReport: sdkReport, runRegime: sdkRun, requireComplete: sdkComplete } = await import("../../packages/analyst-sdk/src/run.ts");
 const { parseRawHistory: sdkParse, toHistory: sdkHistory } = await import("../../packages/analyst-sdk/src/input/load.ts");
 const sdkFixture = sdkHistory(sdkParse(readFileSync(join(SDK, "fixtures", "raw-indicator-history.csv"), "utf8")));
-const golden = JSON.parse(JSON.stringify(sdkReport(sdkComplete(sdkRun(sdkFixture, { version: "v3" })))));
-const goldenV4 = JSON.parse(readFileSync(join(SDK, "golden", "regime-report.json"), "utf8"));
+// The reference is the two-panel composite of its time (issue 1708 added
+// factor), so both SDK reports here are computed over that panel set.
+const REFERENCE_PANELS = ["macro", "onchain"] as const;
+const golden = JSON.parse(JSON.stringify(sdkReport(sdkComplete(sdkRun(sdkFixture, { version: "v3", panels: REFERENCE_PANELS })))));
+const goldenV4 = JSON.parse(JSON.stringify(sdkReport(sdkComplete(sdkRun(sdkFixture, { version: "v4", panels: REFERENCE_PANELS })))));
 const ref = referenceReport();
 
 describe("analyst-sdk golden equals the original JS reference", () => {
@@ -222,7 +225,8 @@ describe("issue 1652: the v4 golden keeps the reference's numbers and cuts its l
 // 3480816a0d70850d4d7a3f9c9258f9de4aa0f17a2eb56000b219d6327094b206).
 describe("analyst-sdk report bytes are unchanged by the D74 storage mapping", () => {
   // And by decision D88 (methodology renamed v5 to v4; was 9466c9d14933291155d370d6256abf862585a8c2add554fb9134c157d74884ed).
-  const GOLDEN_SHA256 = "c661b2e44fac9f1d1800160546a1b3a3f20e14efaef2b3321b6e8519f7e121ee";
+  // And by issue 1708 (D89, factor joins the 1/n composite; was c661b2e44fac9f1d1800160546a1b3a3f20e14efaef2b3321b6e8519f7e121ee).
+  const GOLDEN_SHA256 = "fd512236f0b9baf9eafa35fc0b23ce88ad6030ec6ef877b0652ab126fd50de6f";
 
   test("with fetch throwing, the full serialized report equals the pre-change golden bytes", async () => {
     const { createHash } = await import("node:crypto");

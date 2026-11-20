@@ -196,11 +196,11 @@ test("a session's regimeSummary reaches the screen on the session page", async (
   const regime = page.locator(".rr-meta .rr-meta__i", { hasText: "Regime" });
   await expect(regime).toHaveCount(1);
   await expect(regime.locator("b")).toHaveText("risk-on");
-  // The composite rides beside it, from the same summary: its percentile leads,
-  // as on the regime page, with the raw level beside it for reference.
+  // The composite rides beside it, from the same summary: its level, as on the
+  // regime page, and never its percentile (RM-211).
   const composite = page.locator(".rr-meta .rr-meta__i", { hasText: "Composite" });
-  await expect(composite.locator("b")).toHaveText("70th percentile");
-  await expect(composite).toContainText("· 0.420");
+  await expect(composite.locator("b")).toHaveText("0.420");
+  await expect(composite).not.toContainText("percentile");
 });
 
 // A history row states the session's RESULT. The index used to state its

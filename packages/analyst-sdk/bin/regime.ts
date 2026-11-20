@@ -1,4 +1,4 @@
-// `bun run regime <input.csv|input.json> [--full] [--start D] [--asof D] [--factor] [--replay] [--provenance] [--methodology V]`
+// `bun run regime <input.csv|input.json> [--full] [--start D] [--asof D] [--factor] [--replay] [--provenance] [--methodology V] [--panels P,P]`
 // Prints the regime report as JSON on stdout. --methodology picks the regime
 // methodology version (default the current one): a published run replays under
 // the version it was stamped with, e.g. --methodology v3 (issue 1652). Reads one local file (and, with
@@ -14,10 +14,11 @@ import { parseInput } from "../src/input/load.ts";
 import { manifestPathFor, provenanceEnvelope, validateManifest, type InputManifest } from "../src/input/manifest.ts";
 import { buildReport, runRegime } from "../src/run.ts";
 import type { RegimeVersion } from "../src/analyze/regime-versions.ts";
+import type { Panel } from "../src/analyze/indicators.ts";
 import { parseArgs, resolveFromCaller, UsageError } from "./args.ts";
 
 const USAGE =
-  "usage: bun run regime <input.csv|input.json> [--full] [--start YYYY-MM-DD] [--asof YYYY-MM-DD] [--factor] [--replay] [--provenance] [--methodology v3|v4]";
+  "usage: bun run regime <input.csv|input.json> [--full] [--start YYYY-MM-DD] [--asof YYYY-MM-DD] [--factor] [--replay] [--provenance] [--methodology v3|v4] [--panels macro,onchain,...]";
 
 function fail(e: unknown, code: number): never {
   console.error(`${(e as Error).name}: ${(e as Error).message}`);
@@ -29,7 +30,7 @@ let args;
 try {
   args = parseArgs(process.argv.slice(2), {
     flags: ["--full", "--factor", "--replay", "--provenance"],
-    values: ["--start", "--asof", "--methodology"],
+    values: ["--start", "--asof", "--methodology", "--panels"],
     maxPositionals: 1,
   });
   if (args.positionals.length === 0) throw new UsageError("an input file is required");
@@ -57,6 +58,7 @@ try {
       asof: args.values.get("--asof"),
       factor: args.flags.has("--factor"),
       version: args.values.get("--methodology") as RegimeVersion | undefined,
+      ...(args.values.has("--panels") ? { panels: args.values.get("--panels")!.split(",") as Panel[] } : {}),
     });
   // An incomplete as-of day (issue 1655) has no figure: the typed result is
   // printed as is, and the command exits 1.

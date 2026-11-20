@@ -24,6 +24,7 @@ import { buildReport, EXTRA_IDS, runRegime as runRegimeOutcome, requireComplete,
 const runRegime = (...a: Parameters<typeof runRegimeOutcome>) => requireComplete(runRegimeOutcome(...a));
 import { computeBacktest } from "../src/analyze/backtest.ts";
 import { cutAtAsof } from "../src/prepare.ts";
+import type { Panel } from "../src/analyze/indicators.ts";
 import { expectSameUpToRounding } from "./support/numeric-diff.ts";
 import { apply1559ToDaily, apply1559ToText, type DailyEvidence } from "./support/issue-1559.ts";
 import {
@@ -39,6 +40,9 @@ import {
 } from "./support/originals.ts";
 
 setDefaultTimeout(180_000);
+// The originals were captured when the composite averaged macro and onchain
+// only (issue 1708 added factor): they are replayed with that panel set.
+const ORIGINAL_PANELS: Panel[] = ["macro", "onchain"];
 const SDK_DIR = join(import.meta.dir, "..");
 const tmp = mkdtempSync(join(tmpdir(), "analyst-sdk-parity-"));
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
@@ -56,13 +60,13 @@ for (const v of VARIANTS) {
   const csvPath = join(tmp, `${v}.csv`);
   writeFileSync(csvPath, csv);
   const history = toHistory(parseRawHistory(csv));
-  const run = runRegime(history, { version: "v3" });
+  const run = runRegime(history, { version: "v3", panels: ORIGINAL_PANELS });
   computed[v] = {
     csvPath,
     run,
     history,
     defaultEnvelope: JSON.stringify(buildReport(run), null, 2) + "\n",
-    fullFactorEnvelope: JSON.stringify(buildReport(runRegime(history, { factor: true, version: "v3" }), { full: true }), null, 2) + "\n",
+    fullFactorEnvelope: JSON.stringify(buildReport(runRegime(history, { factor: true, version: "v3", panels: ORIGINAL_PANELS }), { full: true }), null, 2) + "\n",
   };
 }
 
@@ -109,12 +113,12 @@ for (const v of VARIANTS) {
 
     test("default report envelope equals its original up to rounding; the CLI prints the in-process bytes", () => {
       expectOriginal(c.defaultEnvelope, originalFile.sdkReport(v), v);
-      expectBytes(cli([c.csvPath, "--methodology", "v3"]), c.defaultEnvelope, `${v} CLI`);
+      expectBytes(cli([c.csvPath, "--methodology", "v3", "--panels", ORIGINAL_PANELS.join(",")]), c.defaultEnvelope, `${v} CLI`);
     });
 
     test("--full --factor report envelope equals its original up to rounding; the CLI prints the in-process bytes", () => {
       expectOriginal(c.fullFactorEnvelope, originalFile.sdkReportFull(v), v);
-      expectBytes(cli([c.csvPath, "--full", "--factor", "--methodology", "v3"]), c.fullFactorEnvelope, `${v} CLI --full --factor`);
+      expectBytes(cli([c.csvPath, "--full", "--factor", "--methodology", "v3", "--panels", ORIGINAL_PANELS.join(",")]), c.fullFactorEnvelope, `${v} CLI --full --factor`);
     });
   });
 }

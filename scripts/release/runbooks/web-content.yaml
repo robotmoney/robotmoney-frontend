@@ -16,7 +16,7 @@
 # refuses a bundle with any other digest (issue 1630,
 # docs/technical/web-serving-architecture.md §5.1).
 #
-# Each step names a `kind`. The twelve kinds run once each, in this order.
+# Each step names a `kind`. The thirteen kinds run once each, in this order.
 # `irreversible` marks a step that writes to GitHub or switches what production
 # serves. The loader refuses an unknown key or kind, a duplicate id, and a kind
 # missing, repeated or out of order.
@@ -24,7 +24,7 @@ runbook: web-content
 steps:
   - id: "W01-preflight"
     kind: "preflight"
-    description: "Each --commit is on origin/main and touches web content; every path it touches outside WEB_CONTENT_PATHS is a scripts/tests/ path (carried), a doc or a comment-only JS/TS edit (left out), and each is listed; production's API commit is read from {publicOrigin}/api/version; the WEB_CONTENT_PATHS and test part of each commit is cherry-picked onto web/releases-A.B.x (or the eligibility base) in a scratch worktree; the version in frontend/package.json there is A.B.C and above every web-v* tag; the release tree's own web-client.yml, e2e-web.yml and web-tag-guard.yml can trigger W03 and W08; the release tree differs from the eligibility base (the last web-v* tag when it descends from the API commit, else the API commit) and from the API commit only inside WEB_CONTENT_PATHS and scripts/tests/; a tag the control machine's image journal shows rolled back is refused; production's running website-server (its labels: web tag, commit and bundle digest) and its previous image are read and reported, and W01 refuses when no website-server runs (no rollback target: the swap keeps a serving site image as the previous image, and on a host's first rollout keeps the nginx container, stopped, as <name>-first-rollout); the operator is a repository admin"
+    description: "Each --commit is on origin/main and touches web content; every path it touches outside WEB_CONTENT_PATHS is a scripts/tests/ path (carried), a doc or a comment-only JS/TS edit (left out), and each is listed; production's API commit is read from {publicOrigin}/api/version; the WEB_CONTENT_PATHS and test part of each commit is cherry-picked onto web/releases-A.B.x (or the eligibility base) in a scratch worktree; the version (--version, else frontend/package.json at the last --commit) is A.B.C and above every web-v* tag, and when the picked tree names another version one more commit there sets frontend/package.json to it (owner, 2026-11-20; it reaches main by a backport PR after W12); the release tree's own web-client.yml, e2e-web.yml and web-tag-guard.yml can trigger W03 and W08; the release tree differs from the eligibility base (the last web-v* tag when it descends from the API commit, else the API commit) and from the API commit only inside WEB_CONTENT_PATHS and scripts/tests/; a tag the control machine's image journal shows rolled back is refused; production's running website-server (its labels: web tag, commit and bundle digest) and its previous image are read and reported, and W01 refuses when no website-server runs (no rollback target: the swap keeps a serving site image as the previous image, and on a host's first rollout keeps the nginx container, stopped, as <name>-first-rollout); the operator is a repository admin"
     irreversible: false
   - id: "W02-branch"
     kind: "branch"
@@ -71,4 +71,8 @@ steps:
   - id: "W12-release"
     kind: "release"
     description: "The GitHub release for the tag, carrying the bundle, its .sha256 digest and its .sha256.sig signature, listing the main commits, the changed paths and each commit's paths outside WEB_CONTENT_PATHS, carried or left out; never marked latest"
+    irreversible: true
+  - id: "W13-backport"
+    kind: "backport"
+    description: "The backport PR to main (owner, 2026-11-20): the release branch's commits main lacks (git cherry, so content already on main is skipped; usually the version commit W01 added), cherry-picked (-x) onto backport/web-vA.B.C from origin/main, pushed, and a pull request to main opened; done when nothing is missing or that PR exists"
     irreversible: true

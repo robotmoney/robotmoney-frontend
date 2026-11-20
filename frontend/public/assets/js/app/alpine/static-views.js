@@ -155,6 +155,12 @@ export function camelSession(raw) {
         macroPercentile: rs.macroPercentile ?? rs.macro_percentile,
         onchainPercentile: rs.onchainPercentile ?? rs.onchain_percentile,
         factorPercentile: rs.factorPercentile ?? rs.factor_percentile,
+        // Each panel's index level, when the reading carries one (RM-211):
+        // Market context plots a panel from its level and never from its
+        // percentile, so a stored reading without levels shows panel labels.
+        macroIndex: rs.macroIndex ?? rs.macro_index ?? null,
+        onchainIndex: rs.onchainIndex ?? rs.onchain_index ?? null,
+        factorIndex: rs.factorIndex ?? rs.factor_index ?? null,
         // A whitelist drops what it does not name: without these, a reading
         // that carries its own cuts (#964) could never draw its zones.
         bucketThresholds: rs.bucketThresholds ?? rs.bucket_thresholds ?? null,

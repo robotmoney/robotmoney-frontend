@@ -39,7 +39,7 @@ import { join } from "node:path";
 import { collectRunInputs, openBackupsDir } from "../../packages/analyst-sdk/bin/backups-dir.ts";
 import { serializeInputs, type Row } from "../../packages/analyst-sdk/src/archive/format1.ts";
 import { poisonNetwork } from "./support/network-poison.ts";
-import { publishedAsofRow, replayPublishedRun, type PublishedAsofRow } from "./support/published-replay.ts";
+import { PRODUCTION_PANELS, publishedAsofRow, replayPublishedRun, type PublishedAsofRow } from "./support/published-replay.ts";
 
 const LEDGER_START = "2026-09-21";
 // Issue 1421's fix (PR 1427) merged at 2026-10-23 18:32:15 UTC; a run created
@@ -112,7 +112,7 @@ describe.skipIf(!ARCHIVE)("replay of every published production regime run from 
           continue;
         }
         const inputs = collectRunInputs(copy, run.run_key!);
-        const outcome = replayPublishedRun(serializeInputs(inputs.rows, "csv"), run.asof!, published.get(run.id!)!);
+        const outcome = replayPublishedRun(serializeInputs(inputs.rows, "csv"), run.asof!, published.get(run.id!)!, undefined, PRODUCTION_PANELS);
         results.push({
           ...base,
           status: outcome.match ? "match" : outcome.beyondRounding.length === 0 ? "rounding" : "mismatch",

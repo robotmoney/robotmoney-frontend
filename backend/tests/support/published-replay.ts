@@ -11,7 +11,7 @@
 // bits, so a run published before it differs from its replay in those bits;
 // `beyondRounding` names the fields that differ by more than that
 // (packages/analyst-sdk/tests/support/numeric-diff.ts).
-import { INDICATORS } from "../../src/analytics/analyze/indicators.ts";
+import { INDICATORS, type Panel } from "../../src/analytics/analyze/indicators.ts";
 import { canonicalStringify } from "../../src/analytics/run-ledger.ts";
 import { parseInput } from "../../../packages/analyst-sdk/src/input/load.ts";
 import { requireComplete, runRegime } from "../../../packages/analyst-sdk/src/run.ts";
@@ -93,13 +93,18 @@ export function publishedAsofRow(payloadText: string, asof: string): PublishedAs
  * with its published as-of row. `version` is the methodology version the run
  * was stamped with (issue 1652); a run replays under its own version.
  */
-export function replayPublishedRun(inputText: string, asof: string, published: PublishedAsofRow | null, version?: RegimeVersion): ReplayOutcome {
-  return replayPublishedHistory(parseInput(inputText, { replay: true }).history, asof, published, version);
+export function replayPublishedRun(inputText: string, asof: string, published: PublishedAsofRow | null, version?: RegimeVersion, panels?: Panel[]): ReplayOutcome {
+  return replayPublishedHistory(parseInput(inputText, { replay: true }).history, asof, published, version, panels);
 }
 
+// Every production run published before issue 1708 (D89) averaged macro and
+// onchain only. A replay of one of those passes this panel set; a run this code
+// publishes replays under the default (the SDK's PANELS).
+export const PRODUCTION_PANELS: Panel[] = ["macro", "onchain"];
+
 /** The same replay from an input history already in memory (the backend's vintage read through the D74 mapping). */
-export function replayPublishedHistory(history: RawIndicatorHistory, asof: string, published: PublishedAsofRow | null, version?: RegimeVersion): ReplayOutcome {
-  const run = requireComplete(runRegime(history, { asof, factor: true, ...(version ? { version } : {}) }));
+export function replayPublishedHistory(history: RawIndicatorHistory, asof: string, published: PublishedAsofRow | null, version?: RegimeVersion, panels?: Panel[]): ReplayOutcome {
+  const run = requireComplete(runRegime(history, { asof, factor: true, ...(panels ? { panels } : {}), ...(version ? { version } : {}) }));
   const last = run.dateAxis.length - 1;
   if (run.dateAxis[last] !== asof) throw new Error(`replay date axis ends ${run.dateAxis[last]}, not the run's as-of day ${asof}`);
   const r2 = run.result;

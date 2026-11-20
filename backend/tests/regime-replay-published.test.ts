@@ -41,7 +41,7 @@ import { CURRENT_REGIME_VERSION, isRegimeVersion, type RegimeVersion } from "../
 import { useCleanDatabase } from "./support/clean-db.ts";
 import { baseObservations, poisonedSource, secondObservations, type Observations } from "./support/committed-inputs.ts";
 import { poisonNetwork } from "./support/network-poison.ts";
-import { COMPARED_FIELDS, replayPublishedHistory, replayPublishedRun, type PublishedAsofRow, type ReplayOutcome } from "./support/published-replay.ts";
+import { COMPARED_FIELDS, PRODUCTION_PANELS, replayPublishedHistory, replayPublishedRun, type PublishedAsofRow, type ReplayOutcome } from "./support/published-replay.ts";
 import { numericDiff } from "../../packages/analyst-sdk/tests/support/numeric-diff.ts";
 import { canonicalStringify } from "../src/analytics/run-ledger.ts";
 import { serializeInputs } from "../../packages/analyst-sdk/src/archive/format1.ts";
@@ -253,7 +253,7 @@ describe("regime replay of a committed sample of published production runs (issu
       const poison = poisonNetwork("during replay");
       let outcome;
       try {
-        outcome = replayPublishedRun(text, run.asof, run.publishedAsofRow, SAMPLE_VERSION);
+        outcome = replayPublishedRun(text, run.asof, run.publishedAsofRow, SAMPLE_VERSION, PRODUCTION_PANELS);
       } finally {
         poison.restore();
       }
@@ -290,7 +290,7 @@ describe("regime replay of a committed sample of published production runs (issu
       // its percentile does not would replay to another label. The fields the
       // version does not change (composite, percentiles, indices) are the same
       // under both.
-      const current = replayPublishedRun(text, run.asof, run.publishedAsofRow);
+      const current = replayPublishedRun(text, run.asof, run.publishedAsofRow, undefined, PRODUCTION_PANELS);
       for (const f of ["composite", "compositePercentile", "macroIndex", "onchainIndex", "macroPercentile", "onchainPercentile", "percentiles"]) {
         expect({ run: run.runKey, field: f, value: current.fields[f] }).toEqual({ run: run.runKey, field: f, value: outcome.fields[f] });
       }

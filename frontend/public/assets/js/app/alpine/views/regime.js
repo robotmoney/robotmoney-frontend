@@ -106,7 +106,9 @@ export function registerRegimeView(Alpine) {
     backdropDate: "",
     backdropV0: false,
     setBackdrop: BRIEF.setBackdrop,
-    signalRows: BRIEF.signalRows,
+    // The snapshot carries every panel's level, so a label-only row (a panel
+    // with a label and no index) is left out here rather than drawn.
+    signalRows() { return BRIEF.signalRows.call(this).filter((/** @type {any} */ r) => r.v !== null); },
     signalZones: BRIEF.signalZones,
     signalCuts: BRIEF.signalCuts,
     // Hidden strategy lines on the backtest charts, "<market>:<strategy>".
@@ -169,13 +171,13 @@ export function registerRegimeView(Alpine) {
       }
     },
     // The labels are the API's: since methodology v4 (D84) the regime is cut on
-    // the composite and each panel on its own index. Market context is fed the
-    // index levels where the session page feeds it percentiles: the composite
-    // and each panel's index, on one 0 to 1 scale.
+    // the composite and each panel on its own index. Market context reads the
+    // index levels, as the session page does: the composite and each panel's
+    // index, on one 0 to 1 scale.
     _apply(data) {
       const l = data.latest;
       this.latest = l;
-      this.setBackdrop(l && { ...l, compositePercentile: l.composite, macroPercentile: l.macroIndex, onchainPercentile: l.onchainIndex, factorPercentile: l.factorIndex }, { date: l?.date });
+      this.setBackdrop(l, { date: l?.date });
       this.history = data.history || [];
       this.staleness = data.staleness || null;
     },

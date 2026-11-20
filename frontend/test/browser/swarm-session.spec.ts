@@ -1013,14 +1013,24 @@ test("a live aggregate reached by id draws the record from its own brief and pri
   expect(briefQueries.some((q) => q.includes(`session=${LIVE_ID}`))).toBe(true);
   expect(briefQueries.some((q) => q.includes("date="))).toBe(false);
 
-  // The market reading it was given.
+  // The market reading it was given: the composite itself on its 0 to 1 scale,
+  // never its 3-year percentile (RM-211).
   const context = page.locator("#reasoning .rr-context");
   await expect(context.locator(".sig__row.is-lead .sig__l")).toHaveText("Composite");
-  await expect(context.locator(".sig__row.is-lead .sig__v")).toHaveText("83rd");
+  await expect(context.locator(".sig__row.is-lead .sig__v")).toHaveText("0.598");
+  await expect(context.locator(".sig__row.is-lead .sig__tip b")).toHaveText("Composite 0.598 · risk-on");
+  await expect(context.locator(".sig__ticks b")).toHaveText(["0", "0.50", "1"]);
+  // No reading is printed as a rank ("83rd"), the composite's or a panel's.
+  await expect(context).not.toContainText(/\b\d{1,3}(st|nd|rd|th)\b/);
+  // A stored reading carries panel labels and percentiles but no panel level, so
+  // each panel reads as its label, with no dot on the scale.
+  await expect(context.locator(".sig__row:not(.is-lead) .sig__dot")).toHaveCount(0);
+  await expect(context.locator(".sig__row").nth(1).locator(".rr-meta__i b")).toHaveText("risk-on");
+  await expect(context.locator(".sig__row").nth(2).locator(".rr-meta__i b")).toHaveText("neutral");
   // Live method: factor is context, drawn apart.
   await expect(context.locator(".sig__row").nth(3)).toHaveClass(/is-context/);
-  // Its row's tip says so, and each label opens its panel on the regime page.
-  await expect(context.locator(".sig__row").nth(3).locator(".sig__tip")).toContainText("Not in the composite");
+  // Its row says so on hover, and each label opens its panel on the regime page.
+  await expect(context.locator(".sig__row").nth(3).locator(".rr-meta__i")).toHaveAttribute("title", /Not in the composite/);
   await expect(context.locator(".sig__row").nth(3).locator("a.sig__l")).toHaveAttribute("href", "/regime#panel-factor");
   await expect(context.locator(".sig__row.is-lead a.sig__l")).toHaveAttribute("href", "/regime#composite");
 
@@ -1032,10 +1042,10 @@ test("a live aggregate reached by id draws the record from its own brief and pri
   await expect(vote.locator('.rr-vote__dot[aria-label*=", constructive,"]')).toHaveCount(3);
   // Turnout and the mean are stated once each: the takes in the facts row, the mean on the chart's rule.
   await expect(page.locator(".rr-meta > .rr-meta__i").filter({ hasText: /^\s*Takes/ }).locator("b")).toHaveText("5");
-  // The percentile leads, as on the regime page; the raw composite is beside it.
+  // The composite leads, as on the regime page; its percentile is not shown.
   const composite = page.locator(".rr-meta > .rr-meta__i").filter({ hasText: /^\s*Composite/ });
-  await expect(composite.locator("b")).toHaveText("83rd percentile");
-  await expect(composite).toContainText("· 0.598");
+  await expect(composite.locator("b")).toHaveText("0.598");
+  await expect(composite).not.toContainText("percentile");
   await expect(vote.locator(".rr-vote__mean span")).toHaveText("Mean 64%");
   await expect(vote.locator(".rr-vote__plot")).toHaveAttribute("aria-label", /Mean confidence 64%\./);
   await expect(tally).not.toContainText(/Took part|Mean confidence/);
@@ -1257,8 +1267,37 @@ test("a v0 session imported past the archive date draws factor as the input it w
   const signal = page.locator("#reasoning .rr-context");
   await expect(signal.locator(".sig__row")).toHaveCount(4);
   await expect(signal.locator(".sig__row").nth(3)).not.toHaveClass(/is-context/);
-  await expect(signal.locator(".rr-note")).toHaveText("Each reading is a percentile of its own last three years, so the 50th is its median.");
-  await expect(signal.locator(".sig__row").nth(3).locator(".sig__tip")).toContainText("in the composite of this older reading");
+  await expect(signal.locator(".rr-note")).toHaveText("Each index is a weighted mean of its indicators' percentiles, on a scale of 0 to 1.");
+  await expect(signal.locator(".sig__row").nth(3).locator(".rr-meta__i")).toHaveAttribute("title", /in the composite of this older reading/);
+});
+
+// From v0.10.0 a session stores no composite percentile (#1685). The composite
+// still leads, and a reading that carries panel levels plots every panel on the
+// same 0 to 1 scale, never a percentile (RM-211).
+test("a reading with no composite percentile and with panel levels plots every level", async ({ page }) => {
+  const base = positionSession("2026-11-21", "robotmoney-vault", "Robot Money Vault");
+  await mockSessionApi(page, {
+    session: {
+      ...base,
+      regime_summary: {
+        regime: "risk_off", composite: 0.3246, composite_percentile: null,
+        macro_index: 0.3151, onchain_index: 0.3341, factor_index: 0.3911,
+        macro_percentile: 0.03, onchain_percentile: 0.08, factor_percentile: 0.05,
+        macro_regime: "risk_off", onchain_regime: "risk_off", factor_regime: "risk_off",
+      },
+    },
+    allocation: ALLOCATION,
+  });
+
+  await page.goto("/swarm/2026-11-21/robotmoney-vault");
+
+  const composite = page.locator(".rr-meta > .rr-meta__i").filter({ hasText: /^\s*Composite/ });
+  await expect(composite.locator("b")).toHaveText("0.325");
+  const signal = page.locator("#reasoning .rr-context");
+  await expect(signal.locator(".sig__row .sig__v")).toHaveText(["0.325", "0.315", "0.334", "0.391"]);
+  await expect(signal.locator(".sig__row .sig__dot")).toHaveCount(4);
+  await expect(signal).not.toContainText(/\b\d{1,3}(st|nd|rd|th)\b/);
+  await expect(signal.locator(".sig")).toHaveAttribute("aria-label", "Index levels, on a scale of 0 to 1: Composite 0.325, Macro 0.315, On-chain 0.334, Equity factor 0.391.");
 });
 
 // A sleeve published with no weight has none: it is not a move to zero.

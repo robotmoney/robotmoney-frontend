@@ -136,7 +136,7 @@
                 <h3 class="rr-subhead__h">Market context</h3>
               </div>
               <div class="sig" role="group"
-                   :aria-label="`Index levels, on a scale of 0 to 1: ${signalRows().map((r) => `${r.label} ${fmtNum(r.pct)}`).join(', ')}.`">
+                   :aria-label="`Index levels, on a scale of 0 to 1: ${signalRows().map((r) => `${r.label} ${fmtNum(r.v)}`).join(', ')}.`">
                 <div class="sig__scale" aria-hidden="true">
                   <span></span>
                   <span class="sig__ticks">
@@ -157,8 +157,8 @@
                             <!-- The reading beside its dot, so it reads without a hover; it
                                  turns to the dot's left near the top end, and just
                                  under the midpoint, where it would sit on the mark. -->
-                            <span class="sig__v" :class="r.pct > 0.82 || (r.pct > 0.36 && r.pct < 0.5) ? 'is-end' : ''" :style="`left:${r.at}`" x-text="fmtNum(r.pct)"></span>
-                      <span class="sig__tip" :class="r.pct < 0.2 ? 'is-start' : r.pct > 0.8 ? 'is-end' : ''" :style="`left:${r.at}`">
+                            <span class="sig__v" :class="r.v > 0.82 || (r.v > 0.36 && r.v < 0.5) ? 'is-end' : ''" :style="`left:${r.at}`" x-text="fmtNum(r.v)"></span>
+                      <span class="sig__tip" :class="r.v < 0.2 ? 'is-start' : r.v > 0.8 ? 'is-end' : ''" :style="`left:${r.at}`">
                         <b x-text="signalTip(r)"></b>
                         <span x-text="r.about"></span>
                       </span>

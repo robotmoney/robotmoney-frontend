@@ -7,7 +7,7 @@
 //
 // Grammar:
 //   composite                     the composite (the number the regime label is cut on, issue 1652)
-//   macro | onchain               a panel's index (every id in PANELS)
+//   macro | onchain | factor      a panel's index (every id in PANELS)
 //   indicator:<ID>                a registry indicator (every id in INDICATORS)
 //   research:channel_divergence   the channel-divergence composite gauge
 //   research:late_cycle           1 - the mean late-cycle gauge percentile
