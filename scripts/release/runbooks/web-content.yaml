@@ -16,7 +16,7 @@
 # refuses a bundle with any other digest (issue 1630,
 # docs/technical/web-serving-architecture.md §5.1).
 #
-# Each step names a `kind`. The twelve kinds run once each, in this order.
+# Each step names a `kind`. The thirteen kinds run once each, in this order.
 # `irreversible` marks a step that writes to GitHub or switches what production
 # serves. The loader refuses an unknown key or kind, a duplicate id, and a kind
 # missing, repeated or out of order.
@@ -71,4 +71,8 @@ steps:
   - id: "W12-release"
     kind: "release"
     description: "The GitHub release for the tag, carrying the bundle, its .sha256 digest and its .sha256.sig signature, listing the main commits, the changed paths and each commit's paths outside WEB_CONTENT_PATHS, carried or left out; never marked latest"
+    irreversible: true
+  - id: "W13-backport"
+    kind: "backport"
+    description: "The backport PR to main (owner, 2026-11-20): the release branch's commits main lacks (git cherry, so content already on main is skipped; usually the version commit W01 added), cherry-picked (-x) onto backport/web-vA.B.C from origin/main, pushed, and a pull request to main opened; done when nothing is missing or that PR exists"
     irreversible: true

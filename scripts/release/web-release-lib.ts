@@ -53,9 +53,9 @@ export type { ExecResult, StepResult } from "./sdk-release-lib.ts";
 /** The committed web content runbook. It sits outside templates/ and releases/, so ./runbook.ts never reads it. */
 export const WEB_RUNBOOK_PATH = join(dirname(fileURLToPath(import.meta.url)), "runbooks", "web-content.yaml");
 
-/** The twelve kinds, in the one order the runbook holds them (web-serving-architecture.md §5.1). */
+/** The thirteen kinds, in the one order the runbook holds them (web-serving-architecture.md §5.1). */
 export const WEB_KINDS = [
-  "preflight", "branch", "gate", "stage-up", "stage-deploy", "stage-check", "tag", "tag-guard", "host-ready", "deploy", "live-check", "release",
+  "preflight", "branch", "gate", "stage-up", "stage-deploy", "stage-check", "tag", "tag-guard", "host-ready", "deploy", "live-check", "release", "backport",
 ] as const;
 export type WebStepKind = (typeof WEB_KINDS)[number];
 
@@ -65,7 +65,7 @@ export const PRODUCTION_KINDS: readonly WebStepKind[] = Object.freeze(["tag", "t
 /** Whether each kind writes to GitHub or switches what production serves. A step's `irreversible` must say the same (stage steps write only to the stage host). */
 const KIND_IRREVERSIBLE: Readonly<Record<WebStepKind, boolean>> = Object.freeze({
   preflight: false, branch: true, gate: false, "stage-up": false, "stage-deploy": false, "stage-check": false,
-  tag: true, "tag-guard": false, "host-ready": false, deploy: true, "live-check": false, release: true,
+  tag: true, "tag-guard": false, "host-ready": false, deploy: true, "live-check": false, release: true, backport: true,
 });
 const POLLING_KINDS: readonly WebStepKind[] = ["gate", "tag-guard"];
 
@@ -718,7 +718,7 @@ function setVersion(deps: Deps, wt: string, version: string): string | undefined
   writeFileSync(path, next);
   const add = deps.git(["-C", wt, "add", "--", WEB_MANIFEST]);
   if (add.status !== 0) return `git add ${WEB_MANIFEST} failed: ${errText(add)}`;
-  const message = `chore(web): the web client is version ${version}\n\nSet on the release branch by the web content release (was ${was ?? "unset"}); it reaches main by a backport PR after the release.\n`;
+  const message = `chore(web): the web client is version ${version}\n\nSet by the web content release (was ${was ?? "unset"}): W01 on the release branch, W13 in the backport PR to main.\n`;
   const commit = deps.git(["-C", wt, "commit", "--quiet", "--no-verify", "-m", message]);
   if (commit.status !== 0) return `committing ${WEB_MANIFEST} version ${version} failed: ${errText(commit)}`;
   return undefined;
@@ -1662,6 +1662,86 @@ export function runReleaseStep(rel: Release, inputs: Inputs, deps: Deps): StepRe
   return { state: "done", detail: `created the GitHub release ${rel.tag} with the bundle, its digest and its signature` };
 }
 
+// ── W13: the backport PR ─────────────────────────────────────────────────────
+
+/** PURE. The branch W13 pushes the backport on. */
+export const backportBranchOf = (rel: Pick<Release, "tag">): string => `backport/${rel.tag}`;
+
+/**
+ * The release branch's commits main lacks, oldest first. A commit W01 cherry-picked from main (its
+ * "(cherry picked from commit <sha>)" names a main commit) is already there; the rest, usually the
+ * version commit W01 adds (owner, 2026-11-20), are backported. Commits already on main are skipped.
+ */
+function backportCommits(rel: Pick<Release, "commit" | "base">, deps: Pick<Deps, "git">): string[] | { error: string } {
+  const r = deps.git(["log", "--reverse", "--format=%H%x00%B%x01", `${rel.base}..${rel.commit}`]);
+  if (r.status !== 0) return { error: `git log ${short(rel.base)}..${short(rel.commit)} failed: ${errText(r)}` };
+  const out: string[] = [];
+  for (const rec of r.stdout.split("\x01")) {
+    const [sha = "", body = ""] = rec.trim().split("\0");
+    if (!/^[0-9a-f]{40}$/.test(sha) || isAncestor(deps as Deps, sha, "refs/remotes/origin/main")) continue;
+    const from = /\(cherry picked from commit ([0-9a-f]{40})\)/.exec(body)?.[1];
+    if (from !== undefined && isAncestor(deps as Deps, from, "refs/remotes/origin/main")) continue;
+    out.push(sha);
+  }
+  return out;
+}
+
+/** W13's done check: nothing to backport, or a pull request from backport/<tag> exists (open or merged). */
+export function checkBackport(rel: Release, deps: Deps): StepResult {
+  const todo = backportCommits(rel, deps);
+  if ("error" in todo) return failed(todo.error);
+  if (todo.length === 0) return { state: "done", detail: `main already carries every commit of ${rel.branch} up to ${short(rel.commit)}` };
+  const branch = backportBranchOf(rel);
+  const v = deps.gh(["pr", "list", "--head", branch, "--base", "main", "--state", "all", "--json", "number,state", "--limit", "1"]);
+  if (v.status !== 0) return failed(`gh pr list --head ${branch} failed: ${errText(v)}`);
+  try {
+    const prs = JSON.parse(v.stdout) as { number: number; state: string }[];
+    if (prs.length > 0) return { state: "done", detail: `the backport PR ${prs[0]!.number} (${prs[0]!.state.toLowerCase()}) carries ${rel.branch} onto main` };
+  } catch {
+    return failed(`gh pr list --head ${branch} gave no JSON`);
+  }
+  return { state: "todo", detail: `main lacks ${todo.length} commit(s) of ${rel.branch}: open the backport PR` };
+}
+
+/** W13's write: backport/<tag> from origin/main with each missing commit cherry-picked (-x), pushed, and a PR to main opened. */
+export function runBackport(rel: Release, inputs: Inputs, deps: Deps): StepResult {
+  const todo = backportCommits(rel, deps);
+  if ("error" in todo) return failed(todo.error);
+  const branch = backportBranchOf(rel);
+  const wt = join(inputs.workDir, `backport-${deps.clock()}`);
+  const add = deps.git(["worktree", "add", "--quiet", "-B", branch, wt, "refs/remotes/origin/main"]);
+  if (add.status !== 0) return failed(`git worktree add ${wt} failed: ${errText(add)}`);
+  const done = (r: StepResult): StepResult => { deps.git(["worktree", "remove", "--force", wt]); deps.git(["worktree", "prune"]); return r; };
+  for (const c of todo) {
+    // The version commit W01 adds: set main's version the same way, since the files around the line may differ.
+    const changed = deps.git(["diff-tree", "--no-commit-id", "--name-only", "-r", c]);
+    if (changed.status === 0 && changed.stdout.trim() === WEB_MANIFEST) {
+      const bumped = setVersion(deps, wt, rel.version);
+      if (bumped !== undefined) return done(failed(bumped));
+      continue;
+    }
+    const p = deps.git(["-C", wt, "cherry-pick", "-x", c]);
+    // A commit main already carries by content (the version set on main too) picks empty: skip it.
+    if (p.status !== 0 && deps.git(["-C", wt, "diff", "--quiet", "HEAD"]).status === 0 && deps.git(["-C", wt, "cherry-pick", "--skip"]).status === 0) continue;
+    if (p.status !== 0) {
+      deps.git(["-C", wt, "cherry-pick", "--abort"]);
+      return done(failed(`cherry-picking ${short(c)} onto origin/main conflicts: ${errText(p)}. Backport it by hand`));
+    }
+  }
+  const ahead = deps.git(["-C", wt, "rev-list", "--count", "refs/remotes/origin/main..HEAD"]);
+  if (ahead.status === 0 && ahead.stdout.trim() === "0") return done({ state: "done", detail: `main already carries the changes of ${rel.branch}: no backport PR needed` });
+  const push = deps.git(["-C", wt, "push", "--quiet", "--force-with-lease", "origin", `HEAD:refs/heads/${branch}`]);
+  if (push.status !== 0) return done(failed(`git push origin ${branch} failed: ${errText(push)}`));
+  const body = [
+    `Backports ${rel.tag} from \`${rel.branch}\` to main (release-runbooks.md §12, "Version backport").`,
+    "", "Commits main lacks, cherry-picked in order:", "",
+    ...todo.map((c) => `- ${c}`),
+  ].join("\n");
+  const c = deps.gh(["pr", "create", "--base", "main", "--head", branch, "--title", `chore(web): backport ${rel.tag} to main`, "--body", body]);
+  if (c.status !== 0) return done(failed(`gh pr create --head ${branch} failed: ${errText(c)}`));
+  return done({ state: "done", detail: `opened the backport PR ${c.stdout.trim()} with ${todo.length} commit(s)` });
+}
+
 // ── The runner ───────────────────────────────────────────────────────────────
 
 /** PURE. The plan's lines: each step id with its kind and IRREVERSIBLE mark. */
@@ -1704,7 +1784,8 @@ export async function runWebRelease(runbook: WebRunbook, inputs: Inputs, deps: D
       : step.kind === "host-ready" ? await checkHostReady(t, deps)
       : step.kind === "deploy" ? await checkDeploy(rel, inputs, deps)
       : step.kind === "live-check" ? liveState(live = await liveResult(rel, inputs, deps))
-      : checkReleaseStep(rel, inputs, deps);
+      : step.kind === "release" ? checkReleaseStep(rel, inputs, deps)
+      : checkBackport(rel, deps);
     if (check.state === "done") { deps.log(`[${step.id}] already done: ${check.detail}`); continue; }
     if (check.state === "failed") return stop(step.id, check.detail);
     const gated = PRODUCTION_KINDS.includes(step.kind) && stagePassed(rel, inputs, deps) === undefined;
@@ -1735,7 +1816,8 @@ export async function runWebRelease(runbook: WebRunbook, inputs: Inputs, deps: D
       : step.kind === "host-ready" ? check
       : step.kind === "deploy" ? await runDeploy(rel, inputs, deps)
       : step.kind === "live-check" ? await runLive(rel, inputs, deps, live)
-      : runReleaseStep(rel, inputs, deps);
+      : step.kind === "release" ? runReleaseStep(rel, inputs, deps)
+      : runBackport(rel, inputs, deps);
     if (result.state !== "done") return stop(step.id, result.detail);
     deps.log(`[${step.id}] done: ${result.detail}`);
   }

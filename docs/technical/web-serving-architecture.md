@@ -341,6 +341,7 @@ The web content runbook is `scripts/release/runbooks/web-content.yaml`, run by `
 | W10-deploy | Refuses a bundle whose digest is not the stage-passed digest. Sends it to production and runs `bun smoke:web` with it |
 | W11-live-check | Runs the live check against the public origin. On a failure it runs `bun smoke:web --rollback` and exits non-zero |
 | W12-release | Publishes the release notes with the bundle, its digest and its signature |
+| W13-backport | Opens the backport PR to main with the release branch commits main lacks (usually the version) |
 
 No step from W07 on writes unless a stage pass is recorded for the same bundle digest.
 

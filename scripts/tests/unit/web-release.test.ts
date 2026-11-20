@@ -161,6 +161,7 @@ interface State extends HostState {
   release?: { assets: string[] };
   /** Workflows the runner dispatched; a dispatched workflow with ci "none" then reports success. */
   dispatched: string[];
+  backportPr?: string;
   failRoute?: string;
   /** A header the fake production origin answers with another value on every page. */
   headerOverride?: Record<string, string>;
@@ -239,6 +240,8 @@ function harness(f: Fixture, state: Partial<State> = {}): Harness {
       return ok(JSON.stringify({ jobs: [{ name: job, status: "completed", conclusion: "success" }] }));
     }
     if (args[0] === "workflow" && args[1] === "run") { s.dispatched.push(args[2]!); return ok(); }
+    if (args[0] === "pr" && args[1] === "list") return ok(JSON.stringify(s.backportPr ? [{ number: 99, state: "OPEN" }] : []));
+    if (args[0] === "pr" && args[1] === "create") { s.backportPr = args[args.indexOf("--head") + 1]; return ok("https://github.com/o/r/pull/99\n"); }
     /** The files a `gh release create|upload <tag> <file>...` names: the words after the tag, up to the first flag. */
     const assetsOf = (a: string[]) => {
       const rest = a.slice(3);
@@ -401,12 +404,12 @@ const ghWrites = (h: Harness): string[][] => h.ghCalls.filter((c) => (c[0] === "
 // ── the runbook and its loader ───────────────────────────────────────────────
 
 describe("the committed runbook", () => {
-  test("holds W01-preflight to W12-release in order; W02, W07, W10 and W12 are irreversible", () => {
+  test("holds W01-preflight to W13-backport in order; W02, W07, W10, W12 and W13 are irreversible", () => {
     expect(runbook.steps.map((s) => s.id)).toEqual([
       "W01-preflight", "W02-branch", "W03-gate", "W04-stage-up", "W05-stage-deploy", "W06-stage-check",
-      "W07-tag", "W08-tag-guard", "W09-host-ready", "W10-deploy", "W11-live-check", "W12-release",
+      "W07-tag", "W08-tag-guard", "W09-host-ready", "W10-deploy", "W11-live-check", "W12-release", "W13-backport",
     ]);
-    expect(runbook.steps.filter((s) => s.irreversible).map((s) => s.id)).toEqual(["W02-branch", "W07-tag", "W10-deploy", "W12-release"]);
+    expect(runbook.steps.filter((s) => s.irreversible).map((s) => s.id)).toEqual(["W02-branch", "W07-tag", "W10-deploy", "W12-release", "W13-backport"]);
   });
 
   test("sits outside templates/ and releases/, so the platform loader never reads it", () => {
@@ -601,6 +604,19 @@ describe("W02-branch", () => {
     const again = harness(f, { ci: { "web-client.yml": "running" } });
     expect(await runWebRelease(runbook, inputs(f, [f.m1], { version: "0.2.0", dryRun: true }), again.deps)).toBe(0);
     expect(again.out.join("\n")).toContain(`[W02-branch] already done: origin/web/releases-0.2.x is at ${tip}`);
+  });
+
+  test("W13 opens one backport PR to main with only the version commit; a rerun finds it", async () => {
+    const f = fixture();
+    const h = harness(f);
+    expect(await runWebRelease(runbook, inputs(f, [f.m1], { version: "0.2.1" }), h.deps), h.out.join("\n")).toBe(0);
+    expect(h.state.backportPr).toBe("backport/web-v0.2.1");
+    expect(sh(f.bare, "log", "--format=%s", "main..backport/web-v0.2.1").split("\n")).toEqual(["chore(web): the web client is version 0.2.1"]);
+    expect(h.out.join("\n")).toContain("[W13-backport] done: opened the backport PR");
+    const again = harness(f);
+    again.state.backportPr = "backport/web-v0.2.1";
+    expect(await runWebRelease(runbook, inputs(f, [f.m1], { version: "0.2.1" }), again.deps)).toBe(0);
+    expect(again.out.join("\n")).toContain("[W13-backport] already done: the backport PR 99");
   });
 
   test("refuses a named main commit that touches only backend/src/** before any push", async () => {
