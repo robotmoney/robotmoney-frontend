@@ -7,7 +7,7 @@ import { apiContractProblems, EXPECTED_CONTRACT } from "../../release/version-ch
 import { envMap } from "../../release/version-checks/v0.10.0/_flow.ts";
 import { flowProblems, type FlowRead } from "../../release/version-checks/v0.10.0/flow-index.ts";
 import { buybacksProblems, MIGRATION as BUYBACKS_MIGRATION } from "../../release/version-checks/v0.10.0/buybacks-disabled.ts";
-import { bucketOf, cutsOf, labelProblems, ledgerProblems, readLedger } from "../../release/version-checks/v0.10.0/regime-v5.ts";
+import { bucketOf, cutsOf, labelProblems, ledgerProblems, readLedger } from "../../release/version-checks/v0.10.0/regime-v4.ts";
 import { FILES, pageProblems } from "../../release/version-checks/v0.10.0/regime-page.ts";
 import { BAA10Y_FIRST_BY, BAA10Y_MIN_ROWS, DEFAULT_WAIT_MINUTES, STAGE_WAIT_MINUTES, baa10yProblems, compositeInputProblems, legProblems } from "../../release/version-checks/v0.10.0/source-data.ts";
 import { loadReleaseRunbook } from "../../release/runbook.ts";
@@ -99,7 +99,7 @@ describe("Q40-buybacks-disabled/C28-buybacks-disabled (PR 1686, migration 0133)"
   });
 });
 
-describe("Q41-regime-v5/C29-regime-v5 (PR 1665, D86)", () => {
+describe("Q41-regime-v4/C29-regime-v4 (PR 1665, D84, D88)", () => {
   const p = (date: string, composite: number | null, regime: string | null) => ({ date, composite, regime });
   const day = (n: number) => new Date(Date.UTC(2026, 10, 1 + n)).toISOString().slice(0, 10);
   const run = (values: number[], regimes: string[]) => values.map((v, i) => p(day(i), v, regimes[i]!));
@@ -123,7 +123,7 @@ describe("Q41-regime-v5/C29-regime-v5 (PR 1665, D86)", () => {
     const r = labelProblems(h, day(0));
     expect(r.problems.join()).toContain("the label is neutral");
   });
-  test("days before the first v5 run are frozen and not graded", () => {
+  test("days before the first v4 run are frozen and not graded", () => {
     const h = run([0.8, 0.8, 0.8, 0.8, 0.8, 0.8], ["neutral", "neutral", "neutral", "neutral", "neutral", "neutral"]);
     expect(labelProblems(h, day(6)).problems).toEqual([]);
     expect(labelProblems(h, day(5)).problems.length).toBe(1);
@@ -133,15 +133,15 @@ describe("Q41-regime-v5/C29-regime-v5 (PR 1665, D86)", () => {
     expect(labelProblems(h, day(0)).problems).toEqual([]);
     expect(labelProblems([p(day(0), 1.4, "risk_on")], day(0)).problems.join()).toContain("outside 0 to 1");
   });
-  test("the ledger must end at v5 with a succeeded v5 run", () => {
-    expect(ledgerProblems({ newestLabel: "v5", v5Start: "2026-11-20" })).toEqual([]);
-    expect(ledgerProblems({ newestLabel: "v3", v5Start: null }).join()).toContain("not v5");
-    expect(ledgerProblems({ newestLabel: "v5", v5Start: null }).join()).toContain("no v5 run has succeeded");
+  test("the ledger must end at v4 with a succeeded v4 run", () => {
+    expect(ledgerProblems({ newestLabel: "v4", v4Start: "2026-11-20" })).toEqual([]);
+    expect(ledgerProblems({ newestLabel: "v3", v4Start: null }).join()).toContain("not v4");
+    expect(ledgerProblems({ newestLabel: "v4", v4Start: null }).join()).toContain("no v4 run has succeeded");
   });
-  test("grading starts at the first v5 regime run that published its own as-of day, never at a research run or an empty artifact", async () => {
+  test("grading starts at the first v4 regime run that published its own as-of day, never at a research run or an empty artifact", async () => {
     const seen: string[] = [];
-    const db = { async query<T>(text: string): Promise<T[]> { seen.push(text); return [{ label: "v5", asof: "2026-11-20" }] as unknown as T[]; } };
-    expect((await readLedger(db)).v5Start).toBe("2026-11-20");
+    const db = { async query<T>(text: string): Promise<T[]> { seen.push(text); return [{ label: "v4", asof: "2026-11-20" }] as unknown as T[]; } };
+    expect((await readLedger(db)).v4Start).toBe("2026-11-20");
     const start = seen.find((q) => q.includes("min(r.asof)"))!;
     expect(start).toContain("r.tool_id = 'regime'");
     expect(start).toContain("artifact_kind = 'regime_snapshots'");
@@ -150,16 +150,18 @@ describe("Q41-regime-v5/C29-regime-v5 (PR 1665, D86)", () => {
   });
 });
 
-describe("Q42-regime-page/C30-regime-page (PR 1663)", () => {
+describe("Q42-regime-page/C30-regime-page (PR 1663, PR 1694)", () => {
   const served = () => FILES.map((f) => ({ path: f.path, status: 200, text: readFileSync(join(repoRoot, "frontend", "public", f.path), "utf8") }));
   test("passes on the files this commit serves", () => {
     expect(pageProblems(served())).toEqual([]);
   });
-  test("red: a missing file, a 404, the old import and a dial that reads the percentile", () => {
-    expect(pageProblems(served().slice(1)).join()).toContain("regime-scale.js was not read");
+  test("red: a missing file, a 404, a client-side re-cut and a dial that reads the percentile", () => {
+    expect(pageProblems(served().slice(1)).join()).toContain("regime.js was not read");
     expect(pageProblems(served().map((a, i) => (i === 0 ? { ...a, status: 404 } : a))).join()).toContain("404");
-    expect(pageProblems(served().map((a, i) => (i === 1 ? { ...a, text: a.text.replace("readOnComposite", "x") } : a))).join()).toContain("imports readOnComposite");
-    expect(pageProblems(served().map((a, i) => (i === 2 ? { ...a, text: `${a.text}\nconst v = model.percentile;` } : a))).join()).toContain("still reads the percentile");
+    expect(pageProblems(served().map((a, i) => (i === 0 ? { ...a, text: `import { readOnComposite } from "../../lib/regime-scale.js";
+${a.text}` } : a))).join()).toContain("client-side re-cut");
+    expect(pageProblems(served().map((a, i) => (i === 1 ? { ...a, text: `${a.text}
+const v = model.percentile;` } : a))).join()).toContain("reads the dial from value");
   });
 });
 

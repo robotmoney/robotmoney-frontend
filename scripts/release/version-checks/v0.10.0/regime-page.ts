@@ -1,15 +1,15 @@
-// Q42-regime-page/C30-regime-page (PR 1663, PR 1685; issue 1666): the site serves the page that reads the composite on
-// its own 0 to 1 scale. Read-only: GETs of three site files through the public origin, each with a one-off query value.
+// Q42-regime-page/C30-regime-page (PR 1663, PR 1685, PR 1694; issue 1666): the site serves the page that shows the
+// API's labels, cut on the composite under methodology v4 (D84, D88), and reads the composite on its own 0 to 1 scale.
+// Read-only: GETs of two site files through the public origin, each with a one-off query value.
 //
 // WHAT IT REQUIRES:
-//   - /assets/js/app/lib/regime-scale.js answers 200 and exports readOnComposite (the module PR 1663 added);
-//   - /assets/js/app/alpine/views/regime.js answers 200 and imports readOnComposite from it;
+//   - /assets/js/app/alpine/views/regime.js answers 200, applies the API's data as served (`_apply(data)`) and no
+//     longer imports the client-side re-cut of PR 1663 (lib/regime-scale.js, removed by PR 1694);
 //   - /assets/js/app/alpine/regime-dial.js answers 200 and reads the dial from `value`, not from `percentile`.
 import type { VersionCheck } from "../../version-check.ts";
 
 export const FILES = [
-  { path: "/assets/js/app/lib/regime-scale.js", must: /export function readOnComposite\b/, what: "exports readOnComposite" },
-  { path: "/assets/js/app/alpine/views/regime.js", must: /import \{ readOnComposite \} from "\.\.\/\.\.\/lib\/regime-scale\.js(\?v=[0-9a-f]+)?"/, what: "imports readOnComposite" },
+  { path: "/assets/js/app/alpine/views/regime.js", must: /\b_apply\(data\)/, mustNot: /regime-scale\.js/, what: "shows the API's labels, not a client-side re-cut" },
   { path: "/assets/js/app/alpine/regime-dial.js", must: /\bvalue\b/, mustNot: /\.percentile\b/, what: "reads the dial from value, not percentile" },
 ] as const;
 
@@ -22,7 +22,7 @@ export function pageProblems(answers: readonly { path: string; status: number; t
     else if (a.status !== 200) out.push(`${f.path} answered ${a.status}, not 200`);
     else {
       if (!f.must.test(a.text)) out.push(`${f.path} does not satisfy: ${f.what}`);
-      if ("mustNot" in f && f.mustNot.test(a.text)) out.push(`${f.path} still reads the percentile (${f.what})`);
+      if ("mustNot" in f && f.mustNot.test(a.text)) out.push(`${f.path} breaks: ${f.what}`);
     }
   }
   return out;
