@@ -1183,6 +1183,7 @@ describe("W04 to W06: stage QA before any production step writes", () => {
   test("W04 deploys production's serving bundle to stage by name before W05, so stage holds a previous image", async () => {
     const f = fixture();
     const prior: FakeBundle = { tag: "web-v0.1.0", version: "0.1.0", commit: f.c0, digest: "b".repeat(64), files: { "index.html": "home\n", "version.json": "{}" } };
+    sh(f.work, "tag", "web-v0.1.0", f.c0);
     const h = harness(f, { bundle: prior, image: "sha256:site-prior", released: { "web-v0.1.0": prior } });
     expect(await runWebRelease(runbook, inputs(f, [f.m1, f.m2]), h.deps), h.out.join("\n")).toBe(0);
     const tip = remoteRef(f, "refs/heads/web/releases-0.2.x")!;
@@ -1194,6 +1195,15 @@ describe("W04 to W06: stage QA before any production step writes", () => {
     expect(stagePriorArgv(inputs(f, []), { serving: { container: "c", tag: "web-v0.1.0" } })?.slice(7, 9)).toEqual(["--bundle", "web-v0.1.0"]);
     // On production's first rollout (nginx serves) W05's swap keeps stage's nginx container: nothing is deployed by name.
     expect(stagePriorArgv(inputs(f, []), { serving: { container: "c", image: "sha256:nginx" } })).toBeUndefined();
+  });
+
+  test("W04 deploys nothing by name when production's bundle has no git tag (a platform release deployed it)", async () => {
+    const f = fixture();
+    const prior: FakeBundle = { tag: "web-v0.1.0", version: "0.1.0", commit: f.c0, digest: "b".repeat(64), files: { "index.html": "home\n", "version.json": "{}" } };
+    const h = harness(f, { bundle: prior, image: "sha256:site-prior" });
+    expect(await runWebRelease(runbook, inputs(f, [f.m1, f.m2]), h.deps), h.out.join("\n")).toBe(0);
+    const onStage = h.state.execCalls.filter((c) => c.includes(STAGE.host));
+    expect(onStage.map((c) => c[c.indexOf("--bundle") + 1]!)).not.toContain("web-v0.1.0");
   });
 
   test("a stage failure stops the run at W06: no tag, nothing on production, stage left up for inspection", async () => {

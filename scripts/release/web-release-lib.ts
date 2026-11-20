@@ -1126,7 +1126,7 @@ export async function checkStageUp(rel: Release, inputs: Inputs, deps: Deps): Pr
   if (api.body.commit !== rel.apiCommit) {
     return { state: "todo", detail: `the stage target runs ${String(api.body.commit).slice(0, 12)}, not production's API commit ${short(rel.apiCommit)}: rebuild it from a fresh production dump` };
   }
-  const want = rel.serving?.tag;
+  const want = taggedServing(rel, deps);
   if (want === undefined) return { state: "done", detail: `the stage target runs production's API commit ${short(rel.apiCommit)}; production serves no signed bundle yet, so W05's swap keeps stage's nginx container as the rollback target` };
   const web = await readHostWeb(inputs.stage, deps);
   if ("error" in web) return failed(web.error);
@@ -1134,6 +1134,18 @@ export async function checkStageUp(rel: Release, inputs: Inputs, deps: Deps): Pr
     return { state: "todo", detail: `stage serves ${web.web.tag ?? "no signed bundle"}, not production's ${want}: deploy ${want} there by name` };
   }
   return { state: "done", detail: `the stage target runs production's API commit ${short(rel.apiCommit)} and serves production's ${want}` };
+}
+
+/**
+ * The web tag production serves, when it is a real git tag (so its GitHub release can be deployed by name).
+ * A bundle a platform release deployed carries a `web-v<version>` label with no tag and no release
+ * (servingVersionProblem): stage cannot fetch it by name, so W04 treats it as no signed bundle and W05's
+ * swap keeps stage's own site as the rollback target.
+ */
+function taggedServing(rel: Pick<Release, "serving">, deps: Pick<Deps, "git">): string | undefined {
+  const tag = rel.serving?.tag;
+  if (tag === undefined) return undefined;
+  return deps.git(["rev-parse", "--verify", "--quiet", `refs/tags/${tag}^{commit}`]).status === 0 ? tag : undefined;
 }
 
 /** W04's write: the stage target from a fresh production dump, at production's running commit, then production's serving bundle there by name. */
@@ -1146,7 +1158,7 @@ export async function runStageUp(rel: Release, inputs: Inputs, deps: Deps): Prom
       if (r.status !== 0) return failed(`${cmd.join(" ")} exited ${r.status}: ${errText(r)}`);
     }
   }
-  const prior = stagePriorArgv(inputs, rel);
+  const prior = taggedServing(rel, deps) !== undefined ? stagePriorArgv(inputs, rel) : undefined;
   if (prior !== undefined) {
     deps.log(`[web-release] ${prior.join(" ")} (production's serving bundle, so stage holds a previous image)`);
     const r = deps.exec(prior);
