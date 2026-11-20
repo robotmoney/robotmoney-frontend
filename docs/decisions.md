@@ -6528,6 +6528,14 @@ its amendments stand.
 ---
 
 <a id="d82"></a>
+
+**Amendment (version on the release branch, owner, 2026-11-20).** (3) and (4): a new web version is
+set on `web/releases-A.B.x` itself, never by a `main` PR first. The owner: "this should not require a
+PR, you should have made this change on the QA branch and only later backported the version number
+onto main." `bun run release:web --version A.B.C` adds one commit on the release branch that sets
+`frontend/package.json`'s version. The version reaches `main` by a backport PR after the release
+(release-runbooks.md §12).
+
 ## D82 — One named exception to D75: the csvb-backup container reads the read replica as rm_readonly through a file (amends D75; cites D72, D80, D47; owner, 2026-11-11)
 
 **Status:** Accepted 2026-11-11 (owner). Built by issue 1608: `packages/csvb/src/serve.ts`, `packages/csvb/Dockerfile`, the `csvb-backup` service in `docker-compose.yml`. Specified in `docs/technical/smoke-production-spec.md` section 3.

@@ -34,7 +34,7 @@
 // done and continues at the first that is not; `--dry-run` runs only the
 // preflight and the checks.
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { compareSemver, SEMVER } from "../check-analyst-sdk-tag.ts";
@@ -591,7 +591,7 @@ export async function preflight(inputs: Inputs, deps: Deps): Promise<{ release: 
   // The candidate: the branch tip (or, for a new branch, the base) with each named commit cherry-picked, in order.
   const tipRead = deps.git(["rev-parse", "--verify", "--quiet", `refs/remotes/origin/${branch}^{commit}`]);
   const start = tipRead.status === 0 ? tipRead.stdout.trim() : base;
-  const built = buildCandidate(deps, start, commits, outside, inputs.workDir);
+  const built = buildCandidate(deps, start, commits, outside, inputs.workDir, version);
   if ("error" in built) return { errors: [built.error] };
   const commit = built.commit;
   const atCandidate = versionAt(deps, commit);
@@ -603,7 +603,7 @@ export async function preflight(inputs: Inputs, deps: Deps): Promise<{ release: 
   if (!isAncestor(deps, base, commit)) {
     errors.push(
       `the release commit ${short(commit)} on ${branch} does not descend from the base ${short(base)} (${baseName}): ${branch} was cut from another release, ` +
-        `most likely before production's last platform release. Ship on a new line: bump A.B in ${WEB_MANIFEST} on main and name that commit too`,
+        `most likely before production's last platform release. Ship on a new line: pass --version with a new A.B`,
     );
   } else {
     const fromBase = diffPaths(deps, base, commit);
@@ -697,20 +697,50 @@ export function outsideLines(outside: readonly OutsidePath[]): string[] {
 }
 
 /**
+ * Set WEB_MANIFEST's version in the scratch worktree and commit it, unless it
+ * already says `version`. Only the version line changes. Undefined on success,
+ * else why it failed.
+ */
+function setVersion(deps: Deps, wt: string, version: string): string | undefined {
+  const head = deps.git(["-C", wt, "rev-parse", "HEAD"]);
+  if (head.status !== 0) return `git rev-parse in ${wt} failed: ${errText(head)}`;
+  const was = versionAt(deps, head.stdout.trim());
+  if (was === version) return undefined;
+  const path = join(wt, WEB_MANIFEST);
+  let text: string;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch (e) {
+    return `reading ${WEB_MANIFEST} failed: ${(e as Error).message}`;
+  }
+  const next = text.replace(/("version"\s*:\s*)"[^"]*"/, `$1"${version}"`);
+  if (next === text) return `${WEB_MANIFEST} has no "version" field to set to ${version}`;
+  writeFileSync(path, next);
+  const add = deps.git(["-C", wt, "add", "--", WEB_MANIFEST]);
+  if (add.status !== 0) return `git add ${WEB_MANIFEST} failed: ${errText(add)}`;
+  const message = `chore(web): the web client is version ${version}\n\nSet on the release branch by the web content release (was ${was ?? "unset"}); it reaches main by a backport PR after the release.\n`;
+  const commit = deps.git(["-C", wt, "commit", "--quiet", "--no-verify", "-m", message]);
+  if (commit.status !== 0) return `committing ${WEB_MANIFEST} version ${version} failed: ${errText(commit)}`;
+  return undefined;
+}
+
+/**
  * The candidate commit: `start` with each commit not already on it
  * cherry-picked (-x) in a scratch worktree, keeping its WEB_CONTENT_PATHS and
  * test part. A doc or comment-only path is put back to `start`'s state,
  * including after a conflict there; a conflict in a content or test path stops
- * the run.
+ * the run. When the picked tree's WEB_MANIFEST names another version, one more
+ * commit on the branch sets it (owner, 2026-11-20: the version is set on the
+ * release branch, never by a main PR first; it reaches main afterwards).
  */
 function buildCandidate(
-  deps: Deps, start: string, commits: readonly string[], outside: readonly OutsidePath[], workDir: string,
+  deps: Deps, start: string, commits: readonly string[], outside: readonly OutsidePath[], workDir: string, version: string,
 ): { commit: string } | { error: string } {
   const log = deps.git(["log", "--format=%B", `refs/remotes/origin/main..${start}`]);
   if (log.status !== 0) return { error: `git log origin/main..${short(start)} failed: ${errText(log)}` };
   const picked = new Set([...log.stdout.matchAll(/\(cherry picked from commit ([0-9a-f]{40})\)/g)].map((m) => m[1]!));
   const todo = commits.filter((c) => !picked.has(c) && !isAncestor(deps, c, start));
-  if (todo.length === 0) return { commit: start };
+  if (todo.length === 0 && versionAt(deps, start) === version) return { commit: start };
   const wt = join(workDir, `candidate-${deps.clock()}`);
   const add = deps.git(["worktree", "add", "--quiet", "--detach", wt, start]);
   if (add.status !== 0) return { error: `git worktree add ${wt} failed: ${errText(add)}` };
@@ -743,6 +773,8 @@ function buildCandidate(
     const commit = deps.git(["-C", wt, "commit", "--quiet", "--no-verify", "--allow-empty", `--author=${author}`, `--date=${date}`, "-m", message]);
     if (commit.status !== 0) return abort(`committing the web content of ${short(c)} failed: ${errText(commit)}`);
   }
+  const bumped = setVersion(deps, wt, version);
+  if (bumped !== undefined) return abort(bumped);
   const head = deps.git(["-C", wt, "rev-parse", "HEAD"]);
   cleanup();
   if (head.status !== 0) return { error: `git rev-parse in ${wt} failed: ${errText(head)}` };
