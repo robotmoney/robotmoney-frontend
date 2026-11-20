@@ -260,7 +260,8 @@ describe("parity: original, shared and generalized paths", () => {
   test("fixture, two-panel result: complete payload with daily values is byte-identical on all three paths", () => {
     // The pinned pre-refactor bytes were computed under methodology v3 (labels
     // cut on the rolling percentile), so this run is v3 (issue 1652).
-    const run = runRegime(raw, { version: "v3" });
+    // The pinned bytes are also from the two-panel composite (before issue 1708).
+    const run = runRegime(raw, { version: "v3", panels: ["macro", "onchain"] });
     const out = threeWay(run.dateAxis, run.result, extras);
     // Pinned bytes of the pre-refactor output, daily values included (main 408cd875, computed from the unmodified main checkout).
     // The frozen reference still produces them; the shared output matches it up to rounding (D78).
@@ -409,7 +410,7 @@ describe("reference backtest: label shape, referenceStrategies and fill policies
     const { regime, panelRegimes, panels } = run.result;
     expect(computeBacktest(run.dateAxis, { regime, panelRegimes, panels }, extras)).toEqual(shipped);
     expect(computeBacktest(run.dateAxis, { regime, panelRegimes }, extras)).toEqual(shipped);
-    expect(Object.keys(referenceStrategies(run.result))).toEqual(["composite", "macro", "onchain", "macro_inverted", "conservative", "aggressive"]);
+    expect(Object.keys(referenceStrategies(run.result))).toEqual(["composite", "macro", "onchain", "factor", "macro_inverted", "conservative", "aggressive"]);
     expect(referenceStrategies(run.result).composite).toEqual(run.result.regime);
   });
 

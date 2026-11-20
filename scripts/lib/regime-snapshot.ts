@@ -72,7 +72,7 @@ export function regimeSnapshotHtml(latest: Latest | null | undefined): string {
   const idx = panels.map((p) => `${PANEL_LABEL[p] || p} index ${fix2(latest[p + "Index"])}`).join(", ");
   const out: string[] = [];
   out.push(`<h3>The regime on ${esc(longDate(latest.date))}</h3>`);
-  out.push(`<p>${esc(REGIME_LABEL[latest.regime] || latest.regime || "No reading")}. Composite ${esc(fix2(latest.composite))}, on a scale of 0 (risk-off) to 1 (risk-on): below ${esc(fix2(lo))} reads risk-off, above ${esc(fix2(hi))} risk-on, neutral between. A new label holds after 5 consecutive trading days in its bucket, or at once on a single-day move larger than 2σ. ${esc(idx)}, each from 0 (risk-off) to 1 (risk-on). The composite is the mean of the macro and on-chain indices; the equity factor index is tracked for context and left out of it.</p>`);
+  out.push(`<p>${esc(REGIME_LABEL[latest.regime] || latest.regime || "No reading")}. Composite ${esc(fix2(latest.composite))}, on a scale of 0 (risk-off) to 1 (risk-on): below ${esc(fix2(lo))} reads risk-off, above ${esc(fix2(hi))} risk-on, neutral between. A new label holds after 5 consecutive trading days in its bucket, or at once on a single-day move larger than 2σ. ${esc(idx)}, each from 0 (risk-off) to 1 (risk-on). The composite is the equal-weight mean of the panel indices it includes: macro, on-chain and equity factor.</p>`);
 
   const inds: Latest[] = Array.isArray(latest.indicators) ? latest.indicators : [];
   if (inds.length) {

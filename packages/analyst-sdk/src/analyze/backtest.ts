@@ -731,7 +731,9 @@ export interface BacktestLabels {
 // aggressive (generalized to N panels; they reduce to the original 2-panel
 // truth tables exactly when N = 2).
 export function referenceStrategies(labels: BacktestLabels): Record<string, (string | null)[]> {
-  const panels = labels.panels || PANELS;
+  // Default: the included panels the labels carry (a caller's labels may
+  // predate a panel, e.g. two-panel labels from before issue 1708).
+  const panels = labels.panels || PANELS.filter((p) => labels.panelRegimes[p]);
   const strategies: Record<string, (string | null)[]> = { composite: [...labels.regime] };
   for (const p of panels) strategies[p] = [...labels.panelRegimes[p]!];
   if (labels.panelRegimes.macro) {

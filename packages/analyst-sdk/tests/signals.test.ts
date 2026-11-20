@@ -145,7 +145,7 @@ describe("parseSignalName", () => {
   });
 
   test("throws on other malformed names", () => {
-    for (const bad of ["mean(macro)", "mean(macro,)", "inverse()", "mean(macro,onchain", "mean(macro,(onchain))", "factor", "indicator:", "Composite", "median(macro,onchain)"]) {
+    for (const bad of ["mean(macro)", "mean(macro,)", "inverse()", "mean(macro,onchain", "mean(macro,(onchain))", "indicator:", "Composite", "median(macro,onchain)"]) {
       expect(() => parseSignalName(bad)).toThrow(SignalNameError);
     }
   });

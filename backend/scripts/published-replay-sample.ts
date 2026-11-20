@@ -20,7 +20,7 @@ import { join, resolve } from "node:path";
 import { gzipSync } from "node:zlib";
 import { collectRunInputs, openBackupsDir } from "../../packages/analyst-sdk/bin/backups-dir.ts";
 import { serializeInputs } from "../../packages/analyst-sdk/src/archive/format1.ts";
-import { COMPARED_FIELDS, publishedAsofRow, replayPublishedRun, type PublishedAsofRow } from "../tests/support/published-replay.ts";
+import { COMPARED_FIELDS, PRODUCTION_PANELS, publishedAsofRow, replayPublishedRun, type PublishedAsofRow } from "../tests/support/published-replay.ts";
 
 const argv = process.argv.slice(2);
 const opt = (name: string) => {
@@ -73,7 +73,7 @@ const meta = runs.map((r, idx) => {
   // values, packages/analyst-sdk/README.md). The differing fields are pinned
   // here with a hash of the whole replayed row, never tolerated: any change in
   // any replayed value, or in which fields differ, fails the test.
-  const outcome = replayPublishedRun(text, r.asof!, pub.asofRow as PublishedAsofRow);
+  const outcome = replayPublishedRun(text, r.asof!, pub.asofRow as PublishedAsofRow, undefined, PRODUCTION_PANELS);
   return {
     index: idx,
     runKey: r.run_key!,

@@ -21,7 +21,7 @@
 // by inverseCorrelationWeights' minValidObs) and logged loudly. The seededProvider
 // is retained ONLY for the hermetic unit-test tools (analyze/regime.ts etc.) and is
 // never referenced on this path. Tests inject a fixture-backed AnalyticsDataSource.
-import { DAY_RULE, INDICATORS, PANELS, fillMaxAgeDays, fillPolicyOf, type DayRule } from "./analyze/indicators.ts";
+import { ALL_PANELS, DAY_RULE, INDICATORS, PANELS, fillMaxAgeDays, fillPolicyOf, type DayRule } from "./analyze/indicators.ts";
 import { LEDGER_EXTRA_KEYS, RATIO_IDS, STORED_RATIO_IDS, STORED_UNDER, inputHistoryFromStorage, storedIndicatorId } from "./extras.ts";
 import { ratiosFromLegs } from "../../../packages/analyst-sdk/src/transform/ratios.ts";
 import { computeRegime, type RegimeComputeResult } from "./analyze/compute.ts";
@@ -497,8 +497,8 @@ export async function runAnalytics(
     collector.stage("transform", "ok", `built ${dateAxis.length}-day date axis and aligned/transformed ${INDICATORS.length} indicator(s)`, t0);
 
     t0 = new Date();
-    const r2 = computeRegime(transformed, dateAxis, PANELS, ages, undefined, regimeVersion); // [macro, onchain]
-    const r3 = computeRegime(transformed, dateAxis, ["macro", "onchain", "factor"], ages, undefined, regimeVersion); // +factor
+    const r2 = computeRegime(transformed, dateAxis, PANELS, ages, undefined, regimeVersion); // the included panels (the composite)
+    const r3 = computeRegime(transformed, dateAxis, ALL_PANELS, ages, undefined, regimeVersion); // every panel, included or not
 
     // Predictive correlations + regime backtest — computed from the SAME 2-panel
     // composite the original main snapshot uses, over the chart-overlay extras
@@ -932,7 +932,7 @@ function buildSnapshotRows(
       // Panel index cards rendered by the /regime view. Three panels: the 2-panel
       // composite (macro + on-chain) plus the display-only Equity factor index.
       // Asof-only, matching the other dashboard-level blobs below.
-      panels: isLatest ? ["macro", "onchain", "factor"] : null,
+      panels: isLatest ? ALL_PANELS : null,
       // Backtest + predictive correlations are asof-only (baked on the latest row,
       // matching the original snapshot); historical rows carry null.
       backtest: isLatest ? backtest : null,

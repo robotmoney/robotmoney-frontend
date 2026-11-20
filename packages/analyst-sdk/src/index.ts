@@ -6,8 +6,8 @@ export {
 } from "./prepare.ts";
 export { computeRegime, regimeLabels, type RegimeComputeResult } from "./analyze/compute.ts";
 export {
-  INDICATORS, PANELS, FillPolicyError, fillPolicyOf, fillMaxAgeDays, DAY_RULE, DAY_RULES,
-  type Indicator, type Panel, type FillPolicy, type DayRule,
+  INDICATORS, PANELS, ALL_PANELS, PANEL_MEMBERSHIP, FillPolicyError, fillPolicyOf, fillMaxAgeDays, DAY_RULE, DAY_RULES,
+  type Indicator, type Panel, type PanelMembership, type FillPolicy, type DayRule,
 } from "./analyze/indicators.ts";
 export { computeCorrelations, type CorrelationsPayload } from "./analyze/correlations.ts";
 export {

@@ -9,7 +9,7 @@
 import { createHash } from "node:crypto";
 import type { RawIndicatorHistory } from "../types.ts";
 import { runRegime, requireComplete, BACKFILL_START, type RunResult } from "../run.ts";
-import { INDICATORS, PANELS } from "../analyze/indicators.ts";
+import { INDICATORS, PANELS, type Panel } from "../analyze/indicators.ts";
 import { combineAggressiveN, combineConservativeN } from "../analyze/backtest.ts";
 import { CURRENT_REGIME_VERSION } from "../analyze/regime-versions.ts";
 
@@ -145,13 +145,13 @@ export function labelAt(run: RunResult, date: string, asof: string): AsofLabel {
  * An incomplete as-of day (issue 1655) has no figure: every label, value and
  * indicator of its AsofLabel is null.
  */
-export function asofLabel(raw: RawIndicatorHistory, d: DecisionDate, opts: { start?: string } = {}): AsofLabel {
-  const run = runRegime(raw, { asof: d.asof, ...(opts.start ? { start: opts.start } : {}) });
+export function asofLabel(raw: RawIndicatorHistory, d: DecisionDate, opts: { start?: string; panels?: readonly Panel[] } = {}): AsofLabel {
+  const run = runRegime(raw, { asof: d.asof, ...(opts.start ? { start: opts.start } : {}), ...(opts.panels ? { panels: opts.panels } : {}) });
   if (run.kind === "complete") return labelAt(run, d.date, d.asof);
   const indicators: Record<string, number | null> = {};
   for (const ind of INDICATORS) indicators[ind.id] = null;
   const panels: Record<string, PanelLabel> = {};
-  for (const p of PANELS) panels[p] = { label: null, index: null, percentile: null };
+  for (const p of opts.panels ?? PANELS) panels[p] = { label: null, index: null, percentile: null };
   return { date: d.date, asof: d.asof, label: null, conservative: null, aggressive: null, composite: null, compositePercentile: null, panels, indicators };
 }
 

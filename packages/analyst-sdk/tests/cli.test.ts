@@ -58,7 +58,7 @@ describe("arguments", () => {
     [[P, "--asof", "2024-01-05", "--asof", "2024-01-06"], /--asof given more than once/],
     [[P, "--full", "--full"], /--full given more than once/],
     [[P, "--bogus"], /unknown option --bogus/],
-    [[P, "--panels", "macro"], /--panels was replaced by --factor/],
+    [[P, "--panels", "bogus"], /panels must be a non-empty list/],
     [[P, "--asof"], /--asof needs a value/],
     [[P, "--start", "--full"], /--start needs a value/],
     [[P, "--asof", "banana"], /asof must be a real date/],

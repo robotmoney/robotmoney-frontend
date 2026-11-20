@@ -52,7 +52,9 @@
 // on the regime labels), or from the originals' daily files.
 import { createRequire } from "node:module";
 import { describe, test, expect } from "bun:test";
-import { PANELS } from "../src/analytics/analyze/indicators.ts";
+import type { Panel } from "../src/analytics/analyze/indicators.ts";
+// The originals predate issue 1708: their composite is macro and onchain only.
+const ORIGINAL_PANELS: Panel[] = ["macro", "onchain"];
 import { cutAtAsof, prepareRegimeInputs } from "../src/analytics/prepare.ts";
 import { variantInputs } from "./support/originals-source.ts";
 import {
@@ -109,8 +111,9 @@ async function replay() {
     const aligner = (ind as any).align === "zero_fill" ? alignDailyZeroFill : alignDailyForwardFill;
     transformed[ind.id] = applyTransform(ind.transform, aligner(series, dateAxis));
   }
-  // The original JS and the committed snapshot are methodology v3 (issue 1652).
-  const result = computeRegime(transformed, dateAxis, undefined, undefined, undefined, "v3");
+  // The original JS and the committed snapshot are methodology v3 (issue 1652),
+  // over the two-panel composite of their time (issue 1708 added factor).
+  const result = computeRegime(transformed, dateAxis, ORIGINAL_PANELS, undefined, undefined, "v3");
   return { result, dateAxis };
 }
 
@@ -282,7 +285,7 @@ describe("issue 1421: backend backtest and correlations against the original byt
       const inputs = variantInputs(v);
       const { dateAxis, transformed, ages } = prepareRegimeInputs(inputs.registry, { start: BACKFILL_START, asof: inputs.asof });
       // The originals were captured under methodology v3 (issue 1652).
-      const r2 = computeRegime(transformed, dateAxis, PANELS, ages, undefined, "v3");
+      const r2 = computeRegime(transformed, dateAxis, ORIGINAL_PANELS, ages, undefined, "v3");
       const extras = { spx: cutAtAsof(inputs.extras.spx, inputs.asof), eth: cutAtAsof(inputs.extras.eth, inputs.asof), tbill3m: cutAtAsof(inputs.extras.tbill3m, inputs.asof) };
       const full = computeBacktest(dateAxis, r2, extras);
       const shared = sharedAnalysisBytes({ correlations: computeCorrelations(dateAxis, r2, extras), backtest: stripDailyFromSnapshot(full) });

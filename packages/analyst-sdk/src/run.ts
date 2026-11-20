@@ -7,7 +7,7 @@
 // Optional SPX, ETH and TBILL3M price series in
 // the same input add the correlation and backtest output.
 import type { Point, RawIndicatorHistory } from "./types.ts";
-import { DAY_RULE, DAY_RULES, INDICATORS, PANELS, type DayRule, type Indicator } from "./analyze/indicators.ts";
+import { ALL_PANELS, DAY_RULE, DAY_RULES, INDICATORS, PANELS, type DayRule, type Indicator, type Panel } from "./analyze/indicators.ts";
 import { computeRegime, type RegimeComputeResult } from "./analyze/compute.ts";
 import { computeCorrelations, type CorrelationsPayload } from "./analyze/correlations.ts";
 import { computeBacktest, stripDailyFromSnapshot, type BacktestPayload } from "./analyze/backtest.ts";
@@ -35,9 +35,9 @@ export interface RunResult {
   version: RegimeVersion;
   dateAxis: string[];
   result: RegimeComputeResult;
-  // Production's second computeRegime call (macro, onchain, factor), present
-  // only when runRegime ran with factor: true. Display-only: result keeps the
-  // two-panel composite and labels.
+  // Production's second computeRegime call (ALL_PANELS), present only when
+  // runRegime ran with factor: true. Display-only: result keeps the composite
+  // and labels over the run's panels.
   factor?: RegimeComputeResult;
   correlations?: CorrelationsPayload;
   backtest?: BacktestPayload;
@@ -81,10 +81,14 @@ export interface RunOptions {
   // Last day of the date axis (YYYY-MM-DD). Input rows dated after it are
   // ignored. Default: the newest date of any input series the run reads.
   asof?: string;
-  // Also run production's second computeRegime call (macro, onchain, factor)
-  // and return its factor_* figures. The composite and labels stay the
-  // two-panel ones the published table uses.
+  // Also run a second computeRegime call over every panel (ALL_PANELS) and
+  // return its factor_* figures. The composite and labels stay the ones over
+  // `panels`.
   factor?: boolean;
+  // The panels the composite averages, 1/n each (issue 1708). Default PANELS,
+  // the included entries of PANEL_MEMBERSHIP. A caller replaying an older
+  // composite (e.g. the two-panel originals) passes its panel set explicitly.
+  panels?: readonly Panel[];
   // The methodology version to compute (issue 1652). Default
   // CURRENT_REGIME_VERSION. A published run replays under the version it was
   // stamped with: "v3" cuts the labels on the rolling percentile, "v4" on the
@@ -102,19 +106,22 @@ function assertIsoDate(name: string, v: string): void {
   if (!ok) throw new RangeError(`${name} must be a real date in YYYY-MM-DD form, got ${JSON.stringify(v)}`);
 }
 
-const KNOWN_OPTIONS: readonly string[] = ["start", "asof", "factor", "version", "dayRule", "indicators"];
+const KNOWN_OPTIONS: readonly string[] = ["start", "asof", "factor", "version", "dayRule", "indicators", "panels"];
 
 export function runRegime(input: RawIndicatorHistory, opts: RunOptions = {}): RunOutcome {
   // An option this version does not know is an error, never silently ignored
-  // (a caller passing the former `panels` would otherwise get no factor output).
+  // (a misspelled option would otherwise silently fall back to its default).
   for (const k of Object.keys(opts)) {
     if (!KNOWN_OPTIONS.includes(k)) {
-      const hint = k === "panels" ? " (use factor: true for the factor_* figures)" : "";
-      throw new RangeError(`unknown option ${JSON.stringify(k)}${hint}; expected start, asof, factor, version, dayRule, indicators`);
+      throw new RangeError(`unknown option ${JSON.stringify(k)}; expected ${KNOWN_OPTIONS.join(", ")}`);
     }
   }
   if (opts.factor !== undefined && typeof opts.factor !== "boolean") {
     throw new RangeError(`factor must be a boolean, got ${JSON.stringify(opts.factor)}`);
+  }
+  const panels = opts.panels ?? PANELS;
+  if (!Array.isArray(panels) || panels.length === 0 || new Set(panels).size !== panels.length || panels.some((p) => !ALL_PANELS.includes(p))) {
+    throw new RangeError(`panels must be a non-empty list of distinct panels from ${ALL_PANELS.join(", ")}, got ${JSON.stringify(opts.panels)}`);
   }
   const dayRule = opts.dayRule ?? DAY_RULE;
   if (!DAY_RULES.includes(dayRule)) throw new RangeError(`dayRule must be one of ${DAY_RULES.join(", ")}, got ${JSON.stringify(opts.dayRule)}`);
@@ -169,7 +176,7 @@ export function runRegime(input: RawIndicatorHistory, opts: RunOptions = {}): Ru
   if (newestRead < start) throw new RangeError(`start ${start} is after every input row the run reads (newest ${newestRead})`);
   // Required data is supplied or the run stops with a named error; a
   // downstream run never fetches (issue 1421, src/coverage.ts).
-  assertRequiredCoverage(raw, asof ?? maxDate);
+  assertRequiredCoverage(raw, asof ?? maxDate, panels);
   // Issue 1655, the day rule. score-newest (declared): the day given, or the
   // newest row the run reads, as before. require-complete: without an as-of day
   // the latest complete day on or before that newest row; an explicit
@@ -192,9 +199,9 @@ export function runRegime(input: RawIndicatorHistory, opts: RunOptions = {}): Ru
   // The fill policy already masked `transformed`; passing `ages` keeps the
   // global-cap mask too, which leaves a policy-masked series unchanged.
   const { dateAxis, transformed, ages } = prepareRegimeInputs(raw, { start, asof, indicators });
-  const result = computeRegime(transformed, dateAxis, PANELS, ages, undefined, version, undefined, indicators);
+  const result = computeRegime(transformed, dateAxis, [...panels], ages, undefined, version, undefined, indicators);
   const out: RunResult = { kind: "complete", version, dateAxis, result };
-  if (opts.factor) out.factor = computeRegime(transformed, dateAxis, ["macro", "onchain", "factor"], ages, undefined, version, undefined, indicators);
+  if (opts.factor) out.factor = computeRegime(transformed, dateAxis, ALL_PANELS, ages, undefined, version, undefined, indicators);
   const spx: Point[] | undefined = raw[EXTRA_IDS.spx];
   const eth: Point[] | undefined = raw[EXTRA_IDS.eth];
   const tbill3m: Point[] | undefined = raw[EXTRA_IDS.tbill3m];

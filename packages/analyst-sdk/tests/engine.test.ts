@@ -227,7 +227,7 @@ describe("the prototype's weekly weights (Oct 2018 to Oct 2026)", () => {
     expect(inputs.rows.length).toBe(419);
     for (const i of [0, 200, 418]) {
       const r = inputs.rows[i]!;
-      expect(asofLabel(raw, { date: r[0]!, asof: r[1]! }).compositePercentile).toBe(num(r[col("composite_pct")]!));
+      expect(asofLabel(raw, { date: r[0]!, asof: r[1]! }, { panels: ["macro", "onchain"] }).compositePercentile).toBe(num(r[col("composite_pct")]!));
     }
   }, 60_000);
 

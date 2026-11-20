@@ -50,7 +50,12 @@ split across three panels:
 |---|---|---|---|
 | `macro` | 8 | `T10Y2Y`, `DFII10`, `T5YIE`, `HY_OAS`, `DXY`, `ICSA`, `VIX`, `COPPER_GOLD` | Yes |
 | `onchain` | 10 | `DEFI_TVL`, `STABLES`, `BTC_ACTIVE`, `ETH_ACTIVE`, `BTC_MVRV`, `BTC_ETH`, `ETH_TREND`, `NEW_TOKENS`, `DEFI_GROWTH`, `STABLES_GROWTH` | Yes |
-| `factor` | 8 | `SPX_TREND`, `IWM_SPY`, `SPHB_SPLV`, `MTUM_SPY`, `IWF_IWD`, `XLU_SPY`, `XLP_XLY`, `SHILLER_CAPE` | **No** — fetched and persisted (feeds `/regime_eq`'s extended 3-panel view), but `PANELS = ["macro", "onchain"]` (`indicators.ts:464`) excludes it from `/regime`'s composite |
+| `factor` | 8 | `SPX_TREND`, `IWM_SPY`, `SPHB_SPLV`, `MTUM_SPY`, `IWF_IWD`, `XLU_SPY`, `XLP_XLY`, `SHILLER_CAPE` | Yes (since issue 1708, D89) |
+
+Membership is declared once, in `PANEL_MEMBERSHIP` (`indicators.ts`): each panel
+is `included` or `excluded`. `PANELS` is the included set and `ALL_PANELS` is
+every panel. An excluded panel is still computed and published for display, but
+it does not enter the composite. A new panel is one `PANEL_MEMBERSHIP` entry.
 
 Trap for a reader skimming `indicators.ts` top to bottom: `SPX_TREND` and
 `IWM_SPY` are listed physically inside the file's "MACRO" comment block
@@ -170,12 +175,16 @@ a published number ships with a new methodology version.
   on each day (`weightedMeanOnDay`, `analyze/compute.ts:247`), using the
   weights from step 3 above.
 - **Composite** — the arithmetic mean of whichever panel indices are finite
-  that day (`computeRegime`, `analyze/compute.ts:117-124`). `/regime` runs
-  this over `PANELS = ["macro", "onchain"]` (so composite = 0.5×macro +
-  0.5×onchain when both resolve); `/regime_eq` runs the same function again
-  with `["macro", "onchain", "factor"]` for the extended 3-panel view
-  (`analytics/index.ts` calls `computeRegime` twice, once per panel set — see
-  `r2`/`r3` in `runAnalytics`).
+  that day (`computeRegime`, `analyze/compute.ts:117-124`): the naive 1/n
+  mean over the included panels (`PANELS`, from `PANEL_MEMBERSHIP`), where n
+  counts the included panels finite that day. Today that is macro, onchain and
+  factor, one third each (D89). `analytics/index.ts` calls `computeRegime`
+  twice: `r2` over `PANELS` (the composite) and `r3` over `ALL_PANELS` (the
+  index of every panel, included or not). Before issue 1708 the composite was
+  macro and onchain only. The frozen originals under
+  `packages/analyst-sdk/tests/fixtures/originals` are replayed with that
+  two-panel set (`runRegime(..., { panels: ["macro", "onchain"] })`, CLI
+  `--panels macro,onchain`).
 - **Bucketing** — the composite itself is bucketed by `bucketFn`
   (`analyze/compute.ts`): `< 0.33 → risk_off`, `> 0.67 → risk_on` (strict,
   exclusive upper), else `neutral`. `NaN → null`. The composite is already a

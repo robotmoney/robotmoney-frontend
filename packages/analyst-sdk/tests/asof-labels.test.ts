@@ -183,16 +183,16 @@ describe("hindsight on the 8-year fixture", () => {
 
   test(
     // Issue 1652: under v4 (labels cut on the composite) one label still
-    // differs, on 2021-07-19. Under v3, as published with the prototype, it
-    // was 2018-10-22.
-    "1 of 419 weekly as-of labels differs from one full-history run (v4)",
+    // differed, on 2021-07-19. Under v3, as published with the prototype, it
+    // was 2018-10-22. Issue 1708 (factor joins the composite): none differs.
+    "0 of 419 weekly as-of labels differ from one full-history run (v4, three panels)",
     () => {
       const labels = asofLabels(raw8y, { dates: decisionDates(START, END) });
       expect(labels.length).toBe(419);
       const h = hindsight(raw8y, labels, END);
       expect(h.compared).toBe(419);
-      expect(h.differ).toBe(1);
-      expect(h.dates).toEqual(["2021-07-19"]);
+      expect(h.differ).toBe(0);
+      expect(h.dates).toEqual([]);
     },
     { timeout: 900_000 },
   );
