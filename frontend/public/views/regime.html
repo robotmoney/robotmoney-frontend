@@ -515,7 +515,7 @@
         <div><dt>Normalization</dt><dd>A rolling 3-year percentile rank per indicator, sign-aligned so +1 always means risk-on.</dd></div>
         <div><dt>Weighting</dt><dd>Point-in-time inverse correlation within each panel. Each day's weights use only the trailing 3-year window, so there is no look-ahead. Redundant inputs are discounted automatically, without manual sub-grouping. No indicator carries more than 25%.</dd></div>
         <div><dt>Composite</dt><dd>The arithmetic mean of the macro and on-chain panel indices (the equity factor panel is excluded), bucketed at 0.33 / 0.67 on its own 0 to 1 scale.</dd></div>
-        <div><dt>Smoothing</dt><dd>The published label switches after <strong>5 consecutive trading days</strong> in the new bucket, or at once on a single-day move in the composite larger than <strong>2σ</strong>. The wait filters out flips at a boundary; the 2σ rule lets a sharp move through.</dd></div>
+        <div><dt>Smoothing</dt><dd>The published label switches after <strong>5 consecutive trading days</strong> in the new bucket. It filters out flips at a boundary.</dd></div>
         <div><dt>Storage</dt><dd>The history is kept daily in long format; the current snapshot is served from the analytics store.</dd></div>
       </dl>
 

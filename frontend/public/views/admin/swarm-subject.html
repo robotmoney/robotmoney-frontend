@@ -5,7 +5,7 @@
 <section class="container adm" x-data="adminSwarmSubject" x-init="init()">
 
   <header class="adm-head">
-    <a href="/admin/swarm" class="sv__back">/admin/swarm</a>
+    <a href="/admin/swarm" class="sv__back">← /admin/swarm</a>
     <h1 class="adm-title">Topic <span x-text="subjectId"></span></h1>
   </header>
 
@@ -34,15 +34,7 @@
           <dt>Name</dt><dd x-text="topic.name"></dd>
           <dt>Status</dt><dd><span :class="topic.status === 'active' ? 'adm-badge adm-badge--ok' : 'adm-badge adm-badge--idle'" x-text="topic.status"></span></dd>
           <dt>Operator</dt><dd x-text="topic.operator"></dd>
-          <dt>Homepage</dt><dd x-text="topic.homepage || '—'" data-testid="topic-homepage"></dd>
           <dt>Thesis</dt><dd x-text="topic.thesisBlurb"></dd>
-          <dt>Structural notes</dt>
-          <dd data-testid="topic-notes">
-            <span x-show="notesOf(topic).length === 0">—</span>
-            <ul class="rr-list" x-show="notesOf(topic).length > 0">
-              <template x-for="(note, i) in notesOf(topic)" :key="i"><li x-text="note"></li></template>
-            </ul>
-          </dd>
           <dt>Source type</dt><dd x-text="topic.source?.type"></dd>
           <dt>Recommendation type</dt><dd x-text="topic.recommendationType"></dd>
           <dt>Linked member</dt><dd x-text="memberLabel(topic.linkedMemberId)" data-testid="topic-linked-member"></dd>
@@ -90,10 +82,7 @@
       </div>
     </template>
 
-    <!-- x-if, not x-show: every field binds to editForm, which is null until
-         Edit is pressed, so a hidden-but-mounted form throws on boot. -->
-    <template x-if="editing && editForm">
-    <form @submit.prevent="submitEdit()" class="adm-form" data-testid="topic-edit-form">
+    <form x-show="editing" x-cloak @submit.prevent="submitEdit()" class="adm-form" data-testid="topic-edit-form">
       <label class="adm-field">
         <span>Name</span>
         <input type="text" x-model="editForm.name" class="adm-input" data-testid="edit-name" />
@@ -105,23 +94,9 @@
         <span x-show="editErrors.operator" x-text="editErrors.operator" class="rm-error"></span>
       </label>
       <label class="adm-field">
-        <span>Homepage</span>
-        <input type="url" x-model="editForm.homepage" class="adm-input" placeholder="https://" data-testid="edit-homepage" />
-        <span x-show="editErrors.homepage" x-text="editErrors.homepage" class="rm-error"></span>
-      </label>
-      <label class="adm-field">
         <span>Thesis</span>
         <textarea x-model="editForm.thesisBlurb" class="adm-input" rows="2" data-testid="edit-thesis"></textarea>
         <span x-show="editErrors.thesisBlurb" x-text="editErrors.thesisBlurb" class="rm-error"></span>
-      </label>
-      <!-- Structural notes ride in every brief for this topic (body.subject),
-           so members read them as standing guidance. The update route has
-           always accepted the field; until now the form re-sent the stored
-           notes untouched, so they could only change by a database write. -->
-      <label class="adm-field">
-        <span>Structural notes</span>
-        <textarea x-model="editForm.structuralNotes" class="adm-input" rows="10" data-testid="edit-notes"></textarea>
-        <span class="adm-dim">Leave a blank line between notes. Members read these in every brief for this topic.</span>
       </label>
       <label class="adm-field">
         <span>Source type</span>
@@ -160,7 +135,6 @@
         <button type="button" class="adm-btn adm-btn--ghost" @click="cancelEdit()">Cancel</button>
       </div>
     </form>
-    </template>
   </div>
 
 </section>

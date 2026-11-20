@@ -11,7 +11,17 @@ import { pipelineIngest, pipelineRead } from "../pipeline-client.ts";
  */
 export const FLOW_MAX_BLOCKS_PER_RUN = 2000;
 
+let idleLogged = false;
+
+/** Test seam: forget that the idle line was logged. */
+export function resetFlowIdleLog(): void { idleLogged = false; }
+
 export async function refreshFlowIndex(): Promise<unknown> {
+  // Dormant (issue 1693): both contract settings empty means the feature is off. No RPC, no database write, one log line per process.
+  if (!process.env.FLOW_QUEUE_ADDRESS?.trim() && !process.env.FLOW_FUND_ADDRESS?.trim()) {
+    if (!idleLogged) { idleLogged = true; console.log("[flow.index] idle: FLOW_QUEUE_ADDRESS and FLOW_FUND_ADDRESS are not set"); }
+    return { idle: true, reason: "flow index is not configured" };
+  }
   const address = process.env.FLOW_QUEUE_ADDRESS ?? "";
   const fundAddress = process.env.FLOW_FUND_ADDRESS ?? "";
   const explorerAddresses = (process.env.FLOW_EXPLORER_ADDRESSES ?? "").split(",").map((value) => value.trim().toLowerCase()).filter(Boolean);

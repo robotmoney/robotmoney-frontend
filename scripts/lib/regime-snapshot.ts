@@ -33,6 +33,12 @@ const signed = (v: number, digits: number, suffix = ""): string => {
   if (Number(s) === 0) return s + suffix;
   return (v < 0 ? "−" : "+") + s + suffix;
 };
+const ordinal = (x: unknown): string => {
+  if (typeof x !== "number" || !Number.isFinite(x)) return "none";
+  const n = Math.round(x * 100);
+  if (n % 100 >= 11 && n % 100 <= 13) return `${n}th`;
+  return `${n}${({ 1: "st", 2: "nd", 3: "rd" } as Record<number, string>)[n % 10] || "th"}`;
+};
 export const longDate = (d: string): string => {
   const [y, m, day] = String(d).split("-").map(Number);
   return y && m && day ? `${MONTHS[m - 1]} ${day}, ${y}` : String(d);
@@ -72,7 +78,7 @@ export function regimeSnapshotHtml(latest: Latest | null | undefined): string {
   const idx = panels.map((p) => `${PANEL_LABEL[p] || p} index ${fix2(latest[p + "Index"])}`).join(", ");
   const out: string[] = [];
   out.push(`<h3>The regime on ${esc(longDate(latest.date))}</h3>`);
-  out.push(`<p>${esc(REGIME_LABEL[latest.regime] || latest.regime || "No reading")}. Composite ${esc(fix2(latest.composite))}, on a scale of 0 (risk-off) to 1 (risk-on): below ${esc(fix2(lo))} reads risk-off, above ${esc(fix2(hi))} risk-on, neutral between. A new label holds after 5 consecutive trading days in its bucket, or at once on a single-day move larger than 2σ. ${esc(idx)}, each from 0 (risk-off) to 1 (risk-on). The composite is the mean of the macro and on-chain indices; the equity factor index is tracked for context and left out of it.</p>`);
+  out.push(`<p>${esc(REGIME_LABEL[latest.regime] || latest.regime || "No reading")}. Composite ${esc(fix2(latest.composite))}, the ${esc(ordinal(latest.compositePercentile))} percentile of its last 3 years: below the ${esc(ordinal(lo))} reads risk-off, above the ${esc(ordinal(hi))} risk-on. ${esc(idx)}, each from 0 (risk-off) to 1 (risk-on). The composite is the mean of the macro and on-chain indices; the equity factor index is tracked for context and left out of it.</p>`);
 
   const inds: Latest[] = Array.isArray(latest.indicators) ? latest.indicators : [];
   if (inds.length) {
@@ -110,6 +116,7 @@ export function withLiveRegime(ldJson: string, latest: Latest | null | undefined
   ds.variableMeasured = [
     pv("Regime", REGIME_LABEL[latest.regime] || latest.regime, { description: "The composite's reading: risk-on, neutral or risk-off.", valueReference: { "@type": "DefinedTermSet", name: "Regime states", hasDefinedTerm: ["Risk-on", "Neutral", "Risk-off"].map((t) => ({ "@type": "DefinedTerm", name: t })) } }),
     pv("Composite", typeof latest.composite === "number" ? +latest.composite.toFixed(4) : null, { ...unit, description: "The mean of the macro and on-chain panel indices." }),
+    pv("Composite percentile, 3 years", typeof latest.compositePercentile === "number" ? +latest.compositePercentile.toFixed(4) : null, unit),
     ...panelsOf(latest).map((p) => pv(`${PANEL_LABEL[p] || p} index`, typeof latest[p + "Index"] === "number" ? +latest[p + "Index"].toFixed(4) : null, unit)),
   ].filter(Boolean);
   // Every "<" escaped, as seo.js does, so the block can never close its script.

@@ -8,8 +8,8 @@ const limiter = createRateLimiter({ max: 60, windowMs: 60_000 });
 const reply = (status: number, body: unknown) => Response.json(body, { status, headers: { "Cache-Control": "no-store" } });
 
 /**
- * Index health and freshness. 503 while the index is unconfigured, bound to
- * other contracts or empty. Otherwise 200 with `status` "ok", or "stale" once
+ * Index health and freshness. 200 "idle" (enabled false) while the feature is
+ * unconfigured. 503 while a configured index is bound to other contracts or empty. Otherwise 200 with `status` "ok", or "stale" once
  * the newest indexed block is older than FLOW_MAX_AGE_SECONDS, so a stopped
  * indexer shows up here without failing readiness probes.
  */
@@ -17,7 +17,7 @@ export async function handleFlowHealth(req: Request, ip: string, now = () => Dat
   if (limiter.check(ip).limited) return reply(429, { error: "rate limit exceeded" });
   if (req.method !== "GET") return reply(405, { error: "method not allowed" });
   const queue = process.env.FLOW_QUEUE_ADDRESS, fund = process.env.FLOW_FUND_ADDRESS;
-  if (!queue || !fund) return reply(503, { schemaVersion: 1, status: "unavailable", error: "flow index is not configured" });
+  if (!queue || !fund) return reply(200, { schemaVersion: 1, status: "idle", enabled: false, reason: "flow index is not configured" });
   try {
     const [bound, checkpoints] = await Promise.all([flowDeployment(sql, 8453), flowCheckpoints(sql, 8453)]);
     if (bound?.queue_address !== queue.toLowerCase() || bound.fund_address !== fund.toLowerCase()) return reply(503, { schemaVersion: 1, status: "unavailable", error: "flow index is bound to other contracts" });
