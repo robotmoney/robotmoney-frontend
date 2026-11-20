@@ -1008,6 +1008,15 @@ platform release builds. The steps run in order:
   its signature, and lists the bundle's sha256, the main commits, the changed paths and each
   commit's paths outside the content paths, carried or left out. It is never marked latest: the
   platform's release keeps that. `bun smoke:web --bundle web-vA.B.C` downloads these files by name.
+- **W13-backport** (irreversible; owner, 2026-11-20). The runner opens the backport PR to `main`. It
+  lists the release branch's commits from the base that `main` lacks: a content commit whose
+  `(cherry picked from commit <sha>)` names a `main` commit is already there, so usually only W01's
+  version commit is left. On `backport/web-vA.B.C` from `origin/main`, the version commit is applied
+  by setting `frontend/package.json`'s version (the lines around it may differ on `main`), and any other
+  commit is cherry-picked (-x); a commit that picks empty is skipped. The branch is pushed and a pull
+  request to `main` opened. The step is done when nothing is missing or that pull request exists, open or
+  merged. A conflict stops the run with the commit named, after the site is live: backport it by hand.
+  Merging the PR follows the repository's normal merge rules (§7).
 
 The runner stops at the first failure with the step id, the reason and the rerun command. A rerun
 reports the steps already done and continues at the first one that is not. `--dry-run` runs the
@@ -1019,10 +1028,6 @@ preflight and every step's read-only done check, and writes nothing to `origin`,
 require a PR"). The `web/` prefix keeps it off the platform's `releases-*` glob. Content reaches it
 from `main` only, by the runner's cherry-picks. Feature PRs never target it.
 
-**Version backport.** After W12, the version line reaches `main` by one backport PR that changes only
-`frontend/package.json`'s `version` (§7). The production report lists it as a backport TODO until it
-merges. Until then `main` names an older version, which is harmless: the next release passes
-`--version` again.
 
 **Tag.** A release is the tag `web-vA.B.C`, only on a commit of `web/releases-A.B.x`. Its version
 equals `version` in `frontend/package.json` at that commit and is above every other `web-v*` tag.
