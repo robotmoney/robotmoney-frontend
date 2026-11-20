@@ -90,6 +90,9 @@ import {
   alignDailyZeroFill,
 } from "../src/analytics/transform/math.ts";
 import { applyTransform } from "../src/analytics/transform/transforms.ts";
+import type { Panel } from "../src/analytics/analyze/indicators.ts";
+// The originals predate issue 1708: their composite is macro and onchain only.
+const ORIGINAL_PANELS: Panel[] = ["macro", "onchain"];
 
 const BACKFILL_START = "2018-01-01";
 
@@ -115,7 +118,7 @@ async function replay() {
   // The vendored reference and the committed goldens are methodology v3
   // (labels cut on the rolling percentile); issue 1652 keeps that path behind
   // the version, so this replay pins v3.
-  const result = computeRegime(transformed, dateAxis, undefined, undefined, undefined, "v3");
+  const result = computeRegime(transformed, dateAxis, ORIGINAL_PANELS, undefined, undefined, "v3");
   return { result, dateAxis, transformed, raw };
 }
 
@@ -363,7 +366,7 @@ describe("issue 1421: backend report bytes equal the original captured bytes", (
         },
       };
       // The originals were captured under methodology v3 (issue 1652): the run replays v3.
-      const results = await runAnalytics(inputs.asof, "regime", variantSource(inputs), persistence, noopTelemetrySink, undefined, "v3");
+      const results = await runAnalytics(inputs.asof, "regime", variantSource(inputs), persistence, noopTelemetrySink, undefined, "v3", { panels: ORIGINAL_PANELS });
       const runId = (results as any).__runLedger.runId as string;
 
       const [artifact] = await sql<{ payload_bytes: Uint8Array }[]>`

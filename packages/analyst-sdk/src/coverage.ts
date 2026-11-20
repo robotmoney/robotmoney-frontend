@@ -3,7 +3,7 @@
 // error, and they never fetch to fill the gap. Pure: no filesystem,
 // environment or network.
 //
-// REQUIRED: at least one composite panel (PANELS: macro, onchain) needs a
+// REQUIRED: at least one composite panel (PANELS, the included set) needs a
 // registry indicator with a finite observation on or before the as-of day.
 // With none, no day can be labelled, so there is no report to give. One empty
 // panel is not an error: the composite is built from the panels that have
@@ -11,7 +11,7 @@
 // with weight 0 (docs/technical/regime-engine.md §8.1).
 //
 // OPTIONAL, with the documented missing result instead of an error:
-//   - the factor panel: display-only, its figures are null;
+//   - an excluded panel (PANEL_MEMBERSHIP): display-only, its figures are null;
 //   - SPX and ETH: correlations and backtest are null in the SDK report, and
 //     carry no pairs or portfolios in the backend snapshot;
 //   - TBILL3M: the SDK backtest is null; the backend backtest earns no cash yield.

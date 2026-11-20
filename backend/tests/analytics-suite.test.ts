@@ -89,7 +89,7 @@ test(
     // The ground truth (regime-history.csv, regime-snapshot.json) is methodology
     // v3; issue 1652 made v4 current, so this run replays v3. The v4 stamp of a
     // default run is covered by tests/api/regime-snapshots.test.ts.
-    const results = await runAnalytics(ASOF, undefined, await fixtureSource(), directAnalyticsPersistence, undefined, undefined, "v3");
+    const results = await runAnalytics(ASOF, undefined, await fixtureSource(), directAnalyticsPersistence, undefined, undefined, "v3", { panels: ["macro", "onchain"] }); // the ground truth predates issue 1708: two panels
     expect(Object.keys(results).sort()).toEqual(["channel-divergence", "late-cycle-signals", "regime"]);
 
     // ── (1) regime_snapshots landed; latest persisted row IS the as-of day ──
@@ -176,7 +176,7 @@ test(
         return { spx: [], eth: [], tbill3m: [] };
       },
     };
-    const secondResults = await runAnalytics(ASOF, "regime", emptySource, directAnalyticsPersistence);
+    const secondResults = await runAnalytics(ASOF, "regime", emptySource, directAnalyticsPersistence, undefined, undefined, undefined, { panels: ["macro", "onchain"] });
     const [{ n: t10After }] = await sql`SELECT COUNT(*)::int AS n FROM raw_indicator_history WHERE indicator = 'T10Y2Y'`;
     expect(t10After).toBe(t10Rows); // floor intact — nothing erased by an empty fetch
 

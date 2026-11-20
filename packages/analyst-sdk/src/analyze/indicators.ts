@@ -1,9 +1,9 @@
 // Regime detection indicator universe — ported VERBATIM from
 // agentjuno/robotmoney scripts/regime/lib/indicators.js.
 //
-// Two live panels: macro (8) and onchain (10). The factor panel (8) is fetched
-// and persisted but NOT in PANELS, so it does not affect /regime's composite
-// (it feeds the extended /regime_eq path). Each indicator is percentile-ranked
+// Panels: macro (8), onchain (10) and factor (8). PANEL_MEMBERSHIP marks each
+// panel included or excluded; PANELS is the included set, and the composite is
+// the plain 1/n mean of the included panel indices. Each indicator is percentile-ranked
 // over a 3y rolling window, sign-aligned so +1 = risk-on, and inverse-correlation
 // weighted within its panel.
 //
@@ -487,7 +487,7 @@ export const INDICATORS: Indicator[] = [
       "Stablecoin float almost always grows over multi-month periods (the asset class is structurally growing), so a 90d change above ~5% counts as healthy expansion = risk-on. Stagnation or contraction = capital leaving crypto = risk-off. One of the cleaner pure-flow signals.",
   },
 
-  // ── FACTOR (DATA-ONLY: fetched + persisted, NOT included in PANELS) ──────
+  // ── FACTOR ────────────────────────────────────────────────────────────────
   {
     id: "SPHB_SPLV",
     name: "High-beta vs low-vol",
@@ -644,7 +644,22 @@ export function validateRatioDeclarations<T extends readonly Indicator[]>(indica
 
 validateRatioDeclarations(INDICATORS);
 
-export const PANELS: Panel[] = ["macro", "onchain"];
+// Whether each panel counts toward the composite. The composite is the naive
+// 1/n mean of the included panels' indices, where n is however many are
+// included (and finite that day): nothing below assumes two or three panels.
+// An excluded panel is still computed and published, for display only.
+export type PanelMembership = "included" | "excluded";
+export const PANEL_MEMBERSHIP: Readonly<Record<Panel, PanelMembership>> = Object.freeze({
+  macro: "included",
+  onchain: "included",
+  factor: "included",
+});
+
+/** Every panel, included or not, in registry order. */
+export const ALL_PANELS: Panel[] = Object.keys(PANEL_MEMBERSHIP) as Panel[];
+
+/** The panels the composite averages, 1/n each. */
+export const PANELS: Panel[] = ALL_PANELS.filter((p) => PANEL_MEMBERSHIP[p] === "included");
 
 export const ROLLING_WINDOW_DAYS = 365 * 3;
 export const COMPOSITE_BUCKETS = { risk_off: 0.33, risk_on: 0.67 };

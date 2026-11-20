@@ -6677,3 +6677,20 @@ The stage load check (`Q34a-analytics-load`, `scripts/release/analytics-load-che
 **Why.** A gap in the stored tags reads as a lost methodology. A tag reserved for unbuilt work forced that gap.
 
 **Rejected.** Keeping `v5` and leaving `v4` reserved: the database would hold `v3` then `v5`.
+
+## D89 — The regime composite is the 1/n mean of every included panel; factor is included (issue 1708; owner, 2026-11-20)
+
+**Status:** Accepted 2026-11-20 (owner). `packages/analyst-sdk/src/analyze/indicators.ts` (`PANEL_MEMBERSHIP`, `PANELS`, `ALL_PANELS`), `packages/analyst-sdk/src/run.ts`, `backend/src/analytics/index.ts`. Methodology in [`docs/technical/regime-engine.md` §2](technical/regime-engine.md).
+
+**Decision.**
+
+1. **Membership registry.** `PANEL_MEMBERSHIP` marks each panel `included` or `excluded`. `PANELS` is the included set. `ALL_PANELS` is every panel. No runtime analytics code lists panels literally (the published `regime-eq-comparison.ts` keeps its explicit lists).
+2. **Composite.** The composite is the naive 1/n mean of the included panel indices finite that day. Nothing assumes two or three panels.
+3. **Factor included.** Macro, onchain and factor are all included, one third each.
+4. **Excluded panels.** An excluded panel is still computed and shown, for display only.
+5. **Tag and data.** The methodology tag stays `v4` (D88): `v4` was never released, so no stored `v4` row exists. No migration, and no stored row is rewritten.
+6. **Originals.** The frozen originals are never regenerated. Tests replay them with the two-panel set passed explicitly (`panels` option, CLI `--panels`).
+
+**Why.** On 2026-11-20 the two-panel composite fell below 0.33 (risk-off) while the three-panel composite stayed neutral at 0.39. Factor was fetched, stored and shown, yet had no say in the label.
+
+**Rejected.** Per-panel weights other than 1/n. A new methodology tag.

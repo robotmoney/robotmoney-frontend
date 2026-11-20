@@ -14,7 +14,7 @@ import { buildReport, runRegime as runRegimeOutcome, requireComplete } from "../
 // Each run here scores a complete day (issue 1655): an IncompleteDay fails the test.
 const runRegime = (...a: Parameters<typeof runRegimeOutcome>) => requireComplete(runRegimeOutcome(...a));
 import { CoverageError, assertRequiredCoverage } from "../src/coverage.ts";
-import { INDICATORS } from "../src/analyze/indicators.ts";
+import { INDICATORS, PANELS } from "../src/analyze/indicators.ts";
 import { computeBacktest } from "../src/analyze/backtest.ts";
 import { prepareRegimeInputs } from "../src/prepare.ts";
 import type { RawIndicatorHistory } from "../src/types.ts";
@@ -69,7 +69,7 @@ describe("downstream paths make zero acquisition attempts", () => {
   });
 
   test("missing required series: no composite panel with data raises CoverageError", () => {
-    const composite = new Set([...panelIds("macro"), ...panelIds("onchain")]);
+    const composite = new Set(PANELS.flatMap((p) => [...panelIds(p)]));
     let err: unknown;
     try {
       runRegime(without((id) => composite.has(id)));
@@ -78,7 +78,7 @@ describe("downstream paths make zero acquisition attempts", () => {
     }
     expect(err).toBeInstanceOf(CoverageError);
     expect((err as CoverageError).name).toBe("CoverageError");
-    expect((err as CoverageError).missingPanels).toEqual(["macro", "onchain"]);
+    expect((err as CoverageError).missingPanels).toEqual(PANELS);
     // Rows only AFTER the as-of day do not count as coverage.
     const late: RawIndicatorHistory = { ...without((id) => composite.has(id)), BTC_MVRV: [{ date: "2030-01-01", value: 1 }] };
     expect(() => assertRequiredCoverage(late, "2026-08-15")).toThrow(CoverageError);
@@ -103,16 +103,17 @@ describe("downstream paths make zero acquisition attempts", () => {
     expect(attempts).toEqual([]);
   });
 
-  test("missing optional factor panel: the factor figures are null, the composite is unchanged", () => {
+  test("missing factor panel: the factor figures are null, the composite is the mean of the panels left", () => {
     const ids = panelIds("factor");
-    const base = buildReport(runRegime(full));
+    const base = buildReport(runRegime(full, { panels: ["macro", "onchain"] }));
     const run = runRegime(without((id) => ids.has(id)), { factor: true });
     const report = buildReport(run);
     // The report is JSON: a NaN figure serialises to null, the documented missing result.
     const serialised = JSON.parse(JSON.stringify(report)) as { factor: { index: number | null; percentile: number | null } };
     expect(serialised.factor.index).toBeNull();
     expect(serialised.factor.percentile).toBeNull();
-    expect(report.regime).toEqual(base.regime);
+    expect(report.regime.composite).toEqual(base.regime.composite);
+    expect(report.regime.label).toEqual(base.regime.label);
     expect(attempts).toEqual([]);
   });
 

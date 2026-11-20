@@ -12,8 +12,14 @@ import {
   parseRawHistory,
   runRegime as runRegimeOutcome, requireComplete,
   prepareRegimeInputs,
+  computeRegime,
   toHistory,
+  PANELS,
+  ALL_PANELS,
+  PANEL_MEMBERSHIP,
   type Indicator,
+  type Panel,
+  type PanelMembership,
 } from "../src/index.ts";
 import { COLLECTED_SERIES } from "../src/extract/collected-series.ts";
 // Each run here scores a complete day (issue 1655): an IncompleteDay fails the test.
@@ -194,14 +200,16 @@ describe("runRegime asof, factor and forward-fill ages", () => {
     for (const asof of ["banana", "", "2026-13-45", "2026-02-30", "2000-01-01", "2017-12-31"]) bad({ asof });
     bad({ start: "nope" });
     bad({ start: addDays(D, 1), asof: D });
-    bad({ panels: ["macro", "onchain", "factor"] } as never);
+    bad({ panels: [] });
+    bad({ panels: ["macro", "macro"] });
+    bad({ panels: ["bogus"] } as never);
     bad({ factor: "yes" } as never);
     bad({ bogus: 1 } as never);
   }, TEST_TIMEOUT_MS);
 
-  test("the CLI rejects a trailing --start/--asof, a bad --asof and unknown flags such as --panels", async () => {
+  test("the CLI rejects a trailing --start/--asof, a bad --asof and a bad --panels value and unknown flags", async () => {
     const fx = join(DIR, "fixtures/raw-indicator-history.csv");
-    for (const a of [["--asof"], ["--start"], ["--asof", "banana"], ["--panels", "macro,onchain,factor"], ["--panels"], ["--bogus"]]) {
+    for (const a of [["--asof"], ["--start"], ["--asof", "banana"], ["--panels", "macro,bogus"], ["--panels"], ["--bogus"]]) {
       const p = Bun.spawnSync(["bun", join(DIR, "../bin/regime.ts"), fx, ...a], { stderr: "pipe", stdout: "pipe" });
       expect(p.exitCode).toBe(2);
     }
@@ -604,4 +612,56 @@ describe("collected series: BAA10Y is stored, not scored (issue 1653)", () => {
   test("runRegime rejects an indicators option that is not an array", () => {
     expect(() => runRegimeOutcome(raw, { indicators: "BAA10Y" as never })).toThrow(RangeError);
   }, TEST_TIMEOUT_MS);
+});
+
+// Issue 1708 (D89): the composite is the naive 1/n mean of the included panels
+// finite that day, and an excluded panel is still emitted for display.
+describe("the composite averages every included panel at 1/n", () => {
+  const history = toHistory(parseRawHistory(csvText));
+  const run = runRegime(history);
+  const r = run.result;
+
+  test("the default composite covers macro, onchain and factor", () => {
+    expect(r.panels).toEqual(PANELS);
+    expect(r.panels).toContain("factor");
+  });
+
+  test("on each fixture day with all three panels finite, the composite is their arithmetic mean", () => {
+    let checked = 0;
+    for (let i = 0; i < run.dateAxis.length; i++) {
+      const vs = [r.macroIndex![i]!, r.onchainIndex![i]!, r.factorIndex![i]!];
+      if (!vs.every(Number.isFinite)) continue;
+      expect(r.composite[i]!).toBeCloseTo((vs[0]! + vs[1]! + vs[2]!) / 3, 12);
+      checked++;
+    }
+    expect(checked).toBeGreaterThan(100);
+  });
+
+  test("with a panel NaN, the composite is the mean of the finite panels", () => {
+    // Blank every factor series after transform, so the factor index is NaN on every day.
+    const p = prepareRegimeInputs(history, { start: "2018-01-01", asof: run.dateAxis[run.dateAxis.length - 1]! });
+    for (const x of INDICATORS) if (x.panel === "factor") p.transformed[x.id] = p.transformed[x.id]!.map(() => NaN);
+    const nf = computeRegime(p.transformed, p.dateAxis, PANELS, p.ages);
+    let checked = 0;
+    for (let i = 0; i < nf.composite.length; i++) {
+      expect(Number.isNaN(nf.factorIndex![i]!)).toBe(true);
+      const m = nf.macroIndex![i]!, o = nf.onchainIndex![i]!;
+      if (!Number.isFinite(m) || !Number.isFinite(o)) continue;
+      expect(nf.composite[i]!).toBeCloseTo((m + o) / 2, 12);
+      checked++;
+    }
+    expect(checked).toBeGreaterThan(100);
+  });
+
+  test("a panel marked excluded leaves the composite while its index is still emitted", () => {
+    const membership: Record<Panel, PanelMembership> = { ...PANEL_MEMBERSHIP, factor: "excluded" };
+    const panels = ALL_PANELS.filter((p) => membership[p] === "included");
+    const ex = runRegime(history, { panels, factor: true });
+    expect(ex.result.panels).toEqual(["macro", "onchain"]);
+    const last = ex.dateAxis.length - 1;
+    const m = ex.result.macroIndex![last]!, o = ex.result.onchainIndex![last]!;
+    expect(ex.result.composite[last]!).toBeCloseTo((m + o) / 2, 12);
+    expect(Number.isFinite(ex.factor!.factorIndex![last]!)).toBe(true);
+    expect(buildReport(ex).factor).toBeDefined();
+  });
 });

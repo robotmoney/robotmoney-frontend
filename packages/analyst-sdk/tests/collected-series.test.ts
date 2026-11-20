@@ -41,9 +41,9 @@ describe("COLLECTED_SERIES and collectionRegistry() (issue 1653)", () => {
     expect(() => collectionRegistry(INDICATORS, COLLECTED_SERIES)).not.toThrow();
   });
 
-  test("the scoring registry is unchanged: no BAA10Y in INDICATORS, PANELS stays macro and onchain", () => {
+  test("the scoring registry is unchanged: no BAA10Y in INDICATORS, PANELS stays macro, onchain and factor", () => {
     expect(INDICATORS.some((i) => i.id === "BAA10Y")).toBe(false);
-    expect(PANELS).toEqual(["macro", "onchain"]);
+    expect(PANELS).toEqual(["macro", "onchain", "factor"]);
   });
 
   test("sourceCalendar reads the combined list: BAA10Y is business_day", () => {
