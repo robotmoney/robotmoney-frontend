@@ -122,7 +122,7 @@ interface Sdk {
     backtest?: unknown;
   };
   INDICATORS: { id: string }[];
-  /** The methodology versions the SDK computes (issue 1652); absent on an SDK before v5. */
+  /** The methodology versions the SDK computes (issue 1652); absent on an SDK before v4. */
   REGIME_VERSIONS?: readonly string[];
 }
 

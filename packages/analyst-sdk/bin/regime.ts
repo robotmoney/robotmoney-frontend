@@ -17,7 +17,7 @@ import type { RegimeVersion } from "../src/analyze/regime-versions.ts";
 import { parseArgs, resolveFromCaller, UsageError } from "./args.ts";
 
 const USAGE =
-  "usage: bun run regime <input.csv|input.json> [--full] [--start YYYY-MM-DD] [--asof YYYY-MM-DD] [--factor] [--replay] [--provenance] [--methodology v3|v5]";
+  "usage: bun run regime <input.csv|input.json> [--full] [--start YYYY-MM-DD] [--asof YYYY-MM-DD] [--factor] [--replay] [--provenance] [--methodology v3|v4]";
 
 function fail(e: unknown, code: number): never {
   console.error(`${(e as Error).name}: ${(e as Error).message}`);

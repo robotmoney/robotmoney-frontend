@@ -202,7 +202,7 @@ describe("regime replay of every published run from 2026-09-21", () => {
 // rounding, and every other field equals the published one up to rounding.
 const SAMPLE_DIR = join(import.meta.dir, "fixtures/published-replay");
 // Every sampled run was published under methodology v3 (backup 2026-10-19,
-// before issue 1652 made v5 current), so each replays under v3: the label cut
+// before issue 1652 made v4 current), so each replays under v3: the label cut
 // on the rolling percentile, exactly as it published.
 const SAMPLE_VERSION: RegimeVersion = "v3";
 
@@ -285,7 +285,7 @@ describe("regime replay of a committed sample of published production runs (issu
         expect(numericDiff(recorded.replay, replayedField(outcome, recorded.field)).differences).toEqual([]);
         expect(publishedField(run.publishedAsofRow, recorded.field)).toBe(recorded.published);
       }
-      // Issue 1652: under the current version (v5) the label is cut on the
+      // Issue 1652: under the current version (v4) the label is cut on the
       // composite, so a v3 run whose composite sits inside the cut-offs while
       // its percentile does not would replay to another label. The fields the
       // version does not change (composite, percentiles, indices) are the same
@@ -295,7 +295,7 @@ describe("regime replay of a committed sample of published production runs (issu
         expect({ run: run.runKey, field: f, value: current.fields[f] }).toEqual({ run: run.runKey, field: f, value: outcome.fields[f] });
       }
       if (run.runKey === "526a3988-0ebf-40b7-9c58-c588998303f8") {
-        // Published risk_off at composite 0.477 (percentile below 0.33): v5 reads neutral.
+        // Published risk_off at composite 0.477 (percentile below 0.33): v4 reads neutral.
         expect(outcome.replayLabel).toBe("risk_off");
         expect(current.replayLabel).toBe("neutral");
       }

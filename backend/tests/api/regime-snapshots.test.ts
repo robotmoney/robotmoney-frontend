@@ -328,17 +328,17 @@ test("GET regime-snapshots without ?view=summary still returns the full { latest
   expect(Array.isArray(body.history)).toBe(true);
 });
 
-// ── Issue 1652: methodology v5, one method end to end ───────────────────────
-// A new run stamps the current version (v5) on every row it writes, in the
+// ── Issue 1652: methodology v4, one method end to end ───────────────────────
+// A new run stamps the current version (v4) on every row it writes, in the
 // compatibility table and in its frozen artifact, and the served history is one
-// method: once a v5 run has published, no day is served from a v3 publication.
-test("issue 1652: a new run stamps v5 on every regime_snapshots row it writes, and the served history is all v5", async () => {
+// method: once a v4 run has published, no day is served from a v3 publication.
+test("issue 1652: a new run stamps v4 on every regime_snapshots row it writes, and the served history is all v4", async () => {
   const { runAnalytics } = await import("../../src/analytics/index.ts");
   const { directAnalyticsPersistence } = await import("../../src/analytics/store/direct.ts");
   const { noopTelemetrySink } = await import("../../src/analytics/telemetry.ts");
   const { CURRENT_REGIME_VERSION } = await import("../../src/analytics/analyze/regime-versions.ts");
   const { ASOF, baseObservations, poisonedSource } = await import("../support/committed-inputs.ts");
-  expect(CURRENT_REGIME_VERSION).toBe("v5");
+  expect(CURRENT_REGIME_VERSION).toBe("v4");
   const base = await baseObservations();
   await directAnalyticsPersistence.saveRawHistory({ MNA: base.mna }, "fixture");
   const source = poisonedSource(base, 3);
@@ -349,7 +349,7 @@ test("issue 1652: a new run stamps v5 on every regime_snapshots row it writes, a
   }
   const table = await sql<{ version: string | null; n: number }[]>`SELECT version, COUNT(*)::int AS n FROM regime_snapshots GROUP BY version`;
   expect(table.length).toBe(1);
-  expect(table[0]!.version).toBe("v5");
+  expect(table[0]!.version).toBe("v4");
   expect(table[0]!.n).toBeGreaterThan(1000);
   const artifacts = await sql<{ payload_bytes: Uint8Array; version_label: string }[]>`
     SELECT o.payload_bytes, m.version_label FROM analytics_output_snapshots o
@@ -357,16 +357,16 @@ test("issue 1652: a new run stamps v5 on every regime_snapshots row it writes, a
       JOIN analytics_ledger_methodology_versions m ON m.id = r.methodology_version_id
      WHERE o.artifact_kind = 'regime_snapshots'`;
   expect(artifacts.length).toBe(1);
-  expect(artifacts[0]!.version_label).toBe("v5");
+  expect(artifacts[0]!.version_label).toBe("v4");
   const rows = JSON.parse(new TextDecoder().decode(artifacts[0]!.payload_bytes)) as { version: string }[];
-  expect(new Set(rows.map((r) => r.version))).toEqual(new Set(["v5"]));
+  expect(new Set(rows.map((r) => r.version))).toEqual(new Set(["v4"]));
   // The served history (clamped to the frozen clock's today) carries one version.
   const served = await fetchRegimeSnapshots(5000);
   expect(served.history.length).toBeGreaterThan(1000);
-  expect(new Set(served.history.map((h) => h.version))).toEqual(new Set(["v5"]));
+  expect(new Set(served.history.map((h) => h.version))).toEqual(new Set(["v4"]));
 }, 600_000);
 
-test("issue 1652: every row of the served regime history carries one methodology version: a v5 run restates the v3 publications once", async () => {
+test("issue 1652: every row of the served regime history carries one methodology version: a v4 run restates the v3 publications once", async () => {
   const { day, noon, publishNow, recordWrittenAt, regimeRow, setReadMode } = await import("../support/regime-publications.ts");
   const row = (date: string, composite: number, version: string) => ({ ...regimeRow(date, composite), version });
   const [a, b, c] = [day(-3), day(-2), day(-1)];
@@ -378,14 +378,14 @@ test("issue 1652: every row of the served regime history carries one methodology
     const before = await fetchRegimeSnapshots(400);
     expect({ mode, served: before.history.map((h) => [h.date, h.composite, h.version]) }).toEqual({ mode, served: [[a, 0.31, "v3"], [b, 0.33, "v3"]] });
   }
-  // The first v5 run recomputes every day under v5.
-  await publishNow({ asof: c, version: "v5", regime: [row(a, 0.51, "v5"), row(b, 0.52, "v5"), row(c, 0.53, "v5")] });
+  // The first v4 run recomputes every day under v4.
+  await publishNow({ asof: c, version: "v4", regime: [row(a, 0.51, "v4"), row(b, 0.52, "v4"), row(c, 0.53, "v4")] });
   for (const mode of ["compatibility", "ledger"] as const) {
     await setReadMode(mode);
     const after = await fetchRegimeSnapshots(400);
     expect({ mode, served: after.history.map((h) => [h.date, h.composite, h.version]) }).toEqual({
       mode,
-      served: [[a, 0.51, "v5"], [b, 0.52, "v5"], [c, 0.53, "v5"]],
+      served: [[a, 0.51, "v4"], [b, 0.52, "v4"], [c, 0.53, "v4"]],
     });
     expect(new Set(after.history.map((h) => h.version)).size).toBe(1);
   }
