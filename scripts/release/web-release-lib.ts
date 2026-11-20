@@ -1438,6 +1438,18 @@ async function settledHostWeb(t: WebTarget, deps: Deps): Promise<{ web: HostWeb 
   }
 }
 
+/**
+ * A served file's sha256 read at the host's website-server, upstream of Cloudflare. Stage's zone answers
+ * /robots.txt with Cloudflare's managed robots.txt (Content-Signal) at the edge, so off production the live
+ * check compares that one file at the origin. Undefined when it cannot be read.
+ */
+async function originSha(t: WebTarget, url: string, deps: Deps): Promise<string | undefined> {
+  const remote = `c=$(docker ps --filter name=website-server --format '{{.Names}}' | head -1); p=$(docker port "$c" 8080/tcp | head -1 | sed 's/.*://'); curl -fsS "http://127.0.0.1:$p${url}" | sha256sum`;
+  const r = await deps.ssh(t.host, remote);
+  const m = r.status === 0 ? /^([0-9a-f]{64})/.exec(r.stdout.trim()) : null;
+  return m?.[1];
+}
+
 /** Live check 3: every manifest file is served through the origin with its manifest sha256. Each URL carries a one-off query so no cache answers. */
 export async function servedProblems(rel: Release, t: WebTarget, manifest: BundleManifest, deps: Deps): Promise<{ problems: string[]; compared: number }> {
   const problems: string[] = [];
@@ -1449,6 +1461,7 @@ export async function servedProblems(rel: Release, t: WebTarget, manifest: Bundl
       const got = await deps.httpBytes(`${t.publicOrigin}${encodePath(url)}?${bust}`);
       if (got.status !== 200) { problems.push(`GET ${url} answered ${got.status}, not the bundle's ${f.path}`); continue; }
       const sha = sha256(got.bytes);
+      if (sha !== f.sha256 && f.path === "robots.txt" && t.rmEnv !== "prod" && (await originSha(t, url, deps)) === f.sha256) { compared++; continue; }
       if (sha !== f.sha256) problems.push(`GET ${url} serves sha256 ${sha.slice(0, 16)}, not the manifest's ${f.path} (${f.sha256.slice(0, 16)})`);
       else compared++;
     } catch (e) {
