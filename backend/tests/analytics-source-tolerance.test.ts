@@ -12,7 +12,7 @@
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { INDICATORS } from "../src/analytics/analyze/indicators.ts";
+import { INDICATORS, PANELS } from "../src/analytics/analyze/indicators.ts";
 import { TOP7 } from "../src/analytics/analyze/research-signals.ts";
 import { SOURCE_TOLERANCES, STORED_ONLY_KEYS, toleranceFor, withinTolerance } from "../src/analytics/source-tolerance.ts";
 import { EXTRA_WRITE_KEYS, STORED_UNDER } from "../src/analytics/extras.ts";
@@ -401,7 +401,7 @@ describe("issue 1421: downstream consumes the committed value and version, never
   test("a missing required series is a named CoverageError and missing extras are the documented missing result, with zero acquisition after extract", async () => {
     const base = await baseObservations();
     // A composite panel's inputs: its indicators and each ratio's legs (issue 1644).
-    const composite = new Set(INDICATORS.filter((i) => i.panel === "macro" || i.panel === "onchain")
+    const composite = new Set(INDICATORS.filter((i) => PANELS.includes(i.panel))
       .flatMap((i) => [i.id, ...RATIO_LEG_MAPPING.filter((m) => m.consumer === `indicator:${i.id}`).map((m) => m.storageKey)]));
     // No extras either: the regime computes from the ledger heads (AN-16), so
     // extras this run recorded would be read by the missing-extras run below.
@@ -416,7 +416,7 @@ describe("issue 1421: downstream consumes the committed value and version, never
       missingRequired.restore();
     }
     expect(err).toBeInstanceOf(CoverageError);
-    expect((err as CoverageError).missingPanels).toEqual(["macro", "onchain"]);
+    expect((err as CoverageError).missingPanels).toEqual(PANELS);
     expect(missingRequired.calls).toEqual(["fetchIndicators", "fetchBacktestExtras"]);
     expect(missingRequired.afterExtract).toEqual([]);
     expect(missingRequired.poison!.attempts).toEqual([]);
