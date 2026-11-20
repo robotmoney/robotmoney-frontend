@@ -45,7 +45,7 @@ const SERVED: JudgeInput = JSON.parse(JSON.stringify({
     regime: "risk_off",
     macro_percentile: 0.41,
     history: [{ date: "2026-11-15", composite: 0.39, composite_percentile: null, regime: "risk_off" }],
-    method: "v5",
+    method: "v4",
   },
 }));
 

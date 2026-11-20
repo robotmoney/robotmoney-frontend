@@ -805,14 +805,16 @@ export function newestFreshDump(dumps: readonly { dir: string; capturedAt?: stri
 }
 
 /**
- * Q02-dump's decision (issue 1564): always a new capture from production's read
- * replica, never a reuse of a dump already on the host, whatever its age. A
- * rehearsal starts from the most recent production state; reuse was for rapid
- * hand turnaround only and let Q13-log-baseline fail on 8 to 31 h old dumps.
- * The dump list and clock are taken so the rule is visibly input-blind. PURE.
+ * Q02-dump's decision (owner 2026-11-19, reversing issue 1564): reuse the newest
+ * dump on the host that is at most `maxDumpAgeHours` old (`newestFreshDump`), else
+ * capture a new one from production's read replica. PURE.
  */
-export function dumpPlan(_dumps: readonly { dir: string; capturedAt?: string }[], _now: Date): "capture" {
-  return "capture";
+export function dumpPlan(
+  dumps: readonly { dir: string; capturedAt?: string }[],
+  now: Date,
+): { action: "reuse"; dir: string } | { action: "capture" } {
+  const dir = newestFreshDump(dumps, now);
+  return dir ? { action: "reuse", dir } : { action: "capture" };
 }
 
 /**

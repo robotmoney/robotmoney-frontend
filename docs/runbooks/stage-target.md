@@ -115,13 +115,14 @@ The release runbook's first QA steps rebuild the target, so QA is one command (p
 bun run release:run --target stage --go <stage go>
 ```
 
-- **Q02-dump** (`stage-target dump`) always captures a new dump (issue 1564) from production's
-  read replica as `rm_readonly`, with the capture checkout's `bun smoke:capture`, into a new
-  `~/rm-backup-prod-*` directory on stage-2. It never reuses a dump already there, whatever its
-  age: a rehearsal starts from the most recent production state. The release's own C01-backup
+- **Q02-dump** (`stage-target dump`) reuses the newest dump on stage-2 that is at most 24 hours old
+  (manifest `capturedAt`) and logs which one and its age. With none, it captures a new dump from
+  production's read replica as `rm_readonly`, with the capture checkout's `bun smoke:capture`,
+  into a new `~/rm-backup-prod-*` directory. A dump with no readable or a future `capturedAt` is
+  never reused. The release's own C01-backup
   still captures a new backup during the run.
 - **Q03-stage-up** (`stage-target up --dump newest --replace`) rebuilds the target from the
-  newest dump, which is the one Q02 just captured.
+  newest dump, which is the one Q02 used.
 - **Q04-role-passwords** (`stage-target doadmin | bun run role-passwords --target stage --doadmin-stdin`) sets
   the role passwords, the same precondition production runs before its release. It keeps the
   working runtime lines, makes `rm_owner` LOGIN, generates its password and writes the

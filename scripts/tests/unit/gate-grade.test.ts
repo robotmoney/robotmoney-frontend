@@ -2,7 +2,7 @@
 // model-outcome rule: a model timeout or rejected take is reported, a dead judge
 // or an unjudged publish fails; a no_consensus publish is a warning (owner, 2026-10-06).
 import { describe, expect, test } from "bun:test";
-import { evaluateContainers, evaluateJudgeConfig, evaluateParticipants, evaluateSessions, logWindowStart, type SessionRow } from "../../lib/gate/grade.ts";
+import { evaluateContainers, evaluateJudgeConfig, evaluateParticipants, evaluateSessions, logWindowStart, stackStartMs, type SessionRow } from "../../lib/gate/grade.ts";
 import { ungradedContainer, type ContainerState } from "../../lib/gate/io.ts";
 
 const H = 3_600_000;
@@ -11,6 +11,24 @@ const subjects = ["a", "b"];
 const opts = { minSessions: 1, minAttendance: 0.5, stuckAfterMin: 780, nowMs: NOW };
 const good = (id: string, subject: string, over: Partial<SessionRow> = {}): SessionRow => ({
   id, subject, state: "published", outcome: "judged", ageMin: 60, publishedAtMs: NOW - H, takes: 5, judged: true, receipt: true, ...over,
+});
+
+describe("liveness measured from the stack start (issue 1701)", () => {
+  const rows = [good("1", "a", { publishedAtMs: NOW - 20.7 * H }), good("2", "b", { publishedAtMs: NOW - 20.7 * H })];
+  const live = { ...opts, livenessHours: 12 };
+  test("a 20.7 h old publish with a stack started 1 h ago is not silent", () => {
+    expect(evaluateSessions(rows, subjects, 8, { ...live, livenessSinceMs: NOW - 1 * H }).failures).toEqual([]);
+  });
+  test("the same rows with a stack started 13 h ago still fail the 12 h limit", () => {
+    expect(evaluateSessions(rows, subjects, 8, { ...live, livenessSinceMs: NOW - 13 * H }).failures.join("\n")).toContain("limit 12 h");
+  });
+  test("with no stack start the wall clock grades, as post-release does", () => {
+    expect(evaluateSessions(rows, subjects, 8, live).failures.join("\n")).toContain("20.7 h");
+  });
+  test("stackStartMs is the earliest readable container start", () => {
+    expect(stackStartMs([{ startedAt: "2026-10-03T10:00:00Z" }, { startedAt: "2026-10-03T08:00:00Z" }, { startedAt: "" }])).toBe(Date.parse("2026-10-03T08:00:00Z"));
+    expect(stackStartMs([{ startedAt: "" }])).toBeUndefined();
+  });
 });
 
 describe("evaluateSessions", () => {

@@ -149,3 +149,12 @@ describe("the prod gate's sessions query", () => {
     expect(q).toContain("s.judging_outcome AS outcome");
   });
 });
+
+describe("baseline liveness runs from the stack start (issue 1701)", () => {
+  test("baseline passes the stack start to evaluateSessions and post-release keeps the wall clock", async () => {
+    const { readFileSync } = await import("node:fs");
+    const src = readFileSync(new URL("../../prod-gate.ts", import.meta.url), "utf8");
+    expect(src).toContain("{ ...args, minSessions: 0, nowMs: Date.parse(now), livenessSinceMs: stackStartMs(containers) }");
+    expect(src).toContain("{ ...args, livenessHours: args.livenessHours, nowMs: Date.parse(now) }");
+  });
+});
