@@ -5,12 +5,16 @@
 // WHAT IT REQUIRES:
 //   - /assets/js/app/alpine/views/regime.js answers 200, applies the API's data as served (`_apply(data)`) and no
 //     longer imports the client-side re-cut of PR 1663 (lib/regime-scale.js, removed by PR 1694);
-//   - /assets/js/app/alpine/regime-dial.js answers 200 and reads the dial from `value`, not from `percentile`.
+//   - /assets/js/app/alpine/regime-dial.js answers 200 and reads the dial from `value`, not from `percentile`;
+//   - (PR 1705) the swarm session page reads levels, not the composite's 3-year percentile: lib/session-brief.js picks
+//     the panels' index levels and no compositePercentile, and views/swarm/session.html shows the composite itself.
 import type { VersionCheck } from "../../version-check.ts";
 
 export const FILES = [
   { path: "/assets/js/app/alpine/views/regime.js", must: /\b_apply\(data\)/, mustNot: /regime-scale\.js/, what: "shows the API's labels, not a client-side re-cut" },
   { path: "/assets/js/app/alpine/regime-dial.js", must: /\bvalue\b/, mustNot: /\.percentile\b/, what: "reads the dial from value, not percentile" },
+  { path: "/assets/js/app/lib/session-brief.js", must: /pick\("macroIndex", "macro_index"\)/, mustNot: /compositePercentile/, what: "the session brief reads index levels, not percentiles" },
+  { path: "/views/swarm/session.html", must: /Composite <b x-text="fmtNum\(session\.regimeSummary\?\.composite, 3\)">/, mustNot: /compositePercentile/, what: "the session page shows the composite, not its 3-year percentile" },
 ] as const;
 
 /** PURE. Why the served files are not the composite-reading page; empty when they are. */

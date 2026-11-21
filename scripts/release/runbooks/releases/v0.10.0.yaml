@@ -21,6 +21,12 @@ notes: |
   1686, 1687, 1688 and 1692. 1651 ran in v0.9.1 already (it reached main separately); the scope lists it
   because the range does.
 
+  Second QA session (2026-11-20). rc.1 never reached production. Six main PRs reached releases-0.10.x by route (a),
+  merge ea1b64a5 (1705, 1706, 1709, 1711, 1714, 1715), and qa/0.10.x-2026-11-20 was cut from it. 1709 changes the v4
+  composite to the 1/n mean of macro, onchain and factor (D89): Q41-regime-v4 now also asserts that mean on the
+  newest served snapshot. 1705 moves the swarm session page to index levels: Q42-regime-page now also reads
+  lib/session-brief.js and views/swarm/session.html.
+
   Migrations: 0132_flow_index.sql (compat: additive; the deposit-flow index tables flow_index_deployment,
   flow_index_blocks, flow_index_logs, their indexes and rm_app grants) and 0133_buybacks_refresh_disabled.sql
   (compat: additive; disables every buybacks.refresh schedule and dead-letters its pending and running jobs, no
@@ -82,6 +88,12 @@ scope:
   - {pr: 1699, what: "analyst-sdk bumped to 0.7.0 (tag analyst-sdk-v0.7.0, moved to the PR 1704 merge)", check: "Q37-sdk-tests"}
   - {pr: 1702, what: "Q02-dump reuses the newest production dump under 24 hours old; baseline liveness measured from the stack's start", check: "Q02-dump"}
   - {pr: 1704, what: "Regime methodology renamed v5 to v4 (D88): the DB stamps v3 then v4, no gap", check: "Q41-regime-v4"}
+  - {pr: 1705, what: "The swarm session page reads the composite and the panels' index levels, not the composite's 3-year percentile; docs say outside judging is open", check: "Q42-regime-page"}
+  - {pr: 1706, what: "The intro text under page titles runs the full hero width (CSS)", check: "Q24-site"}
+  - {pr: 1709, what: "The regime composite is the 1/n mean of every included panel, factor included (D89, issue 1708); the tag stays v4", check: "Q41-regime-v4"}
+  - {pr: 1711, what: "A web release sets its version on the web release branch (web-content runbook and web-release-lib)", none: "web content release tooling; this kitchen-sink runbook never runs web-content.yaml, and the PR carries its own unit tests"}
+  - {pr: 1714, what: "Fixes from web-v0.2.1; W13 opens the backport PR to main (web-content runbook)", none: "web content release tooling; this kitchen-sink runbook never runs web-content.yaml, and the PR carries its own unit tests"}
+  - {pr: 1715, what: "Backport of web-v0.2.1 to main: frontend/package.json version", check: "Q24-site"}
 template: kitchen-sink
 steps:
   # ── QA: stage only, as often as needed. Every step here runs on the stage target and
@@ -249,12 +261,12 @@ steps:
     standing: ["SP.2"]
     host: "capture"
     phase: "qa"
-    description: "Backup for the restore proof, with no second capture: hard-link the dump Q02-dump used (the newest production capture on the capture host, at most 24 hours old) into a new dated directory, manifest, globals and passphrase included (owner, 2026-11-20). Production's C01-backup still captures fresh"
+    description: "Backup for the restore proof, with no second capture: hard-link the dump Q02-dump used (the newest production capture on the capture host, at most 24 hours old) into a new dated directory, manifest, globals and passphrase included (owner, 2026-11-20); its receipt is linked-from.txt, written new, because a hard link keeps the source files' older mtime. Production's C01-backup still captures fresh"
     cmds:
-      - ["sh", "-c", "src=$(ls -1d {captureHome}/rm-backup-prod-2* | sort | tail -n 1) && test -f \"$src/manifest.json\" && cp -al -- \"$src\" {captureHome}/rm-backup-{target}-{runTs} && echo \"[Q14-backup] linked $src\""]
+      - ["sh", "-c", "src=$(ls -1d {captureHome}/rm-backup-prod-2* | sort | tail -n 1) && test -f \"$src/manifest.json\" && cp -al -- \"$src\" {captureHome}/rm-backup-{target}-{runTs} && echo \"$src\" > {captureHome}/rm-backup-{target}-{runTs}/linked-from.txt && echo \"[Q14-backup] linked $src\""]
     expectExit: 0
     receipts:
-      - {"dir": "{captureHome}/rm-backup-{target}-{runTs}", "pattern": "manifest.json", "required": true}
+      - {"dir": "{captureHome}/rm-backup-{target}-{runTs}", "pattern": "linked-from.txt", "required": true}
     irreversible: false
     onlyFor: "stage"
     maxMinutes: 5
@@ -792,7 +804,7 @@ steps:
     host: "target"
     phase: "qa"
     added: "v0.10.0"
-    description: "Regime methodology v4 and its composite label (PR 1665, PR 1672, issue 1652, D84, D88): the newest ledger run is stamped v4 with a succeeded v4 run (the check polls for the first scheduled run, up to 200 minutes), and from that run's as-of day the served label equals the composite's bucket on every day the bucket has held 5 days; the composite is on a 0 to 1 scale. Reads only"
+    description: "Regime methodology v4 and its composite label (PR 1665, PR 1672, issue 1652, D84, D88): the newest ledger run is stamped v4 with a succeeded v4 run (the check polls for the first scheduled run, up to 200 minutes), and from that run's as-of day the served label equals the composite's bucket on every day the bucket has held 5 days; the composite is on a 0 to 1 scale; and (PR 1709, D89) the newest served snapshot is stamped v4 with a composite equal to the 1/n mean of its macro, onchain and factor indices. Reads only"
     cmds:
       - ["bun", "scripts/release/version-check.ts", "--release", "{release}", "--check", "regime-v4", "--instance", "{instance}", "--origin", "{publicOrigin}", "--run", "{runTs}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
     expectExit: 0
@@ -807,7 +819,7 @@ steps:
     host: "target"
     phase: "qa"
     added: "v0.10.0"
-    description: "The site serves the page that shows the API's labels, cut on the composite under methodology v4 (PR 1663, PR 1685, PR 1694): the regime view applies the API's data and no longer imports the client-side re-cut regime-scale.js, the dial reads value, not percentile. Two GETs through the public origin. Reads only"
+    description: "The site serves the page that shows the API's labels, cut on the composite under methodology v4 (PR 1663, PR 1685, PR 1694): the regime view applies the API's data and no longer imports the client-side re-cut regime-scale.js, the dial reads value, not percentile; and (PR 1705) the swarm session page reads the composite and index levels, not the 3-year percentile (lib/session-brief.js, views/swarm/session.html). Four GETs through the public origin. Reads only"
     cmds:
       - ["bun", "scripts/release/version-check.ts", "--release", "{release}", "--check", "regime-page", "--instance", "{instance}", "--origin", "{publicOrigin}", "--run", "{runTs}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
     expectExit: 0
@@ -1454,7 +1466,7 @@ steps:
     host: "target"
     phase: "cutover"
     added: "v0.10.0"
-    description: "Regime methodology v4 and its composite label (PR 1665, PR 1672, issue 1652, D84, D88): the newest ledger run is stamped v4 with a succeeded v4 run (the check polls for the first scheduled run, up to 200 minutes), and from that run's as-of day the served label equals the composite's bucket on every day the bucket has held 5 days; the composite is on a 0 to 1 scale. Reads only"
+    description: "Regime methodology v4 and its composite label (PR 1665, PR 1672, issue 1652, D84, D88): the newest ledger run is stamped v4 with a succeeded v4 run (the check polls for the first scheduled run, up to 200 minutes), and from that run's as-of day the served label equals the composite's bucket on every day the bucket has held 5 days; the composite is on a 0 to 1 scale; and (PR 1709, D89) the newest served snapshot is stamped v4 with a composite equal to the 1/n mean of its macro, onchain and factor indices. Reads only"
     cmds:
       - ["bun", "scripts/release/version-check.ts", "--release", "{release}", "--check", "regime-v4", "--instance", "{instance}", "--origin", "{publicOrigin}", "--run", "{runTs}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
     expectExit: 0
@@ -1469,7 +1481,7 @@ steps:
     host: "target"
     phase: "cutover"
     added: "v0.10.0"
-    description: "The site serves the page that shows the API's labels, cut on the composite under methodology v4 (PR 1663, PR 1685, PR 1694): the regime view applies the API's data and no longer imports the client-side re-cut regime-scale.js, the dial reads value, not percentile. Two GETs through the public origin. Reads only"
+    description: "The site serves the page that shows the API's labels, cut on the composite under methodology v4 (PR 1663, PR 1685, PR 1694): the regime view applies the API's data and no longer imports the client-side re-cut regime-scale.js, the dial reads value, not percentile; and (PR 1705) the swarm session page reads the composite and index levels, not the 3-year percentile (lib/session-brief.js, views/swarm/session.html). Four GETs through the public origin. Reads only"
     cmds:
       - ["bun", "scripts/release/version-check.ts", "--release", "{release}", "--check", "regime-page", "--instance", "{instance}", "--origin", "{publicOrigin}", "--run", "{runTs}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
     expectExit: 0

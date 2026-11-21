@@ -7,7 +7,7 @@ import { apiContractProblems, EXPECTED_CONTRACT } from "../../release/version-ch
 import { envMap } from "../../release/version-checks/v0.10.0/_flow.ts";
 import { flowProblems, type FlowRead } from "../../release/version-checks/v0.10.0/flow-index.ts";
 import { buybacksProblems, MIGRATION as BUYBACKS_MIGRATION } from "../../release/version-checks/v0.10.0/buybacks-disabled.ts";
-import { bucketOf, cutsOf, labelProblems, ledgerProblems, readLedger } from "../../release/version-checks/v0.10.0/regime-v4.ts";
+import { bucketOf, compositeMeanProblems, cutsOf, labelProblems, ledgerProblems, readLedger } from "../../release/version-checks/v0.10.0/regime-v4.ts";
 import { FILES, pageProblems } from "../../release/version-checks/v0.10.0/regime-page.ts";
 import { BAA10Y_FIRST_BY, BAA10Y_MIN_ROWS, DEFAULT_WAIT_MINUTES, STAGE_WAIT_MINUTES, baa10yProblems, compositeInputProblems, legProblems } from "../../release/version-checks/v0.10.0/source-data.ts";
 import { loadReleaseRunbook } from "../../release/runbook.ts";
@@ -150,6 +150,19 @@ describe("Q41-regime-v4/C29-regime-v4 (PR 1665, D84, D88)", () => {
   });
 });
 
+describe("Q41-regime-v4/C29-regime-v4 composite mean (PR 1709, D89)", () => {
+  const l = { date: "2026-11-21", version: "v4", macroIndex: 0.3, onchainIndex: 0.36, factorIndex: 0.3, composite: 0.32 };
+  test("passes when the composite is the 1/n mean of macro, onchain and factor", () => {
+    expect(compositeMeanProblems(l)).toEqual([]);
+  });
+  test("red: the two-panel mean, a v3 snapshot, and a missing factor index", () => {
+    expect(compositeMeanProblems({ ...l, composite: 0.32 + 0.0001 }).join()).toContain("not the 1/n mean");
+    expect(compositeMeanProblems({ ...l, composite: (0.3 + 0.36) / 2 }).join()).toContain("not the 1/n mean");
+    expect(compositeMeanProblems({ ...l, version: "v3" }).join()).toContain("not v4");
+    expect(compositeMeanProblems({ ...l, factorIndex: null }).join()).toContain("factorIndex");
+  });
+});
+
 describe("Q42-regime-page/C30-regime-page (PR 1663, PR 1694)", () => {
   const served = () => FILES.map((f) => ({ path: f.path, status: 200, text: readFileSync(join(repoRoot, "frontend", "public", f.path), "utf8") }));
   test("passes on the files this commit serves", () => {
@@ -162,6 +175,10 @@ describe("Q42-regime-page/C30-regime-page (PR 1663, PR 1694)", () => {
 ${a.text}` } : a))).join()).toContain("client-side re-cut");
     expect(pageProblems(served().map((a, i) => (i === 1 ? { ...a, text: `${a.text}
 const v = model.percentile;` } : a))).join()).toContain("reads the dial from value");
+  });
+  test("red (PR 1705): a session brief or session page that reads the composite's percentile", () => {
+    expect(pageProblems(served().map((a, i) => (i === 2 ? { ...a, text: `${a.text}\nconst x = b.compositePercentile;` } : a))).join()).toContain("index levels, not percentiles");
+    expect(pageProblems(served().map((a, i) => (i === 3 ? { ...a, text: a.text.replace("fmtNum(session.regimeSummary?.composite, 3)", "ordinal(session.regimeSummary.compositePercentile)") } : a))).join()).toContain("not its 3-year percentile");
   });
 });
 
