@@ -950,7 +950,7 @@ steps:
     host: "target"
     phase: "preflight"
     since: "v0.9.2"
-    description: "CoinGecko credit: one GET /key with the production key from ~/.env; red when the remaining monthly credit is below COINGECKO_CREDIT_FLOOR_PCT (default 10) percent. Prints used, remaining and monthly credit, never the key"
+    description: "CoinGecko: one GET /key and one paid GET /ping with the production key from ~/.env; red only when CoinGecko refuses the paid call (HTTP 429 or error_code 10006: hitting the credit limit with overage not covering it); remaining credit below COINGECKO_CREDIT_FLOOR_PCT (default 10) percent is an ADVISORY line, since overage is authorized (owner, 2026-11-21). Prints used, remaining and monthly credit, never the key"
     cmds:
       - ["bun", "scripts/release/coingecko-credit.ts"]
     expectExit: 0

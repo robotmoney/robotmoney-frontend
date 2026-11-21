@@ -4,7 +4,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { checkCoingeckoCredit, floorPctFromEnv, KEY_URL, resolveKey } from "../../release/coingecko-credit.ts";
+import { checkCoingeckoCredit, floorPctFromEnv, KEY_URL, PING_URL, resolveKey } from "../../release/coingecko-credit.ts";
 
 const KEY = "CG-credit-test-key-never-printed";
 
@@ -12,13 +12,17 @@ function usage(remaining: number, monthly = 500_000) {
   return { plan: "Basic", rate_limit_request_per_minute: 250, monthly_call_credit: monthly, current_total_monthly_calls: monthly - remaining, current_remaining_monthly_calls: remaining };
 }
 
-async function run(body: unknown, opts: { status?: number; key?: string | undefined; floorPct?: number } = {}) {
+async function run(body: unknown, opts: { status?: number; key?: string | undefined; floorPct?: number; ping?: { status: number; body: unknown } } = {}) {
   const lines: { out: string[]; err: string[]; sent: { url: string; key: string | null }[] } = { out: [], err: [], sent: [] };
   const code = await checkCoingeckoCredit({
     key: "key" in opts ? opts.key : KEY,
     floorPct: opts.floorPct ?? 10,
     fetch: async (url, init) => {
       lines.sent.push({ url, key: new Headers(init.headers).get("x-cg-pro-api-key") });
+      if (url === PING_URL) {
+        const p = opts.ping ?? { status: 200, body: { gecko_says: "(V3) To the Moon!" } };
+        return new Response(JSON.stringify(p.body), { status: p.status });
+      }
       return new Response(typeof body === "string" ? body : JSON.stringify(body), { status: opts.status ?? 200 });
     },
     out: (l) => lines.out.push(l),
@@ -28,18 +32,30 @@ async function run(body: unknown, opts: { status?: number; key?: string | undefi
 }
 
 describe("coingecko-credit", () => {
-  test("remaining credit below the floor exits non-zero", async () => {
-    const r = await run(usage(49_999));
-    expect(r.code).not.toBe(0);
-    expect(r.all).toContain("below the floor 50000");
-    expect(r.all).not.toContain(KEY);
+  test("remaining credit below the floor, or past it into overage, is an advisory and exits 0 while the paid key is served", async () => {
+    for (const remaining of [49_999, -9_522]) {
+      const r = await run(usage(remaining));
+      expect(r.code).toBe(0);
+      expect(r.out.join("\n")).toContain("ADVISORY: remaining credit");
+      expect(r.all).not.toContain(KEY);
+    }
+  });
+
+  test("a refused paid call (HTTP 429 or error_code 10006) exits 1: the account is hitting its limit", async () => {
+    const r429 = await run(usage(-9_522), { ping: { status: 429, body: { status: { error_code: 10006, error_message: "monthly credit exceeded" } } } });
+    expect(r429.code).toBe(1);
+    expect(r429.err.join("\n")).toContain("refuses the paid key");
+    const r10006 = await run(usage(300_000), { ping: { status: 400, body: { error_code: 10006 } } });
+    expect(r10006.code).toBe(1);
+    const r500 = await run(usage(300_000), { ping: { status: 500, body: "x" } });
+    expect(r500.code).toBe(1);
   });
 
   test("remaining credit above the floor exits 0 and prints used, remaining and monthly credit", async () => {
     const r = await run(usage(300_000));
     expect(r.code).toBe(0);
     expect(r.out.join("\n")).toContain("used 200000, remaining 300000, monthly credit 500000");
-    expect(r.sent).toEqual([{ url: KEY_URL, key: KEY }]);
+    expect(r.sent).toEqual([{ url: KEY_URL, key: KEY }, { url: PING_URL, key: KEY }]);
     expect(r.all).not.toContain(KEY);
   });
 
