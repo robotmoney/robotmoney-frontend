@@ -47,7 +47,9 @@ export async function withRequestTiming(
       const limiter = Math.round(waits.limiterMs);
       const pool = Math.round(waits.poolMs);
       const handler = Math.max(0, Math.round(ms) - limiter - pool);
-      const split = `limiter_wait_ms=${limiter} pool_wait_ms=${pool} handler_ms=${handler}`;
+      // A handler's own phases follow (issue 1690), so the line says where the handler time went.
+      const phases = Object.entries(waits.phases ?? {}).map(([name, v]) => ` ${name}_ms=${v}`).join("");
+      const split = `limiter_wait_ms=${limiter} pool_wait_ms=${pool} handler_ms=${handler}${phases}`;
       const what = `${req.method} ${pathname} took ${(ms / 1000).toFixed(1)}s status=${status} ${split} ua=${caller}`;
       if (ms >= limitMs) log.error(`[api] request ran past the ${limitMs / 1000}s limit, so the client was cut off: ${what}`);
       else log.warn(`[api] slow request: ${what}`);

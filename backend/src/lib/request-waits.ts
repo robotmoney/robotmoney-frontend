@@ -19,6 +19,12 @@ export interface RequestWaits {
   limiterMs: number;
   /** Time spent waiting for a database pool permit (pool-gate.ts). */
   poolMs: number;
+  /**
+   * A handler's own split of its time, in ms, by phase name (issue 1690: the
+   * vintages freeze's heads_ms, manifest_ms and members_ms). The slow-request
+   * line prints each as `<name>_ms=<n>`, in the order recorded.
+   */
+  phases?: Record<string, number>;
 }
 
 const current = new AsyncLocalStorage<RequestWaits>();
@@ -35,4 +41,11 @@ export function withRequestWaits<T>(waits: RequestWaits, fn: () => T): T {
  */
 export function requestWaits(): RequestWaits | undefined {
   return current.getStore();
+}
+
+/** Record one phase of the running request's handler, in ms (no-op outside a request). */
+export function notePhase(name: string, ms: number): void {
+  const waits = current.getStore();
+  if (!waits) return;
+  (waits.phases ??= {})[name] = Math.round(ms);
 }

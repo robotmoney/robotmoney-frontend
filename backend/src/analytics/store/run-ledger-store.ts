@@ -3,6 +3,7 @@
 // updater/producer goes through analytics/api-client.ts's HTTP boundary.
 import { sql, jsonValue, type DbHandle } from "../../db/client.ts";
 import { on, onStatement, registerQuery, registerStatement } from "../../db/registry.ts";
+import { notePhase } from "../../lib/request-waits.ts";
 import {
   buildVintageManifest,
   configDigest,
@@ -154,11 +155,12 @@ const selectHistoricalSourceValues = registerQuery({
         id, source_key, market_date, market_instant, value
       FROM source_value_versions
       WHERE knowledge_time <= $1::timestamptz
-        AND (market_date IS NULL OR market_date <= $2::date)
-        AND (market_instant IS NULL OR (market_instant AT TIME ZONE 'UTC')::date <= $2::date)
         AND source_key <> ALL($3::text[])
       ORDER BY source_key, market_date, market_instant, knowledge_time DESC, id DESC
+      OFFSET 0
     ) heads
+    WHERE (market_date IS NULL OR market_date <= $2::date)
+      AND (market_instant IS NULL OR (market_instant AT TIME ZONE 'UTC')::date <= $2::date)
     GROUP BY source_key`,
     params: ["2000-01-01T00:00:00Z", "2000-01-01", "{}"],
   },
@@ -437,6 +439,14 @@ export async function loadCurrentSourceValues(db: DbHandle = sql): Promise<Froze
 // market_instant as ::text, value as float8 text, which round-trips exactly), so the members are
 // the ones the row-per-head form returned. A caller that supplies its own members for some keys
 // (the regime run, issue 1534) passes them in `excludeSourceKeys` and skips reading them.
+// Issue 1690: the read is index-only on source_value_versions_heads_idx (migration 0134, the
+// lookup key with value INCLUDEd), in the index's order, so nothing is sorted. The market-time
+// cutoff is applied to the heads, outside the OFFSET 0 fence: it tests only the DISTINCT ON key
+// (market_date, market_instant), so it keeps or drops a whole coordinate either way, and the heads
+// are the same. Inside the subquery it let the generic plan (postgres.js prepares the statement;
+// after five runs Postgres keeps one plan for every cutoff) estimate a third of the table, pick a
+// bitmap scan of both indexes and sort 560k rows on disk: 3.9 s on the production copy, against
+// 0.9 s this way. The fence keeps Postgres from pushing the cutoff back in.
 export async function loadHistoricalSourceValues(
   knowledgeTimeCutoff: string,
   marketTimeCutoff: string,
@@ -452,11 +462,12 @@ export async function loadHistoricalSourceValues(
         id, source_key, market_date, market_instant, value
       FROM source_value_versions
       WHERE knowledge_time <= ${knowledgeTimeCutoff}::timestamptz
-        AND (market_date IS NULL OR market_date <= ${marketTimeCutoff}::date)
-        AND (market_instant IS NULL OR (market_instant AT TIME ZONE 'UTC')::date <= ${marketTimeCutoff}::date)
         AND source_key <> ALL(${[...excludeSourceKeys]}::text[])
       ORDER BY source_key, market_date, market_instant, knowledge_time DESC, id DESC
+      OFFSET 0
     ) heads
+    WHERE (market_date IS NULL OR market_date <= ${marketTimeCutoff}::date)
+      AND (market_instant IS NULL OR (market_instant AT TIME ZONE 'UTC')::date <= ${marketTimeCutoff}::date)
     GROUP BY source_key
   `) as unknown as { source_key: string; points: string }[];
   const out: FrozenSourceValue[] = [];
@@ -634,14 +645,25 @@ export async function freezeVintage(input: FreezeVintageInput): Promise<FreezeVi
     throw new VintageConflictError({ vintageId: frozen.vintageId, manifest: frozen.manifest, memberCount: frozen.memberCount, replayed: false });
   }
 
+  // The slow-request line carries this split (issue 1690): heads_ms (the ledger
+  // head read), manifest_ms (the regime members and the manifest) and members_ms
+  // (the vintage and member inserts).
+  let mark = performance.now();
+  const lap = (phase: string) => {
+    const now = performance.now();
+    notePhase(phase, now - mark);
+    mark = now;
+  };
   const byCutoff = await loadHistoricalSourceValues(
     input.knowledgeTimeCutoff,
     input.marketTimeCutoff,
     sql,
     input.regimeVersionIds ? REGIME_MAPPED_KEYS : [],
   );
+  lap("heads");
   try {
     return await sql.begin(async (tx) => {
+      mark = performance.now();
       let members = byCutoff;
       if (input.regimeVersionIds) {
         const regime = await loadRegimeMembers(tx, input.regimeVersionIds, input.knowledgeTimeCutoff, input.marketTimeCutoff);
@@ -654,6 +676,7 @@ export async function freezeVintage(input: FreezeVintageInput): Promise<FreezeVi
         input.knowledgeTimeCutoff,
         input.marketTimeCutoff,
       );
+      lap("manifest");
       const [vintage] = await on(tx, insertVintage)<{ id: string | number }>`
         INSERT INTO analytics_data_vintages
           (run_id, tool_id, knowledge_time_cutoff, market_time_cutoff, methodology_version_id,
@@ -680,6 +703,7 @@ export async function freezeVintage(input: FreezeVintageInput): Promise<FreezeVi
         await on(tx, insertVintageMembers)`
           INSERT INTO analytics_vintage_members ${tx(memberRows.slice(start, start + MEMBER_INSERT_BATCH_SIZE), "vintage_id", "source_value_version_id", "last_source_value_version_id", "source_key")}`;
       }
+      lap("members");
       return { vintageId, manifest, memberCount: members.length, replayed: false };
     });
   } catch (err) {

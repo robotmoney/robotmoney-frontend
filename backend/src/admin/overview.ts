@@ -160,7 +160,7 @@ const lastJobOfKind = registerQuery({
   purpose: "Read a monitored kind's newest job, to tell dead, stuck and running apart.",
   callers: [ADMIN_ROUTE],
   probe: {
-    statement: "SELECT id, status, locked_at FROM jobs WHERE kind = $1 ORDER BY id DESC LIMIT 1",
+    statement: "SELECT id, status, locked_at FROM jobs WHERE kind >= $1 AND kind <= $1 ORDER BY kind, id DESC LIMIT 1",
     params: ["regime.classify"],
   },
 });
@@ -173,7 +173,7 @@ const lastRunOfKind = registerQuery({
   purpose: "Read a monitored kind's newest run and its outcome.",
   callers: [ADMIN_ROUTE],
   probe: {
-    statement: "SELECT status, started_at, finished_at FROM job_runs WHERE kind = $1 ORDER BY started_at DESC LIMIT 1",
+    statement: "SELECT status, started_at, finished_at FROM job_runs WHERE kind >= $1 AND kind <= $1 ORDER BY kind, started_at DESC LIMIT 1",
     params: ["regime.classify"],
   },
 });
@@ -253,15 +253,24 @@ export async function getOverviewProjection(): Promise<AdminOverview> {
 
   // ── Production-kind health ────────────────────────────────────────────
   const production: ProductionKindHealth[] = [];
+  // THE KIND AS A RANGE (issue 1690). `kind >= $1 AND kind <= $1` is
+  // `kind = $1`, written so only jobs_kind_id_idx / job_runs_kind_started_idx
+  // (migration 0134) can return the ORDER BY without a sort. postgres.js
+  // prepares each statement, and after five runs Postgres keeps one generic
+  // plan for every kind. Written as `kind = $1 ORDER BY id DESC`, that plan
+  // walked the primary key backward filtering on kind: one row for a sampler
+  // kind, the whole table for a kind with no rows (regime.classify,
+  // research.refresh). That is the 5 s statement timeout production hit on
+  // 2026-11-18. As a range, every kind is one index descent.
   for (const kind of MONITORED_KINDS) {
     const [lastJob] = await on(sql, lastJobOfKind)<{ id: string; status: string; locked_at: Date | null }>`
       SELECT id, status, locked_at
-        FROM jobs WHERE kind = ${kind}
-       ORDER BY id DESC LIMIT 1`;
+        FROM jobs WHERE kind >= ${kind} AND kind <= ${kind}
+       ORDER BY kind, id DESC LIMIT 1`;
     const [lastRun] = await on(sql, lastRunOfKind)<{ status: string; started_at: Date | null; finished_at: Date | null }>`
       SELECT status, started_at, finished_at
-        FROM job_runs WHERE kind = ${kind}
-       ORDER BY started_at DESC LIMIT 1`;
+        FROM job_runs WHERE kind >= ${kind} AND kind <= ${kind}
+       ORDER BY kind, started_at DESC LIMIT 1`;
 
     const runningTooLong =
       lastJob?.status === "running" &&
