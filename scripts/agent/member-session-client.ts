@@ -63,7 +63,7 @@ import { classifyRegime, path as routePath, ROUTES } from "@robotmoney/contract"
 import { mkdirSync, existsSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { authorTake, sleeveTargetsFromBrief, type RegimeContext } from "../lib/swarm/inference.ts";
+import { authorTake, regimeFromBrief, sleeveTargetsFromBrief, type RegimeContext } from "../lib/swarm/inference.ts";
 
 const HOME = process.env.HOME ?? "/home/agent";
 const CLIENT_DIR = join(HOME, ".rm-member");
@@ -354,7 +354,6 @@ async function participate(): Promise<void> {
   stage("connect");
 
   // Read context over REST — this member's OWN fetch, not the harness's.
-  const regime = (await restJson<{ latest?: any }>(`${ROUTES.dashboards.regimeSnapshots}?range=1`)).body?.latest ?? {};
   // Read the brief for THIS session (not merely the newest brief that happens
   // to share its date and subject) ONCE — it carries both which kind of
   // recommendation this session wants (T17) and its immutable report binding,
@@ -365,24 +364,17 @@ async function participate(): Promise<void> {
   });
   const requireWeights = await resolveRequireWeights(sessionId, subjectId, brief);
   const reportSnapshotId = brief.status === 200 ? reportSnapshotIdFromBrief(brief.body) : undefined;
-  const composite = Number(regime?.composite ?? 0.5);
-  const regimeCtx: RegimeContext = {
-    composite,
-    compositePercentile: regime?.compositePercentile ?? regime?.composite_percentile ?? null,
-    regime: regime?.regime ?? null,
-    macroRegime: regime?.macroRegime ?? regime?.macro_regime ?? null,
-    onchainRegime: regime?.onchainRegime ?? regime?.onchain_regime ?? null,
-    factorRegime: regime?.factorRegime ?? regime?.factor_regime ?? null,
-    macroPercentile: regime?.macroPercentile ?? regime?.macro_percentile ?? null,
-    onchainPercentile: regime?.onchainPercentile ?? regime?.onchain_percentile ?? null,
-    factorPercentile: regime?.factorPercentile ?? regime?.factor_percentile ?? null,
-  };
+  // Issue 1695: the readings and the task are the served brief's, the same ones
+  // outside members read. No brief yet means every reading is missing.
+  const regimeCtx: RegimeContext = regimeFromBrief(brief.status === 200 ? brief.body?.body : null);
+  const composite = regimeCtx.composite;
+  const briefTask = brief.status === 200 ? (brief.body?.body as { prompt?: { user?: unknown } } | undefined)?.prompt?.user : undefined;
   stage("fetch");
 
   // Optional provenance footnote using RM's shared regime classifier — same
   // behavior the host-run driver had for this member.
   let provenance: string[] = [];
-  if (memberId === "cygnus") {
+  if (memberId === "cygnus" && composite !== null) {
     provenance = [`RM classifier: composite ${composite.toFixed(3)} → ${classifyRegime(composite)}`];
   }
 
@@ -400,6 +392,7 @@ async function participate(): Promise<void> {
       diagnosticArtifactPath: process.env.RM_DIAGNOSTIC_ARTIFACT,
       requireWeights,
       targets: brief.status === 200 ? sleeveTargetsFromBrief(brief.body?.body) : [],
+      ...(typeof briefTask === "string" ? { task: briefTask } : {}),
     },
   );
   const provenanceText = provenance.length ? `\n\n_Provenance: ${provenance.join("; ")}_` : "";

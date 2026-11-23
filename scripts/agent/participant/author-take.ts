@@ -36,6 +36,7 @@ import {
   parseStanceFromBody,
   parseWeightsFromBody,
   promptFor,
+  regimeFromBrief,
   sleeveTargetsFromBrief,
   type Persona,
   type RegimeContext,
@@ -85,6 +86,7 @@ export interface TakeContext {
   regime: RegimeContext;
   requireWeights: boolean;
   targets: SleeveTarget[];
+  task?: string;
   reportSnapshotId?: string;
 }
 
@@ -93,8 +95,8 @@ export interface TakeContext {
  * (the participant holds no database credential):
  *  - the member's own record, for its lens (a failed read falls back to the
  *    in-house table, then to a neutral lens, never to a made-up one);
- *  - the latest regime snapshot, the numbers every take cites;
  *  - the session's brief (404 is legitimate: no brief yet) for the sleeve
+ *    readings and task every take cites (issue 1695), the sleeve
  *    targets in force, the report binding and, when the brief does not say which
  *    kind of recommendation it wants, the subject.
  */
@@ -106,25 +108,15 @@ export async function readTakeContext(cfg: AuthorTakeEnv, fetchImpl: typeof fetc
   const lens =
     typeof member?.lens === "string" && member.lens.trim() !== "" ? member.lens.trim() : (known?.lens ?? "generalist");
 
-  const regimeRes = await fetchImpl(`${cfg.apiUrl}${ROUTES.dashboards.regimeSnapshots}?range=1`, { headers });
-  if (!regimeRes.ok) throw new Error(`${ROUTES.dashboards.regimeSnapshots} answered HTTP ${regimeRes.status}`);
-  const latest = ((await regimeRes.json()) as { latest?: Record<string, any> } | null)?.latest ?? {};
-  const pick = (camel: string, snake: string) => latest[camel] ?? latest[snake] ?? null;
-  const regime: RegimeContext = {
-    composite: Number(latest.composite ?? 0.5),
-    compositePercentile: pick("compositePercentile", "composite_percentile"),
-    regime: latest.regime ?? null,
-    macroRegime: pick("macroRegime", "macro_regime"),
-    onchainRegime: pick("onchainRegime", "onchain_regime"),
-    factorRegime: pick("factorRegime", "factor_regime"),
-    macroPercentile: pick("macroPercentile", "macro_percentile"),
-    onchainPercentile: pick("onchainPercentile", "onchain_percentile"),
-    factorPercentile: pick("factorPercentile", "factor_percentile"),
-  };
-
   const briefRes = await fetchImpl(`${cfg.apiUrl}${ROUTES.swarm.brief}?session=${encodeURIComponent(cfg.sessionId)}`, { headers });
   if (!briefRes.ok && briefRes.status !== 404) throw new Error(`${ROUTES.swarm.brief} answered HTTP ${briefRes.status}`);
-  const brief = briefRes.ok ? ((await briefRes.json()) as { body?: { subject?: { recommendationType?: string | null } }; reportSnapshotId?: unknown }) : null;
+  const brief = briefRes.ok
+    ? ((await briefRes.json()) as { body?: { subject?: { recommendationType?: string | null }; prompt?: { user?: unknown } }; reportSnapshotId?: unknown })
+    : null;
+  // Issue 1695: the readings and the task are the served brief's, the same ones
+  // outside members read. No brief yet means every reading is missing.
+  const regime = regimeFromBrief(brief?.body);
+  const task = typeof brief?.body?.prompt?.user === "string" ? brief.body.prompt.user : undefined;
   let recommendationType = brief?.body?.subject?.recommendationType ?? null;
   if (recommendationType == null) {
     const subjectRes = await fetchImpl(`${cfg.apiUrl}${routePath(ROUTES.swarm.subject, { id: cfg.subjectId })}`, { headers });
@@ -136,6 +128,7 @@ export async function readTakeContext(cfg: AuthorTakeEnv, fetchImpl: typeof fetc
     regime,
     requireWeights: recommendationType === "bucket_weights",
     targets: sleeveTargetsFromBrief(brief?.body),
+    ...(task === undefined ? {} : { task }),
     ...(reportSnapshotId === undefined ? {} : { reportSnapshotId }),
   };
 }
@@ -145,6 +138,7 @@ export function takePrompt(cfg: AuthorTakeEnv, context: TakeContext): string {
   return promptFor(context.persona, context.regime, cfg.subjectId, {
     requireWeights: context.requireWeights,
     targets: context.targets,
+    task: context.task,
   });
 }
 
@@ -180,7 +174,7 @@ export function parseTakeAnswer(
   const shortfalls = judgeShortfalls(body);
   if (shortfalls.length > 0) throw new ShortTakeError(shortfalls.join("; "));
   // Production's one provenance footnote, from the shared classifier.
-  if (cfg.memberId === "cygnus") {
+  if (cfg.memberId === "cygnus" && context.regime.composite !== null) {
     body += `\n\n_Provenance: RM classifier: composite ${context.regime.composite.toFixed(3)} → ${classifyRegime(context.regime.composite)}_`;
   }
   const draft: Record<string, unknown> = {

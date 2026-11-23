@@ -13,10 +13,11 @@ import { useCleanDatabasePerTest } from "./support/clean-db.ts";
 import { handleSwarm } from "../src/api/routes/swarm.ts";
 import * as swarmDomain from "../src/swarm/domain.ts";
 import { importRegimeEq, loadEqSnapshot } from "../src/db/import-regime-eq.ts";
+import { ALLOCATION_FRAMEWORK_SEED } from "../src/chain/allocation-framework.ts";
 import { eqSnapshotToRows } from "../src/analytics/report/regime-eq-map.ts";
 import type { RegimeSnapshotRow } from "../src/analytics/report/regime-projection.ts";
 import { bearerHeaders, provisionAnalyticsToken } from "./support/automation-auth.ts";
-import { day, noon, publishNow, recordWrittenAt, regimeRow, servedComposites, setReadMode } from "./support/regime-publications.ts";
+import { day, noon, publishNow, recordWrittenAt, regimeRow, richRegimeRow, servedComposites, setReadMode } from "./support/regime-publications.ts";
 
 useCleanDatabasePerTest(import.meta.file);
 
@@ -114,5 +115,72 @@ describe("issue 999: the provider door and the importer cannot put unpublished n
       expect({ mode, served: (await servedComposites(mode, 5000))[last] }).toEqual({ mode, served: 0.123 });
     }
     await setReadMode("compatibility");
+  });
+});
+
+describe("issue 1695: every member reads the same readings and task from the brief", () => {
+  async function publishedBody(framework = false): Promise<Record<string, any>> {
+    const subjectId = `issue-1695-${crypto.randomUUID().slice(0, 8)}`;
+    await swarmDomain.ensureSubject(subjectId, "Issue 1695 Subject");
+    if (framework) {
+      await sql`UPDATE swarm_subjects SET source = ${sql.json({ type: "framework" })}, recommendation_type = 'bucket_weights' WHERE id = ${subjectId}`;
+      await fixtureDb`INSERT INTO allocation_framework (id, asof, vault_contract, buckets)
+                VALUES (1, '2026-06-02', ${ALLOCATION_FRAMEWORK_SEED.vault_contract},
+                        ${fixtureDb.json(JSON.parse(JSON.stringify(ALLOCATION_FRAMEWORK_SEED.buckets)))})
+                ON CONFLICT (id) DO UPDATE SET asof = EXCLUDED.asof, buckets = EXCLUDED.buckets`;
+    }
+    const session = await swarmDomain.openSession(subjectId);
+    await swarmDomain.publishBrief(session.id, 60);
+    const [brief] = await sql<{ body: Record<string, any> }[]>`SELECT body FROM swarm_briefs WHERE session_id = ${session.id}`;
+    return brief!.body;
+  }
+
+  test("the regime block carries the factor label and the three panel percentiles of its own snapshot", async () => {
+    const [y, today] = [day(-1), day(0)];
+    await publishNow({ asof: today, regime: [regimeRow(y, 0.2), richRegimeRow(today, 0.34)] });
+    const { regime } = await publishedBody();
+    expect(String(regime.date).slice(0, 10)).toBe(today);
+    expect({
+      factor_regime: regime.factor_regime,
+      macro_percentile: regime.macro_percentile,
+      onchain_percentile: regime.onchain_percentile,
+      factor_percentile: regime.factor_percentile,
+    }).toEqual({ factor_regime: "risk_off", macro_percentile: 0.44, onchain_percentile: 0.81, factor_percentile: 0.19 });
+    // The composite's 3-year percentile stays retired (1660).
+    expect(regime).not.toHaveProperty("composite_percentile");
+  });
+
+  test("a missing percentile is null in the brief, never an estimate", async () => {
+    const today = day(0);
+    await publishNow({ asof: today, regime: [regimeRow(today, 0.34)] });
+    const { regime } = await publishedBody();
+    expect([regime.macro_percentile, regime.onchain_percentile, regime.factor_percentile, regime.factor_regime]).toEqual([null, null, null, null]);
+  });
+
+  test("additive only: every field the brief carried before keeps its name and type", async () => {
+    const today = day(0);
+    await publishNow({ asof: today, regime: [richRegimeRow(today, 0.34)] });
+    const body = await publishedBody();
+    const shape = (o: Record<string, unknown>) => Object.fromEntries(Object.entries(o).map(([k, v]) => [k, v === null ? "null" : Array.isArray(v) ? "array" : typeof v]));
+    expect(shape(body)).toMatchObject({
+      regime: "object", subject: "object", recentSessions: "array", researchSignals: "array",
+      prompt: "object", takeSchema: "object", windowClosesAt: "string",
+    });
+    expect(shape(body.prompt)).toEqual({ system: "string", user: "string" });
+    expect(Object.keys(body.regime)).toEqual(expect.arrayContaining(["date", "composite", "regime", "macro_regime", "onchain_regime", "method"]));
+    expect(body.regime.regime).toBe("risk_on");
+    expect(body.prompt.user).toStartWith("Review the supplied swarm context for Issue 1695 Subject on ");
+    expect(body.prompt.user).toContain("and return one take matching takeSchema.");
+  });
+
+  test("the task text names the subject, the sleeves the weights cover, and the targets in force as the starting point", async () => {
+    const body = await publishedBody(true);
+    const user: string = body.prompt.user;
+    const first = body.allocation.buckets[0];
+    expect(user).toContain(`The targets in force are ${first.id} ${+(first.target_weight * 100).toFixed(1)}%`);
+    expect(user).toContain("The subject under review is Issue 1695 Subject");
+    expect(user).toContain(`The weights cover these sleeves: ${body.takeSchema.weights.buckets.join(", ")}.`);
+    expect(user).toContain("starting point, not the answer");
+    expect(user).toContain("A null reading is missing: do not estimate it.");
   });
 });
