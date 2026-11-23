@@ -32,11 +32,11 @@ import {
   admissionRecord,
   ADMISSION_RECORD_FILE,
   formatAdmissionRecords,
-  resolveModelConfig,
   runOnboardingEvalWithRetry,
   type AdmissionRecord,
   type OnboardingEvalResult,
 } from "./lib/onboarding-eval.ts";
+import { DEFAULT_FAMILY } from "./lib/model-registry.ts";
 
 const repoRoot = join(import.meta.dir, "..");
 const paths = selectExistingInstance(stateRoot(process.env), instanceFlag(process.argv.slice(2)));
@@ -138,7 +138,9 @@ async function onboarding(): Promise<void> {
   // provider flake is retried inside runOnboardingEvalWithRetry.
   // ONBOARDING_SWEEP_MODELS and ONBOARDING_SWEEP_IDENTITIES_PER_MODEL widen it.
   {
-    const sweepModels = (process.env.ONBOARDING_SWEEP_MODELS?.trim() || process.env.AGENT_MODEL || resolveModelConfig().model)
+    const sweepModels = (process.env.ONBOARDING_SWEEP_MODELS?.trim() || process.env.AGENT_MODEL || DEFAULT_FAMILY)
+      // The registry SELECTOR, never the resolved raw id: each entry becomes
+      // AGENT_MODEL below, and an acceptance path refuses a raw id (D22 rule 1).
       .split(":")
       .map((m) => m.trim())
       .filter(Boolean);
