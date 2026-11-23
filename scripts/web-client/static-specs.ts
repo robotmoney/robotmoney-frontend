@@ -22,6 +22,7 @@ export const NOT_STATIC: Record<string, string> = {
   "preview-routes": "starts its own preview server",
   "api-unreachable": "starts its own preview server",
   "api-range-mismatch": "starts its own preview server",
+  "footer-version": "starts its own preview server",
 };
 
 export function allSpecs(dir: string = SPEC_DIR): string[] {

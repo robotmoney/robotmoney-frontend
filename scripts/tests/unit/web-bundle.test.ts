@@ -32,7 +32,7 @@ import {
 } from "../../lib/web-bundle.ts";
 
 const PRINCIPAL = "web-bundle@test";
-const VERSION = { name: "@robotmoney/web-client", version: "0.1.0", commit: "0edfad37", apiRange: "^0.5.0" };
+const VERSION = { name: "@robotmoney/web-client", version: "0.1.0", commit: "0edfad37", apiRange: "^0.5.0", committedAt: "2026-11-12T14:03:27.000Z" };
 
 let root: string;
 let site: string;
@@ -146,6 +146,8 @@ describe("verify", () => {
     expect(readFileSync(join(dest, "assets", "logo.bin"))).toEqual(readFileSync(join(site, "assets", "logo.bin")));
     // Nothing but the destination appeared beside it: the staging dir was renamed, not left behind.
     expect(readdirSync(dir).sort()).toEqual(["dest", "out"]);
+    // Issue 1713: version.json carries committedAt beside the signed version+commit pair.
+    expect(JSON.parse(readFileSync(join(dest, "version.json"), "utf8")).committedAt).toBe(VERSION.committedAt);
   });
 
   test("a changed byte fails verification and writes nothing", () => {

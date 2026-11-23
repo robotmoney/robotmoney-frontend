@@ -33,7 +33,7 @@ const COMPARATOR_RE = new RegExp(`^(\\^|~|>=|<=|>|<|=)?(${NUM})\\.(${NUM})\\.(${
  * @typedef {{ major: number, minor: number, patch: number, prerelease: boolean }} ParsedVersion
  * @typedef {{ op: string, major: number, minor: number, patch: number }} Comparator
  * @typedef {"compatible" | "incompatible" | "unknown"} CompatStatus
- * @typedef {{ status: CompatStatus, api: string | null, range: string | null, reason: string }} CompatResult
+ * @typedef {{ status: CompatStatus, api: string | null, range: string | null, reason: string, site?: unknown, apiBody?: unknown }} CompatResult
  */
 
 /**
@@ -174,13 +174,17 @@ export async function checkApiCompat({ siteVersionUrl, apiVersionUrl, fetch: fet
   const api = apiBody && typeof apiBody === "object" && typeof (/** @type {{ api?: unknown }} */ (apiBody)).api === "string"
     ? /** @type {string} */ ((/** @type {{ api: string }} */ (apiBody)).api)
     : null;
-  if (range === null) return { status: "unknown", api, range, reason: "this site declares no API range" };
-  if (api === null) return { status: "unknown", api, range, reason: "the API did not report a version" };
+  // The raw bodies ride along so the footer's release line (lib/release-identity.js)
+  // reads the same two responses without fetching them again.
+  /** @param {CompatResult} r @returns {CompatResult} */
+  const done = (r) => ({ ...r, site, apiBody });
+  if (range === null) return done({ status: "unknown", api, range, reason: "this site declares no API range" });
+  if (api === null) return done({ status: "unknown", api, range, reason: "the API did not report a version" });
   const ok = apiVersionSatisfies(api, range);
-  if (ok === null) return { status: "unknown", api, range, reason: "unreadable version or range" };
+  if (ok === null) return done({ status: "unknown", api, range, reason: "unreadable version or range" });
   return ok
-    ? { status: "compatible", api, range, reason: "in range" }
-    : { status: "incompatible", api, range, reason: `API ${api} is outside this page's range ${range}` };
+    ? done({ status: "compatible", api, range, reason: "in range" })
+    : done({ status: "incompatible", api, range, reason: `API ${api} is outside this page's range ${range}` });
 }
 
 export const RELOAD_NOTICE_TEXT =

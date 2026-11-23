@@ -136,6 +136,8 @@
   text-align: center;
 }
 .footer__bottom > .footer__fineprint:not(.footer__fineprint--legal) { order: 2; }
+/* The release line (issue 1713): last, and its own line. */
+.footer__bottom > .footer__version { order: 3; flex: 1 1 100%; text-align: center; }
 /* Legal, in the bottom bar: the same quiet mono as the fine print beside it. */
 .footer__legal { order: 1; display: flex; gap: 1.25rem; }
 .footer__legal-link {
