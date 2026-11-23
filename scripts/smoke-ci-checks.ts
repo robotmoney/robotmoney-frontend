@@ -27,12 +27,11 @@ import { hostBackendUrl, instanceComposeEnv } from "./stack/config.ts";
 import { buildSmokeLifecycleComposeEnv } from "./lib/smoke-lifecycle-env.ts";
 import { instanceFlag, readStackState, selectExistingInstance, stateRoot } from "./lib/smoke-state.ts";
 import { OPERATOR_TOKEN_FILE_ENV } from "./lib/operator-token.ts";
-import { selectChecks, type CheckName } from "./lib/smoke-ci-check-select.ts";
+import { onboardingSweepModels, selectChecks, type CheckName } from "./lib/smoke-ci-check-select.ts";
 import {
   admissionRecord,
   ADMISSION_RECORD_FILE,
   formatAdmissionRecords,
-  resolveModelConfig,
   runOnboardingEvalWithRetry,
   type AdmissionRecord,
   type OnboardingEvalResult,
@@ -138,10 +137,7 @@ async function onboarding(): Promise<void> {
   // provider flake is retried inside runOnboardingEvalWithRetry.
   // ONBOARDING_SWEEP_MODELS and ONBOARDING_SWEEP_IDENTITIES_PER_MODEL widen it.
   {
-    const sweepModels = (process.env.ONBOARDING_SWEEP_MODELS?.trim() || process.env.AGENT_MODEL || resolveModelConfig().model)
-      .split(":")
-      .map((m) => m.trim())
-      .filter(Boolean);
+    const sweepModels = onboardingSweepModels(process.env);
     const identitiesPerModel = Math.max(1, Number.parseInt(process.env.ONBOARDING_SWEEP_IDENTITIES_PER_MODEL ?? "1", 10) || 1);
     console.log(
       `\n[ci-checks] running REAL-INFERENCE onboarding eval sweep (§11 R8): ${sweepModels.length * identitiesPerModel} admission(s) across ` +

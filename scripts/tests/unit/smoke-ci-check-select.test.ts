@@ -6,7 +6,9 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { CHECK_NAMES, selectChecks } from "../../lib/smoke-ci-check-select.ts";
+import { CHECK_NAMES, onboardingSweepModels, selectChecks } from "../../lib/smoke-ci-check-select.ts";
+import { DEFAULT_FAMILY, resolveAgentModel } from "../../lib/model-registry.ts";
+import { resolveModelConfig } from "../../lib/onboarding-eval.ts";
 
 const repoRoot = join(import.meta.dir, "..", "..", "..");
 
@@ -65,4 +67,20 @@ describe("every check is run by some e2e-*.yml workflow", () => {
       expect(owners.length).toBe(PREREQUISITE_OWNERS[name] ?? 1);
     });
   }
+});
+
+describe("onboardingSweepModels (issue #1731)", () => {
+  test("with ONBOARDING_SWEEP_MODELS and AGENT_MODEL unset, the sweep is [DEFAULT_FAMILY] and the acceptance path accepts it", () => {
+    const models = onboardingSweepModels({});
+    expect(models).toEqual([DEFAULT_FAMILY]);
+    // Each entry becomes AGENT_MODEL; the default (absent) path is acceptance.
+    const cfg = resolveModelConfig({ AGENT_MODEL: models[0], OPENCODE_API_KEY: "test-key" });
+    expect(cfg.keyless).toBe(false);
+    expect(cfg.model).toBe(resolveAgentModel({ AGENT_MODEL: DEFAULT_FAMILY }));
+  });
+
+  test("ONBOARDING_SWEEP_MODELS wins over AGENT_MODEL and splits on ':'", () => {
+    expect(onboardingSweepModels({ ONBOARDING_SWEEP_MODELS: " a : b ", AGENT_MODEL: "c" })).toEqual(["a", "b"]);
+    expect(onboardingSweepModels({ AGENT_MODEL: "c" })).toEqual(["c"]);
+  });
 });
