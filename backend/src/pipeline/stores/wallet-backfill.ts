@@ -522,7 +522,15 @@ const recordStateUpsert = registerQuery({
  */
 export async function gapReports(db: RegistryDb, keys: readonly string[] | null, now: Date): Promise<GapReport[]> {
   const defs = keys === null ? SERIES_REGISTRY : keys.map((k) => getSeriesDef(k)).filter((d) => d !== undefined);
-  return Promise.all(defs.map((def) => detectGaps(def!, db, now)));
+  // One series at a time (issue 1721). The pipeline route runs this on the
+  // batch pool, whose size counts ONE connection per pipeline request
+  // (db/connection-budget.ts batchShareFor). A Promise.all here took one batch
+  // connection per series, so the wallet backfill's two-series read held two
+  // while analytics held theirs, and its own second read was refused with 503
+  // db_saturated gate=batch (v0.10.0 production soak).
+  const reports: GapReport[] = [];
+  for (const def of defs) reports.push(await detectGaps(def!, db, now));
+  return reports;
 }
 
 /** Every day's checkpoint, for the repair plan (`wallet_backfill.plan_state`). */
