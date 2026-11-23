@@ -8,8 +8,7 @@
 // thousands value fell through every tiered branch and rendered as an
 // unscaled "$-500" rather than a properly scaled "$-2.00B". This test
 // exercises the shared `fmtUsdCompact` directly (bun:test importing a pure
-// production function straight out of an ES module, same pattern
-// ask-roboto-matcher.test.ts already uses for matchAgents()) across the
+// production function straight out of an ES module) across the
 // negative-value regression case, zero, and each K/M/B boundary — then
 // structurally asserts none of the 15 listed view files re-implements its
 // own compact-currency branch body instead of importing the shared one.
@@ -134,7 +133,6 @@ const CONSOLIDATED_VIEWS = [
   "dash-agent-profile.js",
   "dash-project-profile.js",
   "dash-coin-profile.js",
-  "dash-ask-roboto.js",
   "dash-lobster.js",
   "projects.js",
   "list.js",

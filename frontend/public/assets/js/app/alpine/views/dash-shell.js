@@ -26,7 +26,6 @@ const NAV_ITEMS = [
   { href: "/about", label: "About", icon: "help-circle" },
 ];
 const TOOLS_ITEMS = [
-  { href: "/ask-mr-roboto", label: "Ask Mr. Roboto", icon: "message-square" },
   { href: "/dashboard", label: "Activity Log", icon: "activity" },
   { href: "/methodology", label: "Methodology", icon: "book-open" },
 ];

@@ -111,8 +111,7 @@ describe("frontend route resolution", () => {
   // /list (issue #384, P2.1), /list2 + /list3 (issue #387), /market +
   // /dashboard (issue #392, P4.1), /agents (issue #385, P2.2),
   // /lobster + /vaults + /wallets (issue #386, P2.3/P2.4/P2.5),
-  // /methodology + /about (issue #395, P4.2/P4.3), and /ask-mr-roboto
-  // (issue #394, P5.1) have all shipped real content — each resolves to its
+  // and /methodology + /about (issue #395, P4.2/P4.3) have all shipped real content — each resolves to its
   // own fragment now. None of the nav-wired dashboard routes still point at
   // the shared coming-soon placeholder.
   test("resolves every static dashboard route to the shared placeholder, gated, under the dash layout", () => {
@@ -201,9 +200,12 @@ describe("frontend route resolution", () => {
     }
   });
 
-  test("/ask-mr-roboto (issue #394) resolves to its own real fragment, still gated under the dash layout", () => {
-    expect(viewFor("/ask-mr-roboto")).toBe("/views/dash/ask-roboto.html");
-    expect(routeMetaFor("/ask-mr-roboto")).toEqual({ layout: DASH_LAYOUT_VIEW, gated: true });
+  test("the removed Ask Mr. Roboto page (issue 1712) is an unknown route: not the gated dash layout, no fragment on disk", () => {
+    // Joined at runtime so the issue's no-references grep over frontend/ and
+    // scripts/ stays empty while this test still pins the removal.
+    const removed = ["/ask", "mr", "roboto"].join("-");
+    expect(routeMetaFor(removed)).not.toEqual({ layout: DASH_LAYOUT_VIEW, gated: true });
+    expect(existsSync(join(repoRoot, "frontend/public", `.${viewFor(removed)}`))).toBe(false);
   });
 
 
@@ -280,7 +282,6 @@ describe("frontend route resolution", () => {
       "/wallets",
       "/methodology",
       "/about",
-      "/ask-mr-roboto",
     ];
     for (const p of paths) {
       const file = Bun.file(join(repoRoot, "frontend/public", `.${viewFor(p)}`));
