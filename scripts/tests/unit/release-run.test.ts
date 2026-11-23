@@ -2710,7 +2710,7 @@ describe("resume in place at a check-only commit (issue 1565)", () => {
     const r = fakeDeps({ answers });
     const remotes: string[] = [];
     const exec = r.deps.exec;
-    r.deps.exec = (host, remote, onStdout) => { remotes.push(remote); return exec(host, remote, onStdout); };
+    r.deps.exec = (host, remote, ...rest) => { remotes.push(remote); return exec(host, remote, ...rest); };
     expect(await runRelease(["--target", f.targetFile, "--go", go2, "--journal-root", f.journalRoot, "--run", "20261008T120000Z", "--from", "Q34-check"], r.deps, CK)).toBe(0);
     expect(r.ran).toEqual(["Q06-checkout", "Q09-capture-checkout", "Q34-check"]);
     expect(remotes[0]).toContain(`checkout --detach ${C2}`);
@@ -2720,6 +2720,15 @@ describe("resume in place at a check-only commit (issue 1565)", () => {
     expect(j.commits!.at(-1)!.fromStep).toBe("Q34-check");
     expect(j.steps["Q06-checkout"]!.commit).toBe(C2);
     expect(j.steps["Q34-check"]!.commit).toBe(C2);
+
+    // A failed checkout leaves the check not run: it would read the old commit's file.
+    const g = fixture();
+    expect(await runRelease(["--target", g.targetFile, "--go", g.goFile, "--journal-root", g.journalRoot], fakeDeps({ fail: new Set(["Q34-check"]) }).deps, CK)).toBe(1);
+    const bad = fakeDeps({ answers, fail: new Set(["Q09-capture-checkout"]) });
+    expect(await runRelease(["--target", g.targetFile, "--go", go2, "--journal-root", g.journalRoot, "--run", "20261008T120000Z", "--from", "Q34-check"], bad.deps, CK)).toBe(1);
+    expect(bad.ran).toEqual(["Q06-checkout", "Q09-capture-checkout"]);
+    const jb = JSON.parse(readFileSync(join(g.journalRoot, "stage", "20261008T120000Z", "run.json"), "utf8")) as RunJournal;
+    expect(jb.steps["Q34-check"]!.error).toContain("not run: Q09-capture-checkout did not pass");
   });
 });
 

@@ -401,8 +401,17 @@ async function runReleaseOnce(
   // Issue 1565: every commit the run ran at. A journal from before the list seeds it with its own commit;
   // a resume in place appends the new one and runs on under its commit, tree and go.
   journal.commits ??= resumed ? [{ commit: journal.commit, tree: journal.tree ?? "", goSha256: journal.goSha256, fromStep: ids[0]!, at: journal.startedAt }] : [];
+  // Issue 1585: a resume in place moves the host checkouts to the new commit first. The checkout steps (cloneFrom:
+  // Q06-checkout, Q09-capture-checkout) run ahead of the selected steps, which wait for them.
+  let moveFirst: string[] = [];
   if (journal.commits.at(-1)?.commit !== commit) {
-    if (journal.commits.length > 0) deps.log(`[${NAME}] resuming in place at ${commit}: the change from ${journal.commit} is check code only; the steps already done keep their records`);
+    if (journal.commits.length > 0) {
+      deps.log(`[${NAME}] resuming in place at ${commit}: the change from ${journal.commit} is check code only; the steps already done keep their records`);
+      if (selected.length > 0) {
+        moveFirst = ids.filter((id, i) => steps[i]!.cloneFrom !== undefined && !selected.includes(id));
+        if (moveFirst.length > 0) deps.log(`[${NAME}] moving the checkouts to ${commit} first: ${moveFirst.join(", ")}`);
+      }
+    }
     journal.commits.push({ commit, tree, goSha256: go.sha256, fromStep: selected[0] ?? ids[0]!, at: deps.now().toISOString() });
   }
   journal.commit = commit;
@@ -424,7 +433,7 @@ async function runReleaseOnce(
   // that declares none runs one step at a time, in order, exactly as before. A step with `after` starts once the steps
   // it names are done and its notBefore is met, alongside whatever still runs. Only this loop writes run.json: a running
   // step returns its record here.
-  const todo = selected.filter((id) => !carried.has(id));
+  const todo = [...moveFirst, ...selected.filter((id) => !carried.has(id))];
   const inTodo = new Set(todo);
   const pending = new Set(todo);
   const inflight = new Map<string, Promise<{ id: string; ok: boolean; record: StepRecord; irreversible: boolean }>>();
@@ -457,6 +466,7 @@ async function runReleaseOnce(
       if (!pending.has(id)) continue;
       const template = steps[ids.indexOf(id)]!;
       if (template.after === undefined ? todo.slice(0, k).some(unsettled) : template.after.some((a) => inTodo.has(a) && unsettled(a))) continue;
+      if (!moveFirst.includes(id) && moveFirst.some(unsettled)) continue;
       mkdirSync(join(runDir, id), { recursive: true, mode: 0o700 });
 
       // A prod-only step (the release tags) is recorded skipped on any other policy.
@@ -473,7 +483,8 @@ async function runReleaseOnce(
       }
 
       // A step whose named step failed in this run never starts: the state it reads is not there (stage; production stops instead).
-      const failedDep = template.after?.find((a) => inTodo.has(a) && !stepDone(journal.steps[a]?.status));
+      const failedDep = template.after?.find((a) => inTodo.has(a) && !stepDone(journal.steps[a]?.status))
+        ?? (moveFirst.includes(id) ? undefined : moveFirst.find((a) => !stepDone(journal.steps[a]?.status)));
       if (failedDep !== undefined) {
         pending.delete(id);
         notRun(id, template, `${failedDep} did not pass, and this step runs after it`);
