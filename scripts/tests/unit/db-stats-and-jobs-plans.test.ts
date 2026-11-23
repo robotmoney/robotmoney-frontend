@@ -5,7 +5,7 @@
 // and backend/tests/jobs-query-plans.test.ts run the same judges against a
 // real Postgres.
 import { describe, expect, test } from "bun:test";
-import { dbStatsProblems, type DbStatsFound } from "../../release/db-stats-check.ts";
+import { PROVIDER_ROLES, dbStatsProblems, providerRoles, splitHidden, type DbStatsFound } from "../../release/db-stats-check.ts";
 import { JOBS_PLAN_READS, LIVE_INDEX, checkJobsPlans, planProblems, type ExplainResult } from "../../release/jobs-query-plans.ts";
 
 const GOOD: DbStatsFound = {
@@ -13,7 +13,7 @@ const GOOD: DbStatsFound = {
   readAllStats: true,
   statements: { otherRoles: 12, hidden: 0 },
   statementsError: null,
-  activity: { otherRoles: 3, hidden: 0 },
+  activity: { otherRoles: 3, hiddenRoles: [] },
 };
 
 describe("db-stats-check: passes only with the extension, the grant and every row visible", () => {
@@ -32,10 +32,33 @@ describe("db-stats-check: passes only with the extension, the grant and every ro
       "pg_stat_statements hides 12 other-role row(s) from rm_readonly",
     ]);
     expect(dbStatsProblems({ ...GOOD, statements: { otherRoles: 0, hidden: 0 } })).toEqual(["pg_stat_statements holds no row of another role"]);
-    expect(dbStatsProblems({ ...GOOD, activity: { otherRoles: 2, hidden: 2 } })).toEqual([
-      "pg_stat_activity hides 2 other-role session(s) from rm_readonly",
+    expect(dbStatsProblems({ ...GOOD, activity: { otherRoles: 2, hiddenRoles: ["rm_app", "rm_worker"] } })).toEqual([
+      "pg_stat_activity hides 2 other-role session(s) from rm_readonly: rm_app, rm_worker",
     ]);
-    expect(dbStatsProblems({ ...GOOD, activity: { otherRoles: 0, hidden: 0 } })).toEqual(["pg_stat_activity holds no client session of another role"]);
+    expect(dbStatsProblems({ ...GOOD, activity: { otherRoles: 0, hiddenRoles: [] } })).toEqual(["pg_stat_activity holds no client session of another role"]);
+  });
+
+  test("a hidden session of an allowlisted managed-provider role is excluded, not counted (issue 1720)", () => {
+    const found = { ...GOOD, activity: { otherRoles: 1, hiddenRoles: ["postgres"] } };
+    expect(PROVIDER_ROLES).toEqual(["postgres"]);
+    expect(dbStatsProblems(found)).toEqual([]);
+    expect(splitHidden(found.activity.hiddenRoles, PROVIDER_ROLES)).toEqual({ excluded: ["postgres"], counted: [] });
+  });
+
+  test("a hidden application-role session still refuses and names the role", () => {
+    expect(dbStatsProblems({ ...GOOD, activity: { otherRoles: 2, hiddenRoles: ["postgres", "rm_app"] } })).toEqual([
+      "pg_stat_activity hides 1 other-role session(s) from rm_readonly: rm_app",
+    ]);
+  });
+
+  test("an allowlist passed in config replaces the default", () => {
+    const allow = providerRoles({ DB_STATS_PROVIDER_ROLES: "cloudsqladmin, rdsadmin" });
+    expect(allow).toEqual(["cloudsqladmin", "rdsadmin"]);
+    expect(providerRoles({})).toEqual(PROVIDER_ROLES);
+    expect(dbStatsProblems({ ...GOOD, activity: { otherRoles: 1, hiddenRoles: ["rdsadmin"] } }, allow)).toEqual([]);
+    expect(dbStatsProblems({ ...GOOD, activity: { otherRoles: 1, hiddenRoles: ["postgres"] } }, allow)).toEqual([
+      "pg_stat_activity hides 1 other-role session(s) from rm_readonly: postgres",
+    ]);
   });
 
   test("an installed extension whose view will not answer (the library is not preloaded) refuses with the error", () => {
