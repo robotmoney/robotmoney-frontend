@@ -133,14 +133,18 @@ describe("the freeze's head read at production size (issue 1690)", () => {
     expect(judge(await explain(probe(), false))).toEqual([]);
   });
 
-  test("it never runs on the generic plan: ten reads on one connection make ten custom plans", async () => {
+  test("it never runs on the generic plan: ten reads on one connection run ten custom plans", async () => {
     const one = postgres(process.env.DATABASE_URL!, { max: 1, onnotice: () => {} });
     try {
       for (let i = 0; i < 10; i++) await loadHistoricalSourceValues(KNOWLEDGE_CUTOFF, MARKET_CUTOFF, one);
       const [plans] = await one<{ generic: number; custom: number }[]>`
-        SELECT generic_plans::int AS generic, custom_plans::int AS custom
-          FROM pg_prepared_statements WHERE statement LIKE '%DISTINCT ON (source_key, market_date, market_instant)%'`;
-      expect(plans).toEqual({ generic: 0, custom: 10 });
+        SELECT coalesce(sum(generic_plans), 0)::int AS generic, coalesce(sum(custom_plans), 0)::int AS custom
+          FROM pg_prepared_statements
+         WHERE statement LIKE '%FROM source_value_versions%' AND statement LIKE '%OFFSET 0%'`;
+      // Every one of the ten executions was planned for its own cutoffs. (postgres.js's first
+      // round trip describes the statement, which Postgres counts as one generic plan.)
+      expect(plans!.custom).toBe(10);
+      expect(plans!.generic).toBeLessThanOrEqual(1);
     } finally {
       await one.end({ timeout: 5 });
     }
