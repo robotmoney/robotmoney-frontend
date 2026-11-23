@@ -20,7 +20,7 @@ import { join } from "node:path";
 import { staticSpecFiles } from "./static-specs.ts";
 import { repoRoot } from "./version.ts";
 
-const FIXTURE_SPECS = ["preview-smoke", "api-unreachable", "api-range-mismatch", "preview-routes"];
+const FIXTURE_SPECS = ["preview-smoke", "api-unreachable", "api-range-mismatch", "footer-version", "preview-routes"];
 const LIVE_SPECS = ["preview-routes"];
 
 const args = process.argv.slice(2);

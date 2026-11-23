@@ -93,7 +93,7 @@
 
     <!-- Per-section CSS for the ported marketing fragments (loaded after the
          shared utilities they consume). -->
-    <link rel="stylesheet" href="/assets/css/sections/footer.css?v=81ec576e" />
+    <link rel="stylesheet" href="/assets/css/sections/footer.css?v=fc431c8e" />
     <link rel="stylesheet" href="/assets/css/sections/home.css?v=e6fc9cdb" />
 
     <!-- Data-driven view styles (regime + swarm). -->
@@ -418,6 +418,9 @@
             Built on Base by
             <a href="https://x.com/JunoAgent" target="_blank" rel="noopener noreferrer" class="footer__about-link">@JunoAgent</a>.
           </p>
+          <!-- Which web and platform releases are live (issue 1713), filled at
+               load by lib/release-identity.js; dashes until then. -->
+          <p class="footer__fineprint footer__version" data-release-identity>– · – · – · –</p>
         </div>
       </div>
     </footer>

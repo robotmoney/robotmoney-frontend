@@ -106,7 +106,7 @@ describe("/version.json carries apiRange", () => {
   test("webClientVersion() publishes frontend/package.json's range", async () => {
     const v = await webClientVersion();
     expect(v.apiRange).toBe(readFrontendApiRange());
-    expect(Object.keys(v).sort()).toEqual(["apiRange", "commit", "name", "version"]);
+    expect(Object.keys(v).sort()).toEqual(["apiRange", "commit", "committedAt", "name", "version"]);
   });
 
   test("a manifest with no range publishes null, never a default", async () => {

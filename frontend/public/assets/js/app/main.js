@@ -16,6 +16,7 @@ import { start } from "./router.js";
 import { startAnalytics } from "./analytics.js";
 import { apiUrl, gateApiOn, ROUTES } from "./lib/api.js";
 import { checkApiCompat, renderReloadNotice } from "./lib/api-compat.js";
+import { renderReleaseIdentity } from "./lib/release-identity.js";
 import { showMaintenance } from "./lib/maintenance-notice.js";
 import { captureReferral } from "./lib/referral.js";
 
@@ -33,6 +34,8 @@ gateApiOn(apiCompat.then((r) => r.status !== "incompatible"));
 apiCompat.then((r) => {
   if (r.status === "incompatible") renderReloadNotice(document, r);
 });
+// The footer's release line (issue 1713), from the same two responses.
+apiCompat.then((r) => renderReleaseIdentity(document, r.site ?? null, r.apiBody ?? null));
 
 // A planned or active maintenance window (issue 1220): a banner before it, a
 // maintenance view during it. Never blocks. It waits on the compat verdict like
