@@ -1,6 +1,8 @@
 // The market regime under the home page's model portfolio (Lex: the portfolio,
 // then the regime it is read against): the dial with the regime beside it, and
-// the last year on the site's chart. The composite is plotted on its own 0 to
+// the last year on the site's chart. The dial reads the regime the ring's
+// session was given (RM-215), so the two belong together; the chart is the
+// snapshots' own history, up to today. The composite is plotted on its own 0 to
 // 1 scale, and the API's label is cut on it (methodology v4), so the dial,
 // the bands and the axis read on one scale. One read of the
 // regime snapshots, made as the section nears the viewport: a visitor who never
@@ -90,15 +92,26 @@ export function registerHomeRegime(Alpine) {
         const t = this.latest?.bucketThresholds || {};
         return { riskOff: t.risk_off ?? 0.33, riskOn: t.risk_on ?? 0.67 };
       },
-      dialModel() {
+      // The reading the dial shows: the one the latest recommendation was made
+      // on, which home.js puts on `model`; today's snapshot when that session
+      // carries none (or no session has weights). `date` is set only for the
+      // session's reading.
+      /** @returns {{ regime: string, composite: number | null, date: string } | null} */
+      reading() {
+        const r = /** @type {any} */ (this).model?.reading;
+        if (r && Number.isFinite(r.composite) && r.regime) return { regime: r.regime, composite: r.composite, date: r.date || "" };
         const l = this.latest;
-        if (!l) return null;
-        const m = { value: l.composite, regime: l.regime, ...this.cuts() };
+        return l ? { regime: l.regime, composite: l.composite, date: "" } : null;
+      },
+      dialModel() {
+        const r = this.reading();
+        if (!r) return null;
+        const m = { value: r.composite, regime: r.regime, ...this.cuts() };
         return regimeDialValid(m) ? m : null;
       },
       regimeReady() { return !!this.dialModel(); },
-      regimeLabel() { return LABEL[/** @type {keyof typeof LABEL} */ (keyOf(this.latest?.regime))] || "—"; },
-      regimeColour() { return REGIME[/** @type {keyof typeof REGIME} */ (keyOf(this.latest?.regime))] || REGIME.neutral; },
+      regimeLabel() { return LABEL[/** @type {keyof typeof LABEL} */ (keyOf(this.reading()?.regime))] || "—"; },
+      regimeColour() { return REGIME[/** @type {keyof typeof REGIME} */ (keyOf(this.reading()?.regime))] || REGIME.neutral; },
       // The first day of the run the regime is in now.
       regimeSince() {
         const now = keyOf(this.latest?.regime);
@@ -107,9 +120,13 @@ export function registerHomeRegime(Alpine) {
         while (i > 0 && keyOf(rows[i - 1].regime) === now) i--;
         return short(rows[i].date);
       },
+      // The session's reading carries its own date; today's carries the day
+      // its run began.
       regimeSentence() {
-        const since = this.regimeSince();
-        return `${since ? `Since ${since}. ` : ""}The composite averages macro, on-chain and equity factor conditions, on a scale of 0 to 1.`;
+        const at = this.reading()?.date;
+        const since = at ? "" : this.regimeSince();
+        const lead = at ? `As of ${short(at)}. ` : since ? `Since ${since}. ` : "";
+        return `${lead}The composite averages macro, on-chain and equity factor conditions, on a scale of 0 to 1.`;
       },
 
       // ── The last year ──
@@ -135,7 +152,8 @@ export function registerHomeRegime(Alpine) {
       yearLabel() {
         if (!year) return "";
         const now = this.latest?.composite;
-        return `The composite, on a scale of 0 to 1, ${short(year.days[0])} to ${short(year.days[year.n - 1])}. Latest: ${this.regimeLabel()}${now == null ? "" : `, ${(+now).toFixed(2)}`}. Use the arrow keys to step through the readings.`;
+        const label = LABEL[/** @type {keyof typeof LABEL} */ (keyOf(this.latest?.regime))] || "—";
+        return `The composite, on a scale of 0 to 1, ${short(year.days[0])} to ${short(year.days[year.n - 1])}. Latest: ${label}${now == null ? "" : `, ${(+now).toFixed(2)}`}. Use the arrow keys to step through the readings.`;
       },
       yearMove(/** @type {PointerEvent} */ ev) { if (year) this.yearAt = nearestSample(year.idx, year.n, ev); },
       yearKey(/** @type {KeyboardEvent} */ ev) { if (year) this.yearAt = stepAt(ev, this.yearAt, year.n); },

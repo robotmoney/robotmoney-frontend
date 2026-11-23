@@ -129,6 +129,26 @@ function weightsSession() {
   };
 }
 
+// The swarm's latest allocation recommendation as production had it on 21 Nov
+// 2026: the four open sleeves, and the regime reading the session was given.
+// The snapshot history ends elsewhere (0.31, risk-off), so a test can tell
+// which reading the dial shows.
+function latestSession() {
+  return {
+    id: SESSION_ID,
+    date: "2026-11-21",
+    subjectId: "robotmoney-allocation",
+    subjectName: "Robot Money Model Portfolio",
+    state: "published",
+    publishedAt: "2026-11-22T12:55:00.000Z",
+    regimeSummary: { method: "composite-v1", regime: "neutral", composite: 0.3426, composite_percentile: null, macro_regime: "neutral", onchain_regime: "neutral", factor_regime: "neutral" },
+    swarmRecommendation: {
+      type: "bucket_weights",
+      weights: { conservative_defi_yield: 0.57166667, protocol_tokens: 0.04333333, real_world_assets: 0.19333333, hard_assets: 0.19166667 },
+    },
+  };
+}
+
 const ANALYSTS = [
   { id: "athena", handle: "athena", name: "Athena", status: "active", lens: "macro regime" },
   { id: "hermes", handle: "hermes", name: "Hermes", status: "active", lens: "on-chain flows" },
@@ -310,12 +330,15 @@ test("copy, CTAs and routes: the approved page, no em dash, coming soon only on 
   await expectNoBrowserErrors(errors);
 });
 
-test("the ring is the targets in force: four CATEGORICAL arcs in the published order, and the session that set them", async ({ page }) => {
+// RM-215: the ring is what the swarm made, not the seeded targets, and the
+// regime beside it is the reading that session was given.
+test("the ring is the swarm's latest recommendation: four CATEGORICAL arcs in the published order, its date, its receipt and its regime", async ({ page }) => {
   const errors = failOnBrowserErrors(page);
-  await stubHome(page, { framework: { ...TARGETS, provenance: { sessionId: SESSION_ID } } });
+  await stubHome(page, { sessions: [latestSession()], framework: TARGETS });
   await openHome(page);
 
-  await expect(page.locator(".hm-aside")).toContainText("In force since Nov 4, 2026");
+  await expect(page.locator(".hm-aside")).toContainText("Nov 21, 2026");
+  await expect(page.locator(".hm-aside")).not.toContainText("In force");
   await expect(page.locator(".hm-aside a")).toHaveAttribute("href", `/swarm/sessions/${SESSION_ID}`);
 
   const arcs = page.locator('.hm-ring circle[data-mark="series"]');
@@ -327,17 +350,17 @@ test("the ring is the targets in force: four CATEGORICAL arcs in the published o
   const keys = page.locator(".hm-keys li");
   await expect(keys).toHaveCount(4);
   await expect(keys.nth(0)).toContainText("Conservative DeFi Yield");
-  await expect(keys.nth(0).locator(".hm-keys__pct")).toHaveText("50%", { timeout: 3_000 });
+  await expect(keys.nth(0).locator(".hm-keys__pct")).toHaveText("57.2%", { timeout: 3_000 });
   await expect(keys.nth(1)).toContainText("Protocol Tokens");
   await expect(keys.nth(1)).toContainText("BTC, ETH");
-  await expect(keys.nth(1).locator(".hm-keys__pct")).toHaveText("7%");
+  await expect(keys.nth(1).locator(".hm-keys__pct")).toHaveText("4.3%");
   await expect(keys.nth(2)).toContainText("Real World Assets");
   await expect(keys.nth(2)).toContainText("S&P 500");
   await expect(keys.nth(2)).not.toContainText("SPY");
-  await expect(keys.nth(2).locator(".hm-keys__pct")).toHaveText("29%");
+  await expect(keys.nth(2).locator(".hm-keys__pct")).toHaveText("19.3%");
   await expect(keys.nth(3)).toContainText("Hard Assets");
   await expect(keys.nth(3)).toContainText("Gold");
-  await expect(keys.nth(3).locator(".hm-keys__pct")).toHaveText("14%");
+  await expect(keys.nth(3).locator(".hm-keys__pct")).toHaveText("19.2%");
 
   const swatches = await keys.locator("i[data-mark=series]").evaluateAll((els) =>
     els.map((el) => getComputedStyle(el).backgroundColor));
@@ -365,24 +388,53 @@ test("the ring is the targets in force: four CATEGORICAL arcs in the published o
   expect(glass.a).toBeLessThan(1);
   expect(glass.blur).toMatch(/blur\(/);
 
+  // The regime beside it is the one that session was given, dated; the chart
+  // under it is still the history up to today's snapshot.
+  const block = page.locator(".hm-reg");
+  await block.scrollIntoViewIfNeeded();
+  await expect(block.locator(".rm-dial__n")).toHaveText("0.34");
+  await expect(block.locator(".hm-reg__now")).toHaveText("Neutral");
+  await expect(block.locator(".hm-reg__since")).toHaveText(
+    "As of Nov 21, 2026. The composite averages macro, on-chain and equity factor conditions, on a scale of 0 to 1.");
+  await expect(block.locator(".rr-area__plot")).toHaveAttribute("aria-label", /Latest: Risk-off, 0\.31\./);
+
   await expectNoBrowserErrors(errors);
 });
 
-test("seeded targets, as production has them: no receipt beside the date, and Check the math opens the latest session", async ({ page }) => {
+test("no session has weights: the targets in force stand in, seeded so with no receipt, and the regime is today's", async ({ page }) => {
   const errors = failOnBrowserErrors(page);
-  await stubHome(page, { framework: TARGETS });
+  await stubHome(page, { sessions: [], framework: TARGETS });
   await openHome(page);
 
   await expect(page.locator(".hm-aside")).toContainText("In force since Nov 4, 2026");
   await expect(page.locator(".hm-aside a")).toHaveCount(0);
-  await expect(page.locator('.hm-ring circle[data-mark="series"]')).toHaveCount(4);
+  const arcs = page.locator('.hm-ring circle[data-mark="series"]');
+  await expect(arcs).toHaveCount(4);
+  expect(await arcs.evaluateAll((els) => els.map((el) => getComputedStyle(el).stroke))).toEqual(TARGET_RGB);
+  await page.locator(".hm-model").scrollIntoViewIfNeeded();
+  await expect(page.locator(".hm-keys li .hm-keys__pct")).toHaveText(["50%", "7%", "29%", "14%"], { timeout: 3_000 });
   await expect(page.locator("#made a").filter({ hasText: "Check the math" }))
-    .toHaveAttribute("href", `/swarm/sessions/${SESSION_ID}`);
+    .toHaveAttribute("href", "/swarm/subjects/robotmoney-allocation");
+  const block = page.locator(".hm-reg");
+  await block.scrollIntoViewIfNeeded();
+  await expect(block.locator(".rm-dial__n")).toHaveText("0.31");
+  await expect(block.locator(".hm-reg__since")).toHaveText(/^Since [A-Z][a-z]{2} \d{1,2}, 2026\. /);
 
-  await expectNoBrowserErrors(errors);
+  await expectNoBrowserErrors(errors, { allowNetworkNoise: true });
 });
 
-test("targets unreadable: the latest recommendation stands in, dated and with its receipt", async ({ page }) => {
+test("targets set by a session: the stand-in links the session that set them", async ({ page }) => {
+  const errors = failOnBrowserErrors(page);
+  await stubHome(page, { sessions: [], framework: { ...TARGETS, provenance: { sessionId: SESSION_ID } } });
+  await openHome(page);
+
+  await expect(page.locator(".hm-aside")).toContainText("In force since Nov 4, 2026");
+  await expect(page.locator(".hm-aside a")).toHaveAttribute("href", `/swarm/sessions/${SESSION_ID}`);
+
+  await expectNoBrowserErrors(errors, { allowNetworkNoise: true });
+});
+
+test("targets unreadable: the latest recommendation still reads, dated and with its receipt", async ({ page }) => {
   const errors = failOnBrowserErrors(page);
   await stubHome(page, { framework: null });
   await openHome(page);
@@ -527,11 +579,11 @@ test("too little regime history: the dial still reads, and the chart says why it
 });
 
 test("the rendered page keeps the Beam/Pool/Beacon covenant", async ({ page }) => {
-  await stubHome(page, { framework: TARGETS });
+  await stubHome(page, { sessions: [latestSession()], framework: TARGETS });
   await openHome(page);
   await expect(page.locator(".hm-keys li").first()).toBeVisible();
   await page.locator(".hm-model").scrollIntoViewIfNeeded();
-  await expect(page.locator(".hm-keys__pct").first()).toHaveText("50%");
+  await expect(page.locator(".hm-keys__pct").first()).toHaveText("57.2%");
   await page.locator(".hm-reg").scrollIntoViewIfNeeded();
   await expect(page.locator(".hm-reg .rr-area__plot")).toBeVisible();
 
