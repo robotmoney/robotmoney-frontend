@@ -2693,6 +2693,43 @@ describe("resume in place at a check-only commit (issue 1565)", () => {
     const j = journal({ stepListHash: stepListHash(r1.steps), stepIds: stepIds(r1.steps) });
     expect(checkResume(j, exp({ stepListHash: stepListHash(r2.steps), stepIds: stepIds(r2.steps), changedPaths: ["scripts/release/runbooks/releases/v0.0.1.yaml"] }), {})).toEqual([]);
   });
+
+  // Issue 1585: the journal moved to C2, so the host's checkouts must move too, or the resumed check runs C1's file.
+  test("a resume at C2 --from a check step runs Q06-checkout and Q09-capture-checkout first, at C2, then the check", async () => {
+    const clone = "git@github.com:robotmoney/robotmoney-frontend.git";
+    const CK: StepTemplate[] = [
+      { id: "Q06-checkout", standing: [], description: "target checkout", host: "target", phase: "qa", cmds: [["git", "checkout", "--detach", "{ref}"]], expectExit: 0, receipts: [], irreversible: false, onlyFor: "stage", cloneFrom: clone },
+      { id: "Q09-capture-checkout", standing: [], description: "capture checkout", host: "capture", phase: "qa", cmds: [["git", "checkout", "--detach", "{ref}"]], expectExit: 0, receipts: [], irreversible: false, onlyFor: "stage", cloneFrom: clone },
+      { id: "Q34-check", standing: [], description: "a check reading the target checkout", host: "target", phase: "qa", cmds: [["echo", "check"]], expectExit: 0, receipts: [], irreversible: false },
+    ];
+    const f = fixture();
+    expect(await runRelease(["--target", f.targetFile, "--go", f.goFile, "--journal-root", f.journalRoot], fakeDeps({ fail: new Set(["Q34-check"]) }).deps, CK)).toBe(1);
+    const go2 = join(f.dir, "go2.txt");
+    writeFileSync(go2, `commit: ${C2}\noperator: lucas\ndate: 2026-10-15\n`);
+    const answers = { [`git diff --no-renames --name-only ${SHA} ${C2}`]: { code: 0, stdout: `${CHECK_ONLY.join("\n")}\n` }, [`${C2}^{tree}`]: { code: 0, stdout: `${C2_TREE}\n` } };
+    const r = fakeDeps({ answers });
+    const remotes: string[] = [];
+    const exec = r.deps.exec;
+    r.deps.exec = (host, remote, ...rest) => { remotes.push(remote); return exec(host, remote, ...rest); };
+    expect(await runRelease(["--target", f.targetFile, "--go", go2, "--journal-root", f.journalRoot, "--run", "20261008T120000Z", "--from", "Q34-check"], r.deps, CK)).toBe(0);
+    expect(r.ran).toEqual(["Q06-checkout", "Q09-capture-checkout", "Q34-check"]);
+    expect(remotes[0]).toContain(`checkout --detach ${C2}`);
+    expect(remotes[1]).toContain(`checkout --detach ${C2}`);
+    expect(r.logs.join("\n")).toContain(`moving the checkouts to ${C2} first: Q06-checkout, Q09-capture-checkout`);
+    const j = JSON.parse(readFileSync(join(f.journalRoot, "stage", "20261008T120000Z", "run.json"), "utf8")) as RunJournal;
+    expect(j.commits!.at(-1)!.fromStep).toBe("Q34-check");
+    expect(j.steps["Q06-checkout"]!.commit).toBe(C2);
+    expect(j.steps["Q34-check"]!.commit).toBe(C2);
+
+    // A failed checkout leaves the check not run: it would read the old commit's file.
+    const g = fixture();
+    expect(await runRelease(["--target", g.targetFile, "--go", g.goFile, "--journal-root", g.journalRoot], fakeDeps({ fail: new Set(["Q34-check"]) }).deps, CK)).toBe(1);
+    const bad = fakeDeps({ answers, fail: new Set(["Q09-capture-checkout"]) });
+    expect(await runRelease(["--target", g.targetFile, "--go", go2, "--journal-root", g.journalRoot, "--run", "20261008T120000Z", "--from", "Q34-check"], bad.deps, CK)).toBe(1);
+    expect(bad.ran).toEqual(["Q06-checkout", "Q09-capture-checkout"]);
+    const jb = JSON.parse(readFileSync(join(g.journalRoot, "stage", "20261008T120000Z", "run.json"), "utf8")) as RunJournal;
+    expect(jb.steps["Q34-check"]!.error).toContain("not run: Q09-capture-checkout did not pass");
+  });
 });
 
 // ── issue 1684: the runner follows the owner's stage rules ─────────────────────

@@ -411,6 +411,10 @@ must pass the origin check. The hash never sees a step's `description` or `maxMi
 itself included, is refused. Changing the hash's inputs moved every list's hash once: a stage
 journal recorded before issue 1684 carries the old hash, so a release that straddles it reruns stage
 once.
+The runner moves the checkouts itself (issue 1585): a resume in place at a new commit that has steps to
+run first runs Q06-checkout, and Q09-capture-checkout when the list has it, at the new commit and logs
+`moving the checkouts to <commit> first`. Every selected step waits for them, and a failed checkout
+leaves the selected steps not run, so no resumed check reads the old commit's file.
 
 **A doc fix after a pass.** A stage run that already passed resumes in place at a new QA commit whose
 diff is check-only (`--go <new go> --run <run-ts>`, no `--from`). No step runs. The journal records
