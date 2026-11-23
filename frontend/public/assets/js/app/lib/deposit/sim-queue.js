@@ -202,6 +202,11 @@ export function createSimQueue() {
         depositsOpen: !s.depositsStopped && !s.windDown, depositsStopped: s.depositsStopped, stopCause: s.depositsStopped ? "paused" : "",
         depositsPausedUntil: null, queuePaused: false, queuePausedUntil: null, windDown: s.windDown, keeperSet: true,
         settleBlocked: s.batchesBlocked ? "A price feed stopped updating." : "", flow,
+        queue: {
+          depositUsdc: s.requests.filter((r) => r.kind === "deposit").reduce((n, r) => n + liveRemaining(r), 0),
+          redeemShares: s.requests.filter((r) => r.kind === "redeem").reduce((n, r) => n + liveRemaining(r), 0),
+          lastBatchAt: settleableAt(s.lastSettled, flow), batchDue: false,
+        },
         holdings: SIM_HOLDINGS.map((h) => ({ key: h.key, kind: h.kind, label: h.label, venue: h.venue, active: true, valueUsdc: value * h.weight, actualBps: Math.round(h.weight * 10_000), targetBps: h.kind === "idle" ? null : Math.round(h.weight * 10_000) })),
       };
     },

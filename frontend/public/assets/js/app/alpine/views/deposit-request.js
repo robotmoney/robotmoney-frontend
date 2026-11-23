@@ -15,7 +15,7 @@ import { MANIFEST } from "../../lib/deposit/manifest.js";
 import { buildCancel, buildWithdrawCredit, buildWithdrawExpired, buildGiveNotice, buildTakeBackNotice } from "../../lib/deposit/builder.js";
 import { stageOf, filledOf, outOf, canCancel, canWithdrawExpired, canGiveNotice, canTakeBack, liveRemaining, lockOf, STAGE, IN_FLIGHT } from "../../lib/deposit/stages.js";
 import { timelineOf, summaryOf, inUnit, outUnit, kindLabel, toneOf, cancelledOf } from "../../lib/deposit/describe.js";
-import { requestExpiresAt } from "../../lib/deposit/schedule.js";
+import { requestExpiresAt, fmtWhenIn } from "../../lib/deposit/schedule.js";
 import { fmtWhen, fmtFee, shortAddr, shortHash } from "../../lib/deposit/format.js";
 import { DEPOSIT_REQUEST_RE } from "../../routes.js";
 
@@ -88,14 +88,14 @@ export function registerDepositRequestView(Alpine) {
       const r = this.r, st = this.st(), f = this.flow();
       if (!r) return [];
       const out = [{ key: "stage", label: "Stage", value: st.stage, stage: true }];
-      if (st.at && IN_FLIGHT.includes(st.stage)) out.push({ key: "next", label: "Next", value: fmtWhen(st.at) });
+      if (st.at && IN_FLIGHT.includes(st.stage)) out.push({ key: "next", label: "Next", value: fmtWhenIn(st.at, this.now) });
       const filled = filledOf(r), got = outOf(r);
       out.push({ key: "filled", label: "Filled", value: got > 0 ? `${inUnit(r, filled).replace(/ USDC$/, "")} → ${outUnit(r, got)}` : inUnit(r, filled) });
       const lock = lockOf(r, this.now, f);
-      if (lock) out.push({ key: "lock", label: "Can be cancelled until", value: fmtWhen(lock) });
+      if (lock) out.push({ key: "lock", label: "Can be cancelled until", value: fmtWhenIn(lock, this.now) });
       if (r.kind === "redeem") out.push({ key: "fee", label: "Exit fee", value: fmtFee(r.exitFeeBps) });
-      if (liveRemaining(r) > 0 && r.kind === "deposit") out.push({ key: "exp", label: "Unfilled USDC can be taken back", value: fmtWhen(requestExpiresAt(r, f)) });
-      if (liveRemaining(r) > 0 && r.kind === "redeem" && !r.noticeAt) out.push({ key: "exp", label: "Notice possible from", value: fmtWhen(requestExpiresAt(r, f)) });
+      if (liveRemaining(r) > 0 && r.kind === "deposit") out.push({ key: "exp", label: "Unfilled USDC can be taken back", value: fmtWhenIn(requestExpiresAt(r, f), this.now) });
+      if (liveRemaining(r) > 0 && r.kind === "redeem" && !r.noticeAt) out.push({ key: "exp", label: "Notice possible from", value: fmtWhenIn(requestExpiresAt(r, f), this.now) });
       out.push({ key: "owner", label: "Owner", value: shortAddr(r.owner) });
       return out;
     },

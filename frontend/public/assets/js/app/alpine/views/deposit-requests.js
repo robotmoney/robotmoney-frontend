@@ -13,10 +13,10 @@
 import { session } from "../../lib/deposit/session.js";
 import { MANIFEST } from "../../lib/deposit/manifest.js";
 import { buildCancel, buildWithdrawCredit, buildWithdrawExpired, buildClaimShares, buildClaimUsdc, buildGiveNotice, buildTakeBackNotice, buildReleaseWindDown } from "../../lib/deposit/builder.js";
-import { rowOf, nextBatchLabel, stopOf } from "../../lib/deposit/describe.js";
-import { claimableFills, liveRemaining } from "../../lib/deposit/stages.js";
-import { timelineFor, fmtDuration } from "../../lib/deposit/schedule.js";
-import { fmtUsdc, fmtShares, fmtRm, shortAddr, shortHash } from "../../lib/deposit/format.js";
+import { rowOf, stopOf } from "../../lib/deposit/describe.js";
+import { claimableFills, liveRemaining, nextBatchFor } from "../../lib/deposit/stages.js";
+import { fmtDuration, fmtClock } from "../../lib/deposit/schedule.js";
+import { fmtUsdc, fmtShares, fmtRm, fmtWhen, shortAddr, shortHash } from "../../lib/deposit/format.js";
 
 const EPS = 1e-9;
 
@@ -28,6 +28,8 @@ export function registerDepositRequestsView(Alpine) {
     acct: null,
     reqs: [],
     loaded: false,
+    dataFor: null,
+    tick: 0,
     loadError: "",
     asking: null,
     busy: null,
@@ -42,10 +44,13 @@ export function registerDepositRequestsView(Alpine) {
       this.now = session.now();
       this._unsub = session.subscribe(() => { this.rev++; this.now = session.now(); this.load(); });
       this._t = setInterval(() => { session.source?.tick?.(); this.now = session.now(); if (!session.simulated) this.load(); }, 15_000);
+      // The countdown ticks each second; nothing else reads `tick`.
+      this.tick = session.now();
+      this._clock = setInterval(() => { this.tick = session.now(); }, 1000);
       if (!session.simulated) session.ready().catch(() => { this.loadError = "Your requests could not be read. Try again in a moment."; });
       await this.load();
     },
-    destroy() { clearInterval(this._t); this._unsub?.(); },
+    destroy() { clearInterval(this._t); clearInterval(this._clock); this._unsub?.(); },
 
     async load() {
       try {
@@ -54,7 +59,8 @@ export function registerDepositRequestsView(Alpine) {
         if (session.connected() && session.onBase()) {
           const a = session.acct.address;
           [this.acct, this.reqs] = await Promise.all([src.account(a), src.requestsOf(a)]);
-        } else { this.acct = null; this.reqs = []; }
+          this.dataFor = a;
+        } else { this.acct = null; this.reqs = []; this.dataFor = null; }
         this.loaded = true; this.loadError = "";
       } catch (e) { console.error(e); this.loadError = "Your requests could not be read. Try again in a moment."; }
     },
@@ -65,6 +71,9 @@ export function registerDepositRequestsView(Alpine) {
     onBase() { this.rev; return session.onBase(); },
     short() { this.rev; return shortAddr(session.acct.address); },
     walletLoading() { this.rev; return session.walletLoading; },
+    restoring() { this.rev; return session.restoring && !session.connected(); },
+    /** The position and requests on screen belong to the wallet connected now. */
+    dataReady() { this.rev; return this.loaded && !!this.dataFor && this.dataFor === session.acct.address; },
     connect() { session.connect(); },
     useTestAddress() { session.useTestAddress(); },
     switchToBase() { session.switchToBase(); },
@@ -126,7 +135,10 @@ export function registerDepositRequestsView(Alpine) {
 
     // Requests (board 6)
     rows() { this.now; return this.reqs.map((r) => rowOf(r, this.now, this.flow(), { depositsStopped: !!this.vault?.depositsStopped })); },
-    nextBatch() { this.now; return nextBatchLabel(timelineFor(this.now, this.flow()).settlesAt, this.now); },
+    /** When the next batch runs, for anyone's requests. */
+    nextBatchAt() { this.now; return nextBatchFor(0, this.now, this.flow()); },
+    nextBatchClock() { return fmtClock(this.nextBatchAt() - this.tick); },
+    nextBatchTitle() { return `Next batch at ${fmtWhen(this.nextBatchAt())}`; },
 
     // Actions: each sends its calls and shows its progress where it was asked for.
     async act(key, calls, label) {

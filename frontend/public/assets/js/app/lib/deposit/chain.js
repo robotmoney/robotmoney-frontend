@@ -49,10 +49,13 @@ export function createChainSource(w, m = MANIFEST) {
   let windDown = false;
 
   async function vault() {
-    const [nav, supply, cfg, depPaused, depPausedUntil, configs, held, weights, targets, params, live, check, cur] = await w.readMany([
+    const [nav, supply, cfg, depPaused, depPausedUntil, configs, held, weights, targets, params, live, check, cur, books, nSettle] = await w.readMany([
       f("lastGoodNav"), f("totalSupply"), f("config"), f("depositsPaused"), f("depositsPausedUntil"), f("assetConfigs"),
       f("heldBalances"), f("currentWeightsBps"), f("targetBps"), q("flowParams"), q("liveness"), q("checkSettle"), q("currentEpoch"),
+      q("books"), q("settlementCount"),
     ]);
+    // When the last batch ran (settlement ids start at 1).
+    const lastBatch = Number(nSettle) > 0 ? await w.read(q("getSettlement", [nSettle])) : null;
     // Epochs count from the queue's anchor, not from 1970 (schedule.js): the
     // current epoch ends at settleableAt(cur) - settleWindow, and later ones follow it.
     const curEnd = Number(await w.read(q("settleableAt", [cur]))) - Number(params.settleWindow);
@@ -98,6 +101,15 @@ export function createChainSource(w, m = MANIFEST) {
       windDown: live.windDownActive,
       keeperSet: live.keeperConfigured,
       settleBlocked: SETTLE_REASON[reason] || "",
+      // The queue, for every depositor: what waits for a batch, when the last
+      // one ran, and whether one could run now. An anonymous `checkSettle` stops
+      // at "Caller" once a batch is due, because only the keeper may run it.
+      queue: {
+        depositUsdc: fromUnits(books.pendingUsdc, m.usdcDecimals),
+        redeemShares: fromUnits(books.escrowShares, SHARE_DECIMALS),
+        lastBatchAt: lastBatch ? Number(lastBatch.time) * S : null,
+        batchDue: reason === "Caller" || reason === "Ok",
+      },
       flow,
       holdings,
     };

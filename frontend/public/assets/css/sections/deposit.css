@@ -37,7 +37,10 @@
 .dp__lede { margin: 0; font-size: 1.0625rem; line-height: 1.6; color: var(--color-text-soft); }
 .dp__facts { display: flex; flex-wrap: wrap; gap: 0.75rem 2.5rem; padding: 1.25rem 0; border-top: 1px solid var(--color-border); border-bottom: 1px solid var(--color-border); }
 .dp__fact { display: flex; flex-direction: column; gap: 0.375rem; }
-.dp__fact b { font-family: var(--font-mono); font-weight: 500; font-size: 1.125rem; font-variant-numeric: tabular-nums; }
+.dp__fact b { position: relative; min-width: 6rem; font-family: var(--font-mono); font-weight: 500; font-size: 1.125rem; font-variant-numeric: tabular-nums; transition: color 300ms var(--ease-out-expo); }
+/* A figure not read yet: the line keeps its height, a flat bar breathes in its place, the value fades in over it. */
+.dp__fact b.is-wait { color: transparent; }
+.dp__fact b.is-wait::after { content: ""; position: absolute; left: 0; top: 50%; width: 6rem; height: 0.875rem; margin-top: -0.4375rem; background: var(--color-surface); animation: dp-breathe 1.8s ease-in-out infinite; }
 
 /* Sections */
 .dp__sec { padding: 2.5rem 0; border-bottom: 1px solid var(--color-border); }
@@ -46,6 +49,40 @@
 .dp__sechead { display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; flex-wrap: wrap; }
 .dp__h2 { margin: 0 0 1.25rem; font-family: var(--font-display); font-stretch: var(--font-display-stretch); font-weight: 800; text-transform: uppercase; font-size: 1.75rem; line-height: 1; }
 .dp__hold { display: flex; flex-wrap: wrap; gap: 2rem; align-items: center; }
+
+/* Loading. The placeholder and the content take turns in ONE grid cell of a
+   stable parent, so the page below never moves when data lands (.impeccable.md,
+   "Reserve layout space on a stable parent"). The placeholder is flat and square
+   and breathes in opacity: a sweeping shimmer is a moving gradient, which this
+   system does not have. The content fades in with a small rise (300ms, the
+   enter step of the motion scale); the placeholder leaves at about 75% of that,
+   and steps out of the flow so it reserves nothing once the content is there. */
+.dp__load { position: relative; display: grid; }
+.dp__load > .dp__skel, .dp__load > .dp__live { grid-area: 1 / 1; min-width: 0; }
+.dp__live { opacity: 0; transform: translateY(0.25rem); visibility: hidden; transition: opacity 300ms var(--ease-out-expo), transform 300ms var(--ease-out-expo), visibility 0s linear 300ms; }
+.dp__load.is-ready > .dp__live { opacity: 1; transform: none; visibility: visible; transition-delay: 0s; }
+.dp__load.is-ready > .dp__skel { position: absolute; inset: 0 0 auto 0; opacity: 0; visibility: hidden; pointer-events: none; transition: opacity 225ms var(--ease-out-expo), visibility 0s linear 225ms; }
+.dp__skel { display: flex; flex-direction: column; gap: 1.5rem; }
+.dp__skel i, .dp__skeltitle, .dp__skelbar { display: block; background: var(--color-surface); animation: dp-breathe 1.8s ease-in-out infinite; }
+.dp__skel--hold { flex-direction: row; flex-wrap: wrap; gap: 2rem; align-items: center; }
+.dp__skelring { display: block; width: 11rem; height: 11rem; flex: none; border-radius: 50%; border: 1.0625rem solid var(--color-surface); box-sizing: border-box; animation: dp-breathe 1.8s ease-in-out infinite; }
+.dp__skelrows { display: flex; flex-direction: column; }
+.dp__skel--hold .dp__skelrows { flex: 1 1 26rem; }
+.dp__skelrows i { height: 0.75rem; margin: 1.25rem 0.5rem 1.25rem; width: 60%; }
+.dp__skelrows i:first-child { height: 0.5rem; width: 80%; margin-top: 0.75rem; }
+.dp__skelfacts { display: flex; flex-wrap: wrap; gap: 1rem 2.5rem; padding: 1.25rem 0; border-top: 1px solid var(--color-border); border-bottom: 1px solid var(--color-border); }
+.dp__skelfacts i { width: 7rem; height: 2.5rem; }
+.dp__skeltitle { width: min(28rem, 80%); height: 3rem; }
+.dp__skelbar { height: 0.625rem; }
+@keyframes dp-breathe { 0%, 100% { opacity: 1; } 50% { opacity: 0.55; } }
+/* The panel's figures while a new quote is read: dimmed for the moment, changed in place. */
+.dp__kvs b { transition: opacity 100ms var(--ease-out-expo); }
+.dp__kvs.is-stale b { opacity: 0.4; }
+@media (prefers-reduced-motion: reduce) {
+  .dp__live, .dp__load.is-ready > .dp__skel, .dp__fact b, .dp__kvs b { transition: none; }
+  .dp__live { transform: none; }
+  .dp__skel i, .dp__skelring, .dp__skeltitle, .dp__skelbar, .dp__fact b.is-wait::after { animation: none; }
+}
 .dp__ring { display: block; flex: none; width: 11rem; height: 11rem; }
 .dp__ring svg { width: 100%; height: 100%; }
 /* Positioned, so the visually hidden header label scrolls with the table instead of widening the page. */
@@ -69,8 +106,29 @@
 /* Panel */
 .dp__panel { background: var(--color-deep); border: 1px solid var(--color-border); padding: 1.5rem; display: flex; flex-direction: column; gap: 1.125rem; }
 .dp__pane { display: flex; flex-direction: column; gap: 1.125rem; }
-.dp__walletrow { position: relative; display: flex; justify-content: flex-end; }
-.dp__chip { display: inline-flex; align-items: center; gap: 0.625rem; height: 2.5rem; padding: 0 0.875rem; border: 1px solid var(--color-border-light); background: none; color: var(--color-text); font-family: var(--font-mono); font-size: 0.75rem; cursor: pointer; }
+.dp__walletrow { position: relative; display: flex; justify-content: flex-end; margin-bottom: 0.75rem; }
+/* The row back to Your requests, at the foot of the panel: a rule above it, the label on the left, where the requests stand on the right. */
+.dp__reqrow { display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; padding-top: 1rem; border-top: 1px solid var(--color-border); color: var(--color-text); text-decoration: none; font-size: 0.875rem; }
+.dp__reqrow-l { text-decoration: underline; text-decoration-color: var(--color-link-line); text-underline-offset: 3px; transition: text-decoration-color 100ms var(--ease-out-expo); }
+.dp__reqrow:hover .dp__reqrow-l, .dp__reqrow:focus-visible .dp__reqrow-l { text-decoration-color: var(--color-text); }
+.dp__reqrow-r { font-family: var(--font-mono); font-size: 0.75rem; color: var(--color-text-soft); white-space: nowrap; }
+.dp__facts--plain { display: grid; grid-template-columns: repeat(2, minmax(0, max-content)); gap: 1.25rem 4rem; border: 0; padding: 0; }
+.dp__skelinline { display: inline-block; width: 4rem; height: 0.625rem; margin-left: 0.375rem; vertical-align: middle; background: var(--color-surface); animation: dp-breathe 1.8s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .dp__skelinline { animation: none; } }
+.dp__late { margin-top: 1rem; }
+/* The next batch's cycle: a progress line (cyan is a line), the mark where its requests lock, the batch at the end. Linear, like every progress bar here. */
+.dp__cycle { display: flex; flex-direction: column; gap: 0.75rem; margin-bottom: 1.75rem; }
+/* A countdown to the next batch: the label in the section's mono caps, the clock in tabular figures so it does not jitter as it ticks. */
+.dp__countdown { margin: 0; display: inline-flex; align-items: baseline; gap: 0.625rem; }
+.dp__countdown b { font-family: var(--font-mono); font-weight: 500; font-size: 0.9375rem; color: var(--color-text); font-variant-numeric: tabular-nums; min-width: 4ch; }
+.dp__countdown--lg b { font-size: 1.5rem; }
+.dp__cyclebar { position: relative; height: 2px; background: var(--color-border-light); }
+.dp__cyclefill { position: absolute; left: 0; top: 0; bottom: 0; background: var(--color-accent); transition: width 600ms linear; }
+.dp__cycletick { position: absolute; top: -4px; width: 1px; height: 10px; background: var(--color-text-muted); }
+.dp__cyclelbl { display: flex; justify-content: space-between; gap: 0.5rem 1.5rem; flex-wrap: wrap; font-size: 0.8125rem; color: var(--color-text-muted); }
+.dp__cyclelbl b { font-family: var(--font-mono); font-weight: 400; color: var(--color-text-soft); }
+@media (prefers-reduced-motion: reduce) { .dp__cyclefill { transition: none; } }
+.dp__chip { display: inline-flex; flex: none; max-width: 100%; white-space: nowrap; align-items: center; gap: 0.625rem; height: 2.5rem; padding: 0 0.875rem; border: 1px solid var(--color-border-light); background: none; color: var(--color-text); font-family: var(--font-mono); font-size: 0.75rem; cursor: pointer; }
 .dp__chip:hover { border-color: var(--color-text-muted); }
 .dp__dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
 .dp__dot.is-ok { background: var(--color-green); }
@@ -108,7 +166,7 @@
 .dp__kvs { display: flex; flex-direction: column; }
 .dp__kvs--rule .dp__kv { border-bottom: 1px solid var(--color-surface); padding: 0.4375rem 0; }
 .dp__kv { display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; padding: 0.375rem 0; font-size: 0.8125rem; color: var(--color-text-soft); }
-.dp__kv b { font-family: var(--font-mono); font-weight: 500; color: var(--color-text); font-variant-numeric: tabular-nums; text-align: right; }
+.dp__kv b { font-family: var(--font-mono); font-weight: 500; color: var(--color-text); font-variant-numeric: tabular-nums; text-align: right; white-space: nowrap; }
 .dp__kvb { display: inline-flex; align-items: baseline; flex-wrap: wrap; justify-content: flex-end; }
 .dp__limit { display: flex; flex-direction: column; gap: 0.5rem; padding: 0.25rem 0 0.5rem; }
 .dp__txt { padding: 0; border: 0; background: none; cursor: pointer; font-family: var(--font-mono); font-size: 0.6875rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--color-text-soft); text-decoration: underline; text-decoration-color: var(--color-link-line); text-underline-offset: 3px; }
@@ -229,6 +287,9 @@
 .dp__stage { display: inline-flex; align-items: center; gap: 0.5rem; font-family: var(--font-mono); font-size: 0.75rem; color: var(--color-text); white-space: nowrap; }
 .dp__stage i { width: 7px; height: 7px; border-radius: 50%; flex: none; box-sizing: border-box; }
 .dp__stage.is-filling i { background: var(--color-text); }
+/* A stage in motion breathes, as the site's live status does (components.css rm-status-live); a settled one is still. */
+.dp__stage.is-waiting i, .dp__stage.is-filling i, .dp__stage.is-hold i { animation: rm-status-live 2.2s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .dp__stage.is-waiting i, .dp__stage.is-filling i, .dp__stage.is-hold i { animation: none; } }
 .dp__stage.is-waiting i { border: 1px solid var(--color-text-soft); }
 .dp__stage.is-hold i { background: var(--color-text-muted); }
 .dp__stage.is-ready { color: var(--color-green); }
@@ -332,6 +393,30 @@
   .dp__dl { grid-template-columns: minmax(0, 1fr); }
   .dp__dl dt { padding-bottom: 0; border-bottom: 0; }
   .dp__dl dd { padding-top: 0.25rem; }
+}
+@media (max-width: 640px) {
+  /* Your requests on a phone: one stacked card per request, never a table to scroll sideways.
+     Request and amount on top, the stage across, filled and next below, the action last. */
+  .dp__reqs thead { display: none; }
+  .dp__reqs, .dp__reqs tbody { display: block; }
+  .dp__reqs { min-width: 0; width: 100%; }
+  .dp__reqs tr { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "req amt" "stage stage" "filled next" "act act"; gap: 0.75rem 1rem; padding: 1rem 0; border-bottom: 1px solid var(--color-border); }
+  .dp__reqs td { display: block; padding: 0; border: 0; min-width: 0; }
+  .dp__reqs td:nth-child(1) { grid-area: req; }
+  .dp__reqs td:nth-child(2) { grid-area: amt; text-align: right; }
+  .dp__reqs td:nth-child(3) { grid-area: filled; text-align: left; }
+  .dp__reqs td:nth-child(4) { grid-area: stage; }
+  .dp__reqs td:nth-child(5) { grid-area: next; text-align: right; }
+  .dp__reqs td:nth-child(6) { grid-area: act; text-align: left; }
+  .dp__reqs td:nth-child(6):empty { display: none; }
+  .dp__reqs td:nth-child(6) > * { margin: 0 0.75rem 0 0; }
+  .dp__reqs td[data-k]::before { content: attr(data-k); display: block; margin-bottom: 0.25rem; font-family: var(--font-mono); font-size: 0.6875rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--color-text-muted); }
+  .dp__reqs td:nth-child(3) .dp__bar { margin-left: 0; }
+  .dp__reqs .dp__empty { grid-column: 1 / -1; }
+  /* The queue's figures as rows on a phone: label left, figure right, nothing broken mid-value. */
+  .dp__facts--plain { grid-template-columns: minmax(0, 1fr); gap: 0.75rem; }
+  .dp__facts--plain .dp__fact { flex-direction: row; justify-content: space-between; align-items: baseline; gap: 1rem; }
+  .dp__facts--plain .dp__fact b { font-size: 1rem; white-space: nowrap; min-width: 0; text-align: right; }
 }
 @media (max-width: 560px) {
   .dp__events li { grid-template-columns: minmax(0, 1fr); gap: 0.25rem; }
