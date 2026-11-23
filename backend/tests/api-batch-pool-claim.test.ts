@@ -122,6 +122,97 @@ async function holdBatchPoolAndClaim(env: Record<string, string>): Promise<void>
   }
 }
 
+// The wallet backfill's gap read holds ONE batch connection (issue 1721).
+//
+// Production, v0.10.0 soak (run 20261121T220208Z): one
+// `api error (503 /api/pipeline/read/gaps.reports) db_saturated gate=batch`.
+// The holder was the request itself: gaps.reports ran one detectGaps per
+// series through Promise.all, so the backfill's two-series read drew two batch
+// connections, while the batch share counts one per pipeline request. With
+// the analytics transactions holding theirs, the second pipeline request's
+// fan-out found no free connection and its own read was refused.
+//
+// The fixture locks both gap series' tables, so every gap read that reaches
+// the database stays there and is counted in pg_stat_activity. With the
+// analytics cap held, PIPELINE_SHARE concurrent gaps.reports must hold exactly
+// one connection each, and each must answer 200 once the lock is gone.
+const GAP_TABLES = ["wallet_balance_samples", "wallet_sleeve_samples"];
+
+async function holdBatchPoolAndReadGaps(): Promise<void> {
+  const api = await bootApi({ env: {} });
+  let releaseLocks!: () => void;
+  const locksReleased = new Promise<void>((resolve) => (releaseLocks = resolve));
+  let locksHeld!: () => void;
+  const locksTaken = new Promise<void>((resolve) => (locksHeld = resolve));
+  const holder = fixtureDb.begin(async (tx) => {
+    await tx`SELECT pg_advisory_xact_lock(hashtextextended(${SOURCE_KEY}, 0))`;
+    for (const t of GAP_TABLES) await tx.unsafe(`LOCK TABLE ${t} IN ACCESS EXCLUSIVE MODE`);
+    locksHeld();
+    await locksReleased;
+  });
+  let held: Promise<number>[] = [];
+  let reads: Promise<{ status: number; body: string }>[] = [];
+  try {
+    await locksTaken;
+    held = Array.from({ length: ANALYTICS_CONCURRENCY }, () =>
+      fetch(`${api.base}${ROUTES.analytics.sourceAcquisitions}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${analyticsToken}` },
+        body: JSON.stringify(acquisition()),
+        signal: AbortSignal.timeout(30_000),
+      }).then((r) => r.status));
+    reads = Array.from({ length: PIPELINE_SHARE }, () =>
+      fetch(`${api.base}${PIPELINE_ROUTES.read("gaps.reports")}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${pipelineToken}` },
+        body: encodePipeline({ args: [GAP_TABLES, new Date()] }),
+        signal: AbortSignal.timeout(30_000),
+      }).then(async (r) => ({ status: r.status, body: await r.text() })));
+
+    // Wait until every analytics transaction and every gap read sits in the
+    // database behind the fixture's locks, then name what holds the batch pool.
+    const deadline = Date.now() + 10_000;
+    let gapWaiters = 0;
+    for (;;) {
+      const [{ advisory, relation }] = await fixtureDb<{ advisory: number; relation: number }[]>`
+        SELECT count(*) FILTER (WHERE wait_event = 'advisory')::int AS advisory,
+               count(*) FILTER (WHERE wait_event = 'relation')::int AS relation
+          FROM pg_stat_activity
+         WHERE datname = current_database() AND wait_event_type = 'Lock'`;
+      gapWaiters = relation;
+      if (advisory === ANALYTICS_CONCURRENCY && relation >= PIPELINE_SHARE) break;
+      if (Date.now() > deadline) {
+        throw new Error(`expected ${ANALYTICS_CONCURRENCY} acquisitions and ${PIPELINE_SHARE} gap reads blocked, saw ${advisory} and ${relation}`);
+      }
+      await Bun.sleep(25);
+    }
+    // Past the admission wait: a fan-out that wanted more connections than
+    // the batch pool had free would have been refused by now.
+    await Bun.sleep(1_000);
+    const health = (await (await fetch(`${api.base}/health`)).json()) as {
+      db_pool: { batch: { max: number; in_use: number; refused_total: number } };
+    };
+    // The holders: the analytics cap, plus one connection per gaps.reports.
+    expect(gapWaiters).toBe(PIPELINE_SHARE);
+    expect(health.db_pool.batch.in_use).toBe(ANALYTICS_CONCURRENCY + PIPELINE_SHARE);
+    expect(health.db_pool.batch.refused_total).toBe(0);
+  } finally {
+    releaseLocks();
+    await holder;
+    const statuses = await Promise.all(held);
+    const answers = await Promise.all(reads);
+    api.stop();
+    expect(statuses.every((s) => s === 200)).toBe(true);
+    for (const a of answers) expect(a.status, a.body).toBe(200);
+  }
+}
+
+describe("gaps.reports while analytics transactions hold the batch pool", () => {
+  test("each read holds one batch connection and none is refused", async () => {
+    await holdBatchPoolAndReadGaps();
+  }, 120_000);
+});
+
 describe("queue claims while analytics transactions hold the batch pool", () => {
   test("the default budget", async () => {
     await holdBatchPoolAndClaim({});

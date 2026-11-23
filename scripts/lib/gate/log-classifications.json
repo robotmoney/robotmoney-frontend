@@ -441,6 +441,14 @@
     "reason": "The readSeatSilence query behind the member page, the admin member list and the admin overview JIT-compiled for 1-3 s a call (an unanalyzed 1-row swarm_dormancy_baseline pushed its plan cost past the JIT thresholds), and every house agent's session-start fetch at once passed the request pool's statement timeout. Fixed by jit=off on every app pool (issue 1579), which ships in v0.8.0: the owner rescoped v0.7.4 to the web client only (2026-11-10), so on v0.7.4 a recurrence only warns."
   },
   {
+    "id": "known-gaps-reports-batch-fan-out",
+    "match": "api error \\(503 /api/pipeline/read/gaps\\.reports\\) db_saturated gate=batch:",
+    "class": "known-issue",
+    "issue": "1721",
+    "fixedIn": "0.10.1",
+    "reason": "The wallet backfill's gaps.reports read ran one detectGaps per series through Promise.all, so one pipeline request drew two batch connections while the batch share counts one per request; with the analytics transactions holding theirs, its own second read was refused (v0.10.0 production soak, run 20261121T220208Z, x1). Fixed by reading the series one at a time (issue 1721). Held to this route and gate: a db_saturated on any other route or gate stays unclassified."
+  },
+  {
     "id": "known-api-statement-timeout-under-load",
     "match": "PostgresError: canceling statement due to statement timeout",
     "class": "known-issue",
