@@ -17,7 +17,7 @@ import {
   STRUCTURE_ATTEMPTS,
   takePrompt,
 } from "../../agent/participant/author-take.ts";
-import { IN_HOUSE_PERSONAS, judgeShortfalls, MIN_TAKE_WORDS, promptFor, takeSectionLeadIns } from "../../agent/participant/take-prompt.ts";
+import { IN_HOUSE_PERSONAS, judgeShortfalls, MIN_TAKE_WORDS, promptFor, regimeFromBrief, takeSectionLeadIns } from "../../agent/participant/take-prompt.ts";
 import { DEMO_MEMBERS } from "../../lib/smoke-mode.ts";
 
 const ENV = {
@@ -54,12 +54,15 @@ function fakeFetch(api: Api): typeof fetch {
       return Response.json({
         body: {
           subject: { recommendationType: api.recommendationType },
+          regime: { date: "2026-10-02", composite: 0.412, regime: "neutral", macro_regime: "tight", macro_percentile: 0.7, onchain_percentile: null },
+          prompt: { system: "s", user: "Review the supplied swarm context for Woon. The targets in force are the starting point, not the answer." },
           allocation: { buckets: [{ id: "agent_tokens", name: "Agent Tokens", target_weight: 0.05, items: [{ name: "Virtuals" }] }] },
         },
       });
     }
     if (url.pathname === ROUTES.dashboards.regimeSnapshots) {
-      return Response.json({ latest: { composite: 0.412, regime: "neutral", macro_regime: "tight", macro_percentile: 0.7 } });
+      // Issue 1695: in-house agents read the brief, never this feed.
+      throw new Error("in-house agents read the regime from the brief, not the dashboard feed");
     }
     if (url.pathname.startsWith("/api/swarm/members/")) return Response.json({ id: "athena", lens: "macro risk" });
     if (url.pathname === ROUTES.swarm.memos) {
@@ -91,6 +94,7 @@ describe("the take prompt is production's persona prompt", () => {
       promptFor({ memberId: "athena", name: "Athena", lens: "macro risk", bias: -0.1 }, context.regime, "woon", {
         requireWeights: false,
         targets: context.targets,
+        task: context.task,
       }),
     );
     expect(prompt).toContain("You are Athena, an autonomous voice on the Robot Money Investment Swarm.");
@@ -111,6 +115,26 @@ describe("the take prompt is production's persona prompt", () => {
     for (const section of ["**REGIME**", "**ALLOCATION**", "**SUBJECT**"]) expect(prompt).toContain(section);
     expect(prompt).toContain("Sleeve targets in force: Agent Tokens 5% (Virtuals)");
     for (const bucket of RECEIPT_HARD_ASSETS_BUCKET_ORDER) expect(prompt).toContain(`${bucket}=<0-1>`);
+  });
+
+  test("issue 1695: the readings and task come from the served brief, and a missing reading is printed as missing", async () => {
+    const cfg = readAuthorTakeEnv(ENV);
+    const context = await readTakeContext(cfg, fakeFetch(newApi([])));
+    expect(context.regime).toMatchObject({ composite: 0.412, macroRegime: "tight", macroPercentile: 0.7, onchainPercentile: null, factorPercentile: null });
+    const prompt = takePrompt(cfg, context);
+    expect(prompt).toContain("Macro panel:    70th percentile, bucket tight");
+    expect(prompt).toContain("On-chain panel: missing, bucket missing");
+    expect(prompt).toContain("Equity factor:  missing, bucket missing");
+    expect(prompt).toContain("The targets in force are the starting point, not the answer.");
+    expect(prompt).not.toContain("percentile of trailing 3y");
+    // The old composite-offset estimates (composite +0.08 / -0.2 / +0.15) never appear.
+    for (const estimate of ["49th", "21st", "56th", "21th"]) expect(prompt).not.toContain(estimate);
+  });
+
+  test("issue 1695: with no brief every reading is missing, none is estimated", () => {
+    const prompt = promptFor({ memberId: "athena", name: "Athena", lens: "macro risk", bias: -0.1 }, regimeFromBrief(null), "woon");
+    expect(prompt).toContain("Composite missing -> bucket missing.");
+    expect(prompt).not.toMatch(/\d+th percentile/);
   });
 
   test("the in-house lens and bias table is the one the scenario roster uses", () => {

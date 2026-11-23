@@ -107,6 +107,8 @@ export interface AuthorTakeOptions {
   // The sleeve targets in force, read off this session's brief. An allocation
   // take is asked to argue against these, never against numbers written here.
   targets?: readonly SleeveTarget[];
+  /** The served brief's task text (issue 1695), printed in the prompt beside the readings. */
+  task?: string;
   diagnosticArtifactPath?: string;
   // How many times to sample the model for a take that satisfies the section
   // contract below. See authorTake().
@@ -546,7 +548,7 @@ export async function authorTake(
   options: AuthorTakeOptions = {},
 ): Promise<AuthoredTake> {
   const attempts = Math.max(1, options.structureAttempts ?? DEFAULT_STRUCTURE_ATTEMPTS);
-  const prompt = promptFor(p, regime, subjectId, { requireWeights: options.requireWeights, targets: options.targets });
+  const prompt = promptFor(p, regime, subjectId, { requireWeights: options.requireWeights, targets: options.targets, task: options.task });
   let shortfall = "";
 
   for (let attempt = 1; attempt <= attempts; attempt++) {

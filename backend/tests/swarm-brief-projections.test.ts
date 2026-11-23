@@ -79,3 +79,14 @@ test("a malformed entry (missing signal_key) still projects without throwing", (
   const projected = projectBriefResearchSignals(b, false);
   expect(projected.body!.researchSignals).toEqual([{ signalKey: "", date: "2026-09-03", href: "/api/dashboards/research-signals/" }]);
 });
+
+test("issue 1695: the brief task text without targets in force says so, and never invents one", async () => {
+  const { briefTaskText } = await import("../src/swarm/domain.ts");
+  const text = briefTaskText({ subjectName: "Woon", thesis: null, date: "2026-11-20", sleeves: ["a", "b"], targets: [] });
+  expect(text).toContain("The subject under review is Woon.");
+  expect(text).toContain("The weights cover these sleeves: a, b.");
+  expect(text).toContain("This brief states no targets in force.");
+  const withTargets = briefTaskText({ subjectName: "Woon", thesis: "A treasury", date: "2026-11-20", sleeves: ["a"], targets: [{ id: "a", target_weight: 0.95 }] });
+  expect(withTargets).toContain("The subject under review is Woon: A treasury.");
+  expect(withTargets).toContain("The targets in force are a 95%. They are the starting point, not the answer");
+});

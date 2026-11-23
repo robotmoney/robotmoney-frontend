@@ -1544,6 +1544,32 @@ export async function frameworkAsOf(h: DbHandle = sql): Promise<string> {
   return row ? day(row.asof) : ALLOCATION_FRAMEWORK_SEED.asof;
 }
 
+/**
+ * The brief's task text (issue 1695): what the subject is, which sleeves the
+ * weights cover, and that the targets in force are the starting point, not the
+ * answer. The first sentence is the one the brief always carried.
+ */
+export function briefTaskText(t: {
+  subjectName: string;
+  thesis: string | null;
+  date: string;
+  sleeves: readonly string[];
+  targets: readonly { id?: unknown; target_weight?: unknown }[];
+}): string {
+  const inForce = t.targets
+    .filter((b) => typeof b.id === "string" && Number.isFinite(Number(b.target_weight)))
+    .map((b) => `${b.id} ${+(Number(b.target_weight) * 100).toFixed(1)}%`);
+  return [
+    `Review the supplied swarm context for ${t.subjectName} on ${t.date} and return one take matching takeSchema.`,
+    `The subject under review is ${t.subjectName}${t.thesis ? `: ${t.thesis.trim()}` : "."}`.replace(/([^.!?])$/, "$1."),
+    `The weights cover these sleeves: ${t.sleeves.join(", ")}.`,
+    inForce.length
+      ? `The targets in force are ${inForce.join(" / ")}. They are the starting point, not the answer: state the split you would run and why.`
+      : "This brief states no targets in force.",
+    "The regime block holds the readings for the brief's own snapshot. A null reading is missing: do not estimate it.",
+  ].join(" ");
+}
+
 export async function bucketOrderForSession(sessionAsOf: string, h: DbHandle = sql): Promise<readonly string[]> {
   return bucketOrderForAsOf(sessionAsOf, await frameworkAsOf(h));
 }
@@ -3786,7 +3812,7 @@ const briefRegime = registerQuery({
   site: "src/swarm/domain:buildBriefBody.regime",
   purpose: "Read the newest regime snapshot dated no later than today (UTC) the brief carries.",
   callers: [ADMIN_ROUTE],
-  probe: { statement: "SELECT date, composite, regime, macro_regime, onchain_regime FROM regime_snapshots WHERE date <= (clock_timestamp() AT TIME ZONE 'UTC')::date ORDER BY date DESC LIMIT 1" },
+  probe: { statement: "SELECT date, composite, regime, macro_regime, onchain_regime, factor_regime, macro_percentile, onchain_percentile, factor_percentile FROM regime_snapshots WHERE date <= (clock_timestamp() AT TIME ZONE 'UTC')::date ORDER BY date DESC LIMIT 1" },
 });
 const briefRecent = registerQuery({
   role: "rm_app",
@@ -3862,8 +3888,21 @@ export async function buildBriefBody(
   // `date <= today` (UTC), the same read-side boundary report/projections.ts
   // applies (issue #382): a future-dated row never reaches a brief body the
   // dashboard would not show (issue 1182, folded-in issue 999).
-  const regimeRow = (await on(sql, briefRegime)<{ date: string | Date; composite: unknown; regime: unknown; macro_regime: unknown; onchain_regime: unknown }>`SELECT date, composite, regime, macro_regime, onchain_regime FROM regime_snapshots WHERE date <= (clock_timestamp() AT TIME ZONE 'UTC')::date ORDER BY date DESC LIMIT 1`)[0] ?? null;
-  const regime = regimeRow ? { ...regimeRow, method: REGIME_METHOD.id } : null;
+  const regimeRow = (await on(sql, briefRegime)<{ date: string | Date; composite: unknown; regime: unknown; macro_regime: unknown; onchain_regime: unknown; factor_regime: unknown; macro_percentile: unknown; onchain_percentile: unknown; factor_percentile: unknown }>`SELECT date, composite, regime, macro_regime, onchain_regime, factor_regime, macro_percentile, onchain_percentile, factor_percentile FROM regime_snapshots WHERE date <= (clock_timestamp() AT TIME ZONE 'UTC')::date ORDER BY date DESC LIMIT 1`)[0] ?? null;
+  // Issue 1695: every reading the in-house agents use, all from this one
+  // snapshot, so outside and in-house members read the same day. A missing
+  // percentile stays null: it is shown as missing, never estimated. The
+  // composite's 3-year percentile stays out (retired by 1660).
+  const reading = (v: unknown): number | null => (v == null || !Number.isFinite(Number(v)) ? null : Number(v));
+  const regime = regimeRow
+    ? {
+        ...regimeRow,
+        macro_percentile: reading(regimeRow.macro_percentile),
+        onchain_percentile: reading(regimeRow.onchain_percentile),
+        factor_percentile: reading(regimeRow.factor_percentile),
+        method: REGIME_METHOD.id,
+      }
+    : null;
   // Each ref carries its session id (issue #965): a subject may convene more
   // than once a day, so date and subject alone cannot reach an earlier session
   // of that day. Ordered by convened_at, the order getSession() uses to pick a
@@ -3909,7 +3948,13 @@ export async function buildBriefBody(
     researchSignals,
     prompt: {
       system: "You are an investment swarm member. Author only your own analysis and do not attribute invented statements to other members.",
-      user: `Review the supplied swarm context for ${subject?.name ?? s.subject_id} on ${typeof s.date === "string" ? s.date : new Date(s.date).toISOString().slice(0, 10)} and return one take matching takeSchema.`,
+      user: briefTaskText({
+        subjectName: subject?.name ?? s.subject_id,
+        thesis: subject?.thesisBlurb ?? null,
+        date: typeof s.date === "string" ? s.date : new Date(s.date).toISOString().slice(0, 10),
+        sleeves: sessionBuckets,
+        targets: (allocation as { buckets?: { id?: unknown; target_weight?: unknown }[] } | null)?.buckets ?? [],
+      }),
     },
     takeSchema: {
       stance: { type: "string", enum: [...STANCES] },

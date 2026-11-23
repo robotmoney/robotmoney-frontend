@@ -926,7 +926,7 @@ describe("runTake — fresh workspace → one-shot → sign → persist → subm
     expect(readFileSync(join(markers, "model-key"), "utf8")).toBe("athena-key-only-hers-42");
   }, 30_000);
 
-  test("THE RENDERED TAKE COMMAND, for real: author-take.ts reads the member, regime and brief, asks the model on the member's OWN key, and the chain submits its draft", async () => {
+  test("THE RENDERED TAKE COMMAND, for real: author-take.ts reads the member and the brief (its regime too), asks the model on the member's OWN key, and the chain submits its draft", async () => {
     // The argv every rendered agent carries (scripts/lib/participant-compose.ts
     // PARTICIPANT_TAKE_COMMAND), EXACTLY as rendered: a relative script path.
     // The one-shot runs in a fresh workspace elsewhere, so this only works when
@@ -943,9 +943,8 @@ describe("runTake — fresh workspace → one-shot → sign → persist → subm
       async fetch(req) {
         const url = new URL(req.url);
         if (url.pathname === ROUTES.swarm.brief) {
-          return Response.json({ body: { subject: { recommendationType: "stance" }, prompt: "Assess woon." }, reportSnapshotId: "rs-7" });
+          return Response.json({ body: { subject: { recommendationType: "stance" }, regime: { composite: 0.412, regime: "neutral" }, prompt: "Assess woon." }, reportSnapshotId: "rs-7" });
         }
-        if (url.pathname === ROUTES.dashboards.regimeSnapshots) return Response.json({ latest: { composite: 0.412, regime: "neutral" } });
         if (url.pathname.startsWith("/api/swarm/members/")) return Response.json({ id: MEMBER_ID, lens: "macro risk" });
         if (url.pathname === ROUTES.swarm.memos) {
           memos.push({ auth: req.headers.get("authorization"), body: (await req.json()) as Record<string, unknown> });
@@ -1001,7 +1000,6 @@ describe("runTake — fresh workspace → one-shot → sign → persist → subm
         const url = new URL(req.url);
         if (url.pathname === ROUTES.swarm.brief) return new Response("no brief yet", { status: 404 });
         if (url.pathname.startsWith("/api/swarm/subjects/")) return Response.json({ recommendationType: null });
-        if (url.pathname === ROUTES.dashboards.regimeSnapshots) return Response.json({ latest: {} });
         if (url.pathname === "/v1/chat/completions") return Response.json({ choices: [{ message: { content: "I would rather not." } }] });
         return new Response("not found", { status: 404 });
       },

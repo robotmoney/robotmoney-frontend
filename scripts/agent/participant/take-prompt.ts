@@ -13,8 +13,8 @@ import type { Stance } from "@robotmoney/contract";
 // deterministic memo template; it belongs with the only remaining authoring
 // path so a future fallback cannot accidentally reappear through that module.
 export interface RegimeContext {
-  composite: number;
-  compositePercentile?: number | null;
+  /** null when the brief carries no reading: shown as missing, never estimated. */
+  composite: number | null;
   regime?: string | null;
   macroRegime?: string | null;
   onchainRegime?: string | null;
@@ -87,6 +87,25 @@ export interface SleeveTarget {
   name: string;
   weight: number;
   items?: string[];
+}
+
+// The regime readings of a served brief (issue 1695): every member reads the
+// brief's own snapshot, so in-house and outside members cite the same day. A
+// reading the brief does not carry is null, and the prompt prints it as missing.
+export function regimeFromBrief(body: unknown): RegimeContext {
+  const r = ((body as { regime?: unknown } | null | undefined)?.regime ?? null) as Record<string, unknown> | null;
+  const num = (v: unknown): number | null => (v == null || v === "" || !Number.isFinite(Number(v)) ? null : Number(v));
+  const label = (v: unknown): string | null => (typeof v === "string" && v !== "" ? v : null);
+  return {
+    composite: num(r?.composite),
+    regime: label(r?.regime),
+    macroRegime: label(r?.macro_regime),
+    onchainRegime: label(r?.onchain_regime),
+    factorRegime: label(r?.factor_regime),
+    macroPercentile: num(r?.macro_percentile),
+    onchainPercentile: num(r?.onchain_percentile),
+    factorPercentile: num(r?.factor_percentile),
+  };
 }
 
 // The targets a brief carried, in its order; [] when it carried none (a
@@ -433,9 +452,10 @@ function dispositionLabel(bias: number): string {
   return "runs balanced; you weight the panel spread over the composite label and resist tilting off the mandate";
 }
 
-function pct(fraction: number | null | undefined, fallback: number): string {
-  const f = typeof fraction === "number" ? fraction : fallback;
-  return `${Math.round(Math.max(0, Math.min(1, f)) * 100)}th`;
+// A missing reading is printed as missing (issue 1695), never estimated from the composite.
+function pct(fraction: number | null | undefined): string {
+  if (typeof fraction !== "number" || !Number.isFinite(fraction)) return "missing";
+  return `${Math.round(Math.max(0, Math.min(1, fraction)) * 100)}th percentile`;
 }
 
 // Build the full single-message prompt for opencode `run`. opencode `run` takes
@@ -445,7 +465,7 @@ export function promptFor(
   p: Persona,
   regime: RegimeContext,
   subjectId: string,
-  options: { requireWeights?: boolean; targets?: readonly SleeveTarget[] } = {},
+  options: { requireWeights?: boolean; targets?: readonly SleeveTarget[]; task?: string } = {},
 ): string {
   const comp = regime.composite;
   const inForce = options.targets?.length ? targetsLine(options.targets) : "";
@@ -489,10 +509,11 @@ export function promptFor(
     ``,
     `# Session brief`,
     `Subject under review: ${subjectId}`,
-    `Composite ${comp.toFixed(3)} (${pct(regime.compositePercentile, comp)} percentile of trailing 3y) -> bucket ${regime.regime ?? "unlabeled"}.`,
-    `  Macro panel:    ${pct(regime.macroPercentile, comp + 0.08)} percentile, bucket ${regime.macroRegime ?? "n/a"}`,
-    `  On-chain panel: ${pct(regime.onchainPercentile, comp - 0.2)} percentile, bucket ${regime.onchainRegime ?? "n/a"}`,
-    `  Equity factor:  ${pct(regime.factorPercentile, comp + 0.15)} percentile, bucket ${regime.factorRegime ?? "n/a"}`,
+    `Composite ${typeof comp === "number" ? comp.toFixed(3) : "missing"} -> bucket ${regime.regime ?? "missing"}.`,
+    `  Macro panel:    ${pct(regime.macroPercentile)}, bucket ${regime.macroRegime ?? "missing"}`,
+    `  On-chain panel: ${pct(regime.onchainPercentile)}, bucket ${regime.onchainRegime ?? "missing"}`,
+    `  Equity factor:  ${pct(regime.factorPercentile)}, bucket ${regime.factorRegime ?? "missing"}`,
+    ...(options.task ? [`Brief task: ${options.task}`] : []),
     ...(inForce ? [`Sleeve targets in force: ${inForce}.`] : []),
     ``,
     `# Your task`,
