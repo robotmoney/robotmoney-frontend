@@ -14,8 +14,8 @@ import { session } from "../../lib/deposit/session.js";
 import { MANIFEST } from "../../lib/deposit/manifest.js";
 import { buildCancel, buildWithdrawCredit, buildWithdrawExpired, buildGiveNotice, buildTakeBackNotice } from "../../lib/deposit/builder.js";
 import { stageOf, filledOf, outOf, canCancel, canWithdrawExpired, canGiveNotice, canTakeBack, liveRemaining, lockOf, STAGE, IN_FLIGHT } from "../../lib/deposit/stages.js";
-import { timelineOf, summaryOf, inUnit, outUnit, kindLabel } from "../../lib/deposit/describe.js";
-import { expiresAtOf } from "../../lib/deposit/schedule.js";
+import { timelineOf, summaryOf, inUnit, outUnit, kindLabel, toneOf, cancelledOf } from "../../lib/deposit/describe.js";
+import { requestExpiresAt } from "../../lib/deposit/schedule.js";
 import { fmtWhen, fmtFee, shortAddr, shortHash } from "../../lib/deposit/format.js";
 import { DEPOSIT_REQUEST_RE } from "../../routes.js";
 
@@ -61,11 +61,29 @@ export function registerDepositRequestView(Alpine) {
     st() { this.now; return this.r ? stageOf(this.r, this.now, this.flow()) : null; },
     title() { const r = this.r; return r ? `${kindLabel(r)} of ${inUnit(r, r.amount)}` : "Request not found"; },
     summary() { this.now; return this.r ? summaryOf(this.r, this.now, this.flow()) : ""; },
-    pct() { const r = this.r; return r && r.amount > 0 ? Math.min(100, (filledOf(r) / r.amount) * 100) : 0; },
-    tone() {
-      const s = this.st()?.stage;
-      return s === STAGE.READY || s === STAGE.TAKE_BACK ? "ready" : s === STAGE.ON_HOLD ? "hold" : s === STAGE.FILLING ? "filling" : s === STAGE.WAITING || s === STAGE.NOTICE ? "waiting" : "off";
+    tone() { const s = this.st()?.stage; return s ? toneOf(s, this.r) : "off"; },
+    /** The fill bar: a block per batch fill, then what is still live, then what closed unfilled. */
+    bar() {
+      const r = this.r;
+      if (!r || !(r.amount > 0) || (!r.fills.length && !(liveRemaining(r) > 0))) return [];
+      const out = r.fills.map((x, i) => ({ key: `f${i}`, w: x.amountIn, cls: "is-fill" }));
+      const left = liveRemaining(r);
+      if (left > 0) out.push({ key: "live", w: left, cls: "is-rest" });
+      const gone = r.amount - filledOf(r) - left;
+      if (gone > 1e-9) out.push({ key: "gone", w: gone, cls: "is-gone" });
+      return out;
     },
+    filledLabel() { const r = this.r; return r ? `${inUnit(r, filledOf(r)).replace(/ (USDC|rmFUND)$/, "")} of ${inUnit(r, r.amount)}` : ""; },
+    restLabel() {
+      const r = this.r, st = this.st();
+      if (!r || !st) return "";
+      const left = liveRemaining(r);
+      if (left > 0 && (st.stage === STAGE.FILLING || st.stage === STAGE.WAITING)) return `${inUnit(r, left)} in the next batch`;
+      if (cancelledOf(r) > 1e-9) return `${inUnit(r, cancelledOf(r))} cancelled`;
+      return "";
+    },
+    /** The bar replaces the sentence where it says the same thing (filling, ready, delivered); a stage with a time keeps its sentence. */
+    barSays() { const s = this.st()?.stage; return s === STAGE.FILLING || s === STAGE.READY || s === STAGE.DELIVERED; },
     facts() {
       const r = this.r, st = this.st(), f = this.flow();
       if (!r) return [];
@@ -76,8 +94,8 @@ export function registerDepositRequestView(Alpine) {
       const lock = lockOf(r, this.now, f);
       if (lock) out.push({ key: "lock", label: "Can be cancelled until", value: fmtWhen(lock) });
       if (r.kind === "redeem") out.push({ key: "fee", label: "Exit fee", value: fmtFee(r.exitFeeBps) });
-      if (liveRemaining(r) > 0 && r.kind === "deposit") out.push({ key: "exp", label: "Unfilled USDC can be taken back", value: fmtWhen(expiresAtOf(r.epoch, f)) });
-      if (liveRemaining(r) > 0 && r.kind === "redeem" && !r.noticeAt) out.push({ key: "exp", label: "Notice possible from", value: fmtWhen(expiresAtOf(r.epoch, f)) });
+      if (liveRemaining(r) > 0 && r.kind === "deposit") out.push({ key: "exp", label: "Unfilled USDC can be taken back", value: fmtWhen(requestExpiresAt(r, f)) });
+      if (liveRemaining(r) > 0 && r.kind === "redeem" && !r.noticeAt) out.push({ key: "exp", label: "Notice possible from", value: fmtWhen(requestExpiresAt(r, f)) });
       out.push({ key: "owner", label: "Owner", value: shortAddr(r.owner) });
       return out;
     },

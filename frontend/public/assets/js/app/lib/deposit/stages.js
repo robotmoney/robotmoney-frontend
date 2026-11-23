@@ -23,7 +23,7 @@
 // expires, but can be given notice then.
 
 import { DEFAULT_FLOW } from "./manifest.js";
-import { lockAtOf, expiresAtOf, fmtDuration } from "./schedule.js";
+import { settleableAt, requestLockAt, requestExpiresAt, fmtDuration } from "./schedule.js";
 
 export const STAGE = Object.freeze({
   WAITING: "Waiting for batch",
@@ -57,10 +57,9 @@ export const liveRemaining = (r) => (!r.closed && !r.expired && !r.cancelled && 
  * @param {number} epoch @param {number} now @param {typeof DEFAULT_FLOW} [f]
  */
 export function nextBatchFor(epoch, now, f = DEFAULT_FLOW) {
-  const E = f.epochLength * 1000;
-  const W = f.settleWindow * 1000;
-  const k = Math.max(epoch, Math.ceil((now - W) / E) - 1);
-  return (k + 1) * E + W;
+  // The first epoch whose batch is still ahead: settleableAt(k) >= now.
+  const first = (f.anchorIndex ?? 0) - 1 + Math.ceil(((now - f.settleWindow * 1000) / 1000 - (f.anchorTime ?? 0)) / f.epochLength);
+  return settleableAt(Math.max(epoch, first), f);
 }
 
 /**
@@ -94,13 +93,13 @@ export function stageOf(r, now, f = DEFAULT_FLOW) {
  * @param {any} r @param {number} now @param {typeof DEFAULT_FLOW} [f] @param {{ depositsStopped?: boolean }} [ctx]
  */
 export const canCancel = (r, now, f = DEFAULT_FLOW, ctx = {}) =>
-  liveRemaining(r) > EPS && !r.noticeAt && (now < lockAtOf(r.epoch, f) || (r.kind === "deposit" && !!ctx.depositsStopped));
+  liveRemaining(r) > EPS && !r.noticeAt && (now < requestLockAt(r, f) || (r.kind === "deposit" && !!ctx.depositsStopped));
 /** When an open request locks, or null once it has. @param {any} r @param {number} now @param {typeof DEFAULT_FLOW} [f] */
-export const lockOf = (r, now, f = DEFAULT_FLOW) => (liveRemaining(r) > EPS && now < lockAtOf(r.epoch, f) ? lockAtOf(r.epoch, f) : null);
+export const lockOf = (r, now, f = DEFAULT_FLOW) => (liveRemaining(r) > EPS && now < requestLockAt(r, f) ? requestLockAt(r, f) : null);
 /** Whether an expired deposit's USDC is waiting to be withdrawn. @param {any} r */
 export const canWithdrawExpired = (r) => r.kind === "deposit" && !!r.expired && !r.closed && r.remaining > EPS;
 /** Whether a redemption is old enough to give notice (D25). @param {any} r @param {number} now @param {typeof DEFAULT_FLOW} [f] */
-export const canGiveNotice = (r, now, f = DEFAULT_FLOW) => r.kind === "redeem" && liveRemaining(r) > EPS && !r.noticeAt && now >= expiresAtOf(r.epoch, f);
+export const canGiveNotice = (r, now, f = DEFAULT_FLOW) => r.kind === "redeem" && liveRemaining(r) > EPS && !r.noticeAt && now >= requestExpiresAt(r, f);
 /** Whether a noticed redemption's unfilled shares can be taken back. @param {any} r */
 export const canTakeBack = (r) => !!r.noticeDone && !r.closed && r.remaining > EPS;
 /** Fills whose shares or USDC can be taken at `now`. @param {any} r @param {number} now */

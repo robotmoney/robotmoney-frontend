@@ -5,20 +5,27 @@
 // table and another on its own page.
 
 import { stageOf, filledOf, outOf, liveRemaining, canCancel, canWithdrawExpired, canGiveNotice, canTakeBack, claimableFills, lockOf, nextBatchFor, STAGE, IN_FLIGHT } from "./stages.js";
-import { expiresAtOf, lockAtOf, fmtCountdown, fmtDuration } from "./schedule.js";
-import { fmtUsdc, fmtShares, fmtWhen, fmtWhenShort } from "./format.js";
+import { requestExpiresAt, requestLockAt, fmtCountdown, fmtDuration } from "./schedule.js";
+import { fmtUsdc, fmtRm, fmtWhen, fmtWhenShort } from "./format.js";
 
 const EPS = 1e-9;
+const UNKNOWN_EARLY = Number.MIN_SAFE_INTEGER;
+/**
+ * A batch can fill a request for slightly less than it asked (rounding into
+ * the queue's dust books): under a hundredth of a USDC or of an rmFUND is not
+ * a cancellation worth showing.
+ */
+const DUST = 0.01;
 
-/** "250 USDC" for a deposit, "100.0000 shares" for a redemption. @param {any} r @param {number} n */
-export const inUnit = (r, n) => (r.kind === "deposit" ? fmtUsdc(n) : `${fmtShares(n)} shares`);
-/** The other side: shares for a deposit, USDC for a redemption. @param {any} r @param {number} n */
-export const outUnit = (r, n) => (r.kind === "deposit" ? `${fmtShares(n)} shares` : fmtUsdc(n));
+/** "250 USDC" for a deposit, "100.0000 rmFUND" for a redemption. @param {any} r @param {number} n */
+export const inUnit = (r, n) => (r.kind === "deposit" ? fmtUsdc(n) : fmtRm(n));
+/** The other side: rmFUND for a deposit, USDC for a redemption. @param {any} r @param {number} n */
+export const outUnit = (r, n) => (r.kind === "deposit" ? fmtRm(n) : fmtUsdc(n));
 /** "Deposit" or "Redemption". @param {any} r */
 export const kindLabel = (r) => (r.kind === "deposit" ? "Deposit" : "Redemption");
 
 /** The cancelled part of a request: what was asked for less what filled, once closed by a cancel. @param {any} r */
-export const cancelledOf = (r) => (r.cancelled ? Math.max(0, r.amount - filledOf(r)) : 0);
+export const cancelledOf = (r) => { const d = r.cancelled ? r.amount - filledOf(r) : 0; return d >= DUST ? d : 0; };
 
 /**
  * How one batch filled a request: matched with the other side at the vault's
@@ -37,7 +44,25 @@ export function splitOf(r, x) {
 }
 
 /**
- * One row of Your requests (canvas board 6).
+ * A stage's colour, one vocabulary on every surface (David, 17 Nov 2026: "lets
+ * be consistent across the app"): green when money is yours (filled, ready,
+ * delivered), white while it is in motion, a hollow ring while it waits, the
+ * Beacon point when it needs the owner to act, and dim once it is closed.
+ * @param {string} stage @param {any} r
+ * @returns {"ready" | "filling" | "hold" | "waiting" | "act" | "off"}
+ */
+export function toneOf(stage, r) {
+  if (stage === STAGE.READY) return "ready";
+  if (stage === STAGE.TAKE_BACK || stage === STAGE.RELEASED || (stage === STAGE.EXPIRED && canWithdrawExpired(r))) return "act";
+  if (stage === STAGE.ON_HOLD) return "hold";
+  if (stage === STAGE.FILLING) return "filling";
+  if (stage === STAGE.WAITING || stage === STAGE.NOTICE) return "waiting";
+  return "off";
+}
+
+/**
+ * One row of Your requests (canvas board 6). `sub` is one short line under the
+ * stage; `tip` is the reason behind it, for the (i) beside it.
  * @param {any} r @param {number} now @param {any} f flow parameters @param {{ depositsStopped?: boolean }} [ctx]
  */
 export function rowOf(r, now, f, ctx = {}) {
@@ -46,16 +71,17 @@ export function rowOf(r, now, f, ctx = {}) {
   const out = outOf(r);
   const left = liveRemaining(r);
   const lock = lockOf(r, now, f);
-  const tone = st.stage === STAGE.READY || st.stage === STAGE.TAKE_BACK ? "ready" : st.stage === STAGE.ON_HOLD ? "hold" : st.stage === STAGE.FILLING ? "filling" : st.stage === STAGE.WAITING || st.stage === STAGE.NOTICE ? "waiting" : "off";
+  const tone = toneOf(st.stage, r);
   const notice = canGiveNotice(r, now, f);
-  let sub = "";
+  const span = fmtDuration(f.maxRoll * f.epochLength);
+  let sub = "", tip = "";
   if (st.stage === STAGE.WAITING && lock) sub = `You can cancel until ${fmtWhenShort(lock)}`;
-  else if (notice) sub = `No batch has filled ${inUnit(r, left)} in ${fmtDuration(f.maxRoll * f.epochLength)}. You can ask for the shares back.`;
+  else if (notice) { sub = "You can ask for the rmFUND back"; tip = `No batch has filled ${inUnit(r, left)} in ${span}.`; }
   else if (st.stage === STAGE.FILLING) sub = `${inUnit(r, left)} joins the next batch`;
-  else if (st.stage === STAGE.NOTICE) sub = `${inUnit(r, left)} comes back if that batch does not fill it`;
+  else if (st.stage === STAGE.NOTICE) { sub = `${inUnit(r, left)} comes back if unfilled`; tip = "It takes part in one more batch. Whatever that batch does not fill comes back."; }
   else if (st.stage === STAGE.TAKE_BACK) sub = `${inUnit(r, r.remaining)} to take back`;
   else if (st.stage === STAGE.RELEASED) sub = `${inUnit(r, r.remaining)} to withdraw`;
-  else if (st.stage === STAGE.EXPIRED && canWithdrawExpired(r)) sub = `No batch filled ${inUnit(r, r.remaining)} in time. Withdraw it to your wallet.`;
+  else if (st.stage === STAGE.EXPIRED && canWithdrawExpired(r)) { sub = `Withdraw the ${inUnit(r, r.remaining)} to your wallet.`; tip = `No batch filled it within ${span}.`; }
   else if (st.stage === STAGE.EXPIRED) sub = `${inUnit(r, r.amount - filled)} did not fill and was taken back.`;
   else if (r.cancelled && cancelledOf(r) > EPS) sub = `${inUnit(r, cancelledOf(r))} cancelled`;
   return {
@@ -70,6 +96,7 @@ export function rowOf(r, now, f, ctx = {}) {
     stage: st.stage,
     tone,
     sub,
+    tip,
     next: st.at && IN_FLIGHT.includes(st.stage) ? fmtWhenShort(st.at) : "",
     nextIn: st.at && st.stage === STAGE.ON_HOLD ? fmtCountdown(st.at - now) : "",
     canCancel: canCancel(r, now, f, ctx),
@@ -83,36 +110,43 @@ export function rowOf(r, now, f, ctx = {}) {
 }
 
 /**
- * What happened, oldest first, then what is expected (canvas board 7).
+ * What happened, oldest first, then what is expected (canvas board 7). One
+ * short line per event; the detail (how a batch matched) goes in `tip`.
+ * `mark` colours the event's point with the stage vocabulary (toneOf): money
+ * that moved or arrives is green, a step done is white, a deadline or an
+ * action the owner needs is the Beacon point, what has not happened yet is a
+ * hollow ring, and what closed without effect is dim.
  * @param {any} r @param {number} now @param {any} f
- * @returns {{ key: number, at: number, when: string, what: string, sub: string, next: boolean }[]}
+ * @returns {{ key: number, at: number, when: string, what: string, tip: string, next: boolean, mark: "money" | "done" | "act" | "next" | "off" }[]}
  */
 export function timelineOf(r, now, f) {
   const dep = r.kind === "deposit";
-  const ev = [{ at: r.createdAt, what: `Requested ${inUnit(r, r.amount)}`, sub: "", next: false }];
-  const lockAt = lockAtOf(r.epoch, f);
+  /** @type {any[]} */
+  // A request carried over from 0.8.0 has no creation time (createdAt 0): it sorts first, with no time shown.
+  const ev = [{ at: r.createdAt || UNKNOWN_EARLY, what: `Requested ${inUnit(r, r.amount)}`, mark: "done" }];
+  const lockAt = requestLockAt(r, f);
   const lockedForBatch = !(r.cancelled && (r.cancelledAt ?? 0) < lockAt) && !(r.released && !r.fills.length);
-  if (lockedForBatch) ev.push({ at: lockAt, what: lockAt > now ? "Locks for the batch. Cancelling closes then." : "Locked for the batch", sub: "", next: lockAt > now });
+  if (lockedForBatch) ev.push(lockAt > now ? { at: lockAt, what: "Locks, and cancelling closes", mark: "act", next: true } : { at: lockAt, what: "Locked", mark: "done" });
   for (const x of r.fills) {
-    ev.push({ at: x.at, what: `Batch filled ${inUnit(r, x.amountIn)} at ${x.price.toFixed(4)} USDC a share, for ${outUnit(r, x.out)}`, sub: splitOf(r, x), next: false });
-    if (dep && !x.claimed && x.unlockAt > now) ev.push({ at: x.unlockAt, what: `${fmtShares(x.out)} shares arrive`, sub: "", next: true });
+    ev.push({ at: x.at, what: `Filled ${inUnit(r, x.amountIn)} at ${x.price.toFixed(4)} → ${outUnit(r, x.out)}`, tip: splitOf(r, x), mark: "money" });
+    if (dep && !x.claimed && x.unlockAt > now) ev.push({ at: x.unlockAt, what: `${fmtRm(x.out)} arrives`, mark: "money", next: true });
   }
-  if (r.noticeGivenAt) ev.push({ at: r.noticeGivenAt, what: "Notice given: the unfilled shares come back after one more batch", sub: "", next: false });
+  if (r.noticeGivenAt) ev.push({ at: r.noticeGivenAt, what: "Notice given", tip: "Unfilled rmFUND comes back after one more batch.", mark: "done" });
   const st = stageOf(r, now, f);
   const left = liveRemaining(r);
   if (left > EPS && st.at) {
-    ev.push({ at: st.at, what: `Next batch: ${inUnit(r, left)} to fill, at the price it sets`, sub: "", next: true });
-    if (dep) ev.push({ at: st.at + f.minHold * 1000, what: r.fills.length ? "The rest arrive, if that batch fills them" : "Shares arrive, if that batch fills them", sub: "", next: true });
-    if (dep) ev.push({ at: expiresAtOf(r.epoch, f), what: "Anything still unfilled can be taken back", sub: "", next: true });
-    else if (!r.noticeAt && expiresAtOf(r.epoch, f) > now) ev.push({ at: expiresAtOf(r.epoch, f), what: "If still unfilled, you can ask for the shares back", sub: "", next: true });
+    ev.push({ at: st.at, what: `Next batch: ${inUnit(r, left)}`, tip: "The batch sets the price it fills at.", mark: "next", next: true });
+    if (dep) ev.push({ at: st.at + f.minHold * 1000, what: r.fills.length ? "The rest arrives, if filled" : "rmFUND arrives, if filled", mark: "next", next: true });
+    if (dep) ev.push({ at: requestExpiresAt(r, f), what: "Unfilled USDC can be taken back", mark: "next", next: true });
+    else if (!r.noticeAt && requestExpiresAt(r, f) > now) ev.push({ at: requestExpiresAt(r, f), what: "You can ask for unfilled rmFUND back", mark: "next", next: true });
   }
-  if (r.cancelled && cancelledOf(r) > EPS) ev.push({ at: r.cancelledAt ?? Number.MAX_SAFE_INTEGER, what: `Cancelled ${inUnit(r, cancelledOf(r))} that had not filled`, sub: "", next: false });
-  if (r.expired) ev.push({ at: expiresAtOf(r.epoch, f), what: canWithdrawExpired(r) ? `Expired with ${inUnit(r, r.remaining)} unfilled, ready to withdraw` : "Expired, and the unfilled USDC was taken back", sub: "", next: false });
-  if (r.noticeDone && r.noticeAt) ev.push({ at: r.noticeAt, what: canTakeBack(r) ? `The notice batch ran. ${inUnit(r, r.remaining)} is ready to take back` : "The notice batch ran, and the unfilled shares came back", sub: "", next: false });
-  if (r.released) ev.push({ at: r.returnedAt ?? Number.MAX_SAFE_INTEGER, what: r.closed ? "Released in the wind-down and withdrawn" : "Released in the wind-down, ready to withdraw", sub: "", next: false });
+  if (r.cancelled && cancelledOf(r) > EPS) ev.push({ at: r.cancelledAt ?? Number.MAX_SAFE_INTEGER, what: `Cancelled ${inUnit(r, cancelledOf(r))} unfilled`, mark: "off" });
+  if (r.expired) ev.push(canWithdrawExpired(r) ? { at: requestExpiresAt(r, f), what: `Expired: ${inUnit(r, r.remaining)} to withdraw`, mark: "act" } : { at: requestExpiresAt(r, f), what: "Expired. The unfilled USDC was taken back", mark: "off" });
+  if (r.noticeDone && r.noticeAt) ev.push(canTakeBack(r) ? { at: r.noticeAt, what: `Notice batch ran: ${inUnit(r, r.remaining)} to take back`, mark: "act" } : { at: r.noticeAt, what: "Notice batch ran. The unfilled rmFUND came back", mark: "off" });
+  if (r.released) ev.push(r.closed ? { at: r.returnedAt ?? Number.MAX_SAFE_INTEGER, what: "Released in the wind-down and withdrawn", mark: "off" } : { at: r.returnedAt ?? Number.MAX_SAFE_INTEGER, what: "Released in the wind-down, to withdraw", mark: "act" });
   return ev
     .sort((a, b) => a.at - b.at)
-    .map((e, i) => ({ ...e, key: i, when: e.at === Number.MAX_SAFE_INTEGER ? "" : fmtWhen(e.at) }));
+    .map((e, i) => ({ tip: "", next: false, ...e, key: i, when: e.at === Number.MAX_SAFE_INTEGER || e.at === UNKNOWN_EARLY ? "" : fmtWhen(e.at) }));
 }
 
 /** The sentence under a status page title. @param {any} r @param {number} now @param {any} f */
@@ -123,8 +157,8 @@ export function summaryOf(r, now, f) {
   const lock = lockOf(r, now, f);
   if (st.stage === STAGE.FILLING) return `${inUnit(r, filled).replace(/ USDC$/, "")} of ${inUnit(r, r.amount)} has filled. The other ${inUnit(r, left)} joins the next batch.`;
   if (st.stage === STAGE.WAITING) return `Waiting for the batch at ${fmtWhen(st.at)}, which sets the price.${lock ? ` It can be cancelled until ${fmtWhenShort(lock)}.` : ""}`;
-  if (st.stage === STAGE.ON_HOLD) return `Filled. ${r.kind === "deposit" ? "The shares are held until" : "Ready at"} ${fmtWhen(st.at)}.`;
-  if (st.stage === STAGE.NOTICE) return `Notice given. Shares still unfilled after the batch at ${fmtWhen(st.at)} come back.`;
+  if (st.stage === STAGE.ON_HOLD) return `Filled. ${r.kind === "deposit" ? "The rmFUND is held until" : "Ready at"} ${fmtWhen(st.at)}.`;
+  if (st.stage === STAGE.NOTICE) return `Notice given. rmFUND still unfilled after the batch at ${fmtWhen(st.at)} come back.`;
   return st.note;
 }
 

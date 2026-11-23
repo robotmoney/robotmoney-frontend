@@ -17,7 +17,6 @@
 .dp__small { font-size: 0.8125rem; }
 .dp__strong { color: var(--color-text); font-weight: 500; }
 .dp__fine { margin: 0; font-size: 0.8125rem; line-height: 1.6; color: var(--color-text-muted); }
-.dp__hint { margin: 0; font-size: 0.8125rem; line-height: 1.6; color: var(--color-text-muted); }
 .dp__err { margin: 0; font-size: 0.8125rem; line-height: 1.6; color: var(--color-warn); }
 .dp__err.is-hint { color: var(--color-text-muted); }
 .dp__err--tight { margin-top: -0.5rem; }
@@ -26,10 +25,8 @@
 .dp__stack { display: flex; flex-direction: column; gap: 0.75rem; }
 .dp__stack--tight { gap: 0.375rem; }
 .dp__grow { flex: 1; min-width: 0; }
-.dp__minw { min-width: 0; }
 .dp__right { margin-left: auto; }
 .dp__self-start { align-self: flex-start; }
-.dp__ellipsis { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.8125rem; text-decoration: none; }
 .dp a:not([class]) { color: var(--color-link); text-decoration: underline; text-decoration-color: var(--color-link-line); text-underline-offset: 3px; }
 .dp a:not([class]):hover { text-decoration-color: var(--color-link); }
 
@@ -103,7 +100,11 @@
 .dp__amt--sm input { font-size: 1rem; }
 .dp__amt--sm .dp__mono { font-size: 0.75rem; white-space: nowrap; }
 .dp__tok { display: flex; align-items: center; gap: 0.5rem; flex: none; font-family: var(--font-mono); font-size: 0.8125rem; border: 1px solid var(--color-border-light); padding: 0.375rem 0.625rem; }
-.dp__coin { width: 14px; height: 14px; border-radius: 50%; background: #2775ca; display: inline-block; }
+/* A token's own official logo (lib/deposit/tokens.js), at 24px: Circle's minimum for USDC on screen. */
+.dp__tokimg { width: 1.5rem; height: 1.5rem; flex: none; display: block; }
+.dp__asset { display: inline-flex; align-items: center; gap: 0.5rem; }
+.dp__tok:has(.dp__tokimg) { padding: 0.25rem 0.625rem 0.25rem 0.3125rem; }
+.dp__kv:has(.dp__asset) { align-items: center; }
 .dp__kvs { display: flex; flex-direction: column; }
 .dp__kvs--rule .dp__kv { border-bottom: 1px solid var(--color-surface); padding: 0.4375rem 0; }
 .dp__kv { display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; padding: 0.375rem 0; font-size: 0.8125rem; color: var(--color-text-soft); }
@@ -154,12 +155,23 @@
 .dp__tl { list-style: none; margin: 0; padding: 0 0 0 1.125rem; border-left: 1px solid var(--color-border-light); display: flex; flex-direction: column; gap: 0.625rem; }
 .dp__tl li { position: relative; display: flex; justify-content: space-between; gap: 1rem; font-size: 0.8125rem; color: var(--color-text-soft); }
 .dp__tl li::before { content: ""; position: absolute; left: -22px; top: 5px; width: 7px; height: 7px; border-radius: 50%; background: var(--color-void); border: 1px solid var(--color-text-muted); box-sizing: border-box; }
-.dp__tl li.is-now::before { background: var(--color-text); border-color: var(--color-text); }
-.dp__sig { display: flex; gap: 0.875rem; align-items: flex-start; padding: 0.5rem 0; border-bottom: 1px solid var(--color-surface); }
-.dp__sig:last-of-type { border-bottom: 0; }
-.dp__sig p { margin: 0; font-size: 0.875rem; }
-.dp__sig p + p { margin-top: 0.125rem; }
-.dp__num { font-family: var(--font-mono); font-size: 0.75rem; color: var(--color-text-muted); width: 1rem; flex: none; padding-top: 1px; }
+.dp__tl li.is-now { color: var(--color-text); }
+/* One point vocabulary on every timeline, track and stage (describe.js toneOf):
+   white = in motion or done, green = money that is yours, Beacon = a deadline
+   or an action the owner needs, hollow = not yet, dim = closed. Green is a
+   mass and Beacon a point, both well under the 12px cap. */
+.dp__tl li.is-now::before, .dp__events li.is-done::before { background: var(--color-text); border-color: var(--color-text); }
+.dp__tl li.is-money::before, .dp__events li.is-money::before, .dp__node.is-money i { background: var(--color-green); border-color: var(--color-green); }
+.dp__tl li.is-act::before, .dp__events li.is-act::before { background: var(--color-beacon); border-color: var(--color-beacon); }
+.dp__events li.is-off::before { background: var(--color-border-light); border-color: var(--color-border-light); }
+/* A link that leaves for Basescan or opens a page in a new tab: the site's
+   text link, with the arrow components.css adds to every new-tab text link. */
+.dp__ext { font-size: 0.8125rem; color: var(--color-link); text-decoration: underline; text-decoration-color: var(--color-link-line); text-underline-offset: 3px; white-space: nowrap; }
+.dp__ext:hover { text-decoration-color: var(--color-link); }
+.dp__ext--lg { font-size: 0.9375rem; }
+.dp__follow { margin: 0; display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; flex-wrap: wrap; }
+/* The (i) glyph stays a lower-case i inside mono caps labels. */
+.dp .rm-tip__btn { text-transform: none; letter-spacing: 0; }
 .dp__checks { display: flex; flex-direction: column; gap: 0.5rem; border: 1px solid var(--color-border-light); padding: 0.875rem 1rem; }
 .dp__check { display: flex; gap: 0.75rem; align-items: center; padding: 0.375rem 0; border-bottom: 1px solid var(--color-surface); font-size: 0.8125rem; }
 .dp__check .dp__mono { font-size: 0.75rem; }
@@ -182,7 +194,6 @@
 .dp__node.is-done i { background: var(--color-text); border-color: var(--color-text); }
 .dp__node b { font-size: 0.8125rem; font-weight: 500; }
 .dp__node span { font-family: var(--font-mono); font-size: 0.75rem; color: var(--color-text-muted); }
-.dp__linkbox { display: flex; justify-content: space-between; align-items: center; gap: 1rem; border: 1px solid var(--color-border); padding: 0.875rem 1rem; }
 
 /* Simulation bar */
 .dp__sim { position: sticky; bottom: 0; z-index: 20; display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 1.5rem; padding: 0.75rem 1.5rem; background: var(--color-surface); border-top: 1px solid var(--color-border); font-size: 0.8125rem; color: var(--color-text-soft); }
@@ -212,8 +223,9 @@
 .dp__reqs tr.is-asking td { border-bottom-color: transparent; }
 .dp__sub { display: block; margin-top: 0.25rem; font-family: var(--font-sans); font-size: 0.75rem; line-height: 1.5; color: var(--color-text-muted); white-space: normal; }
 .dp__tbl .n .dp__sub { font-family: var(--font-mono); }
-.dp__bar { display: block; margin: 0.5rem 0 0 auto; width: 6rem; height: 2px; background: var(--color-border-light); }
-.dp__bar i { display: block; height: 2px; background: var(--color-accent); }
+/* The status page's fill bar, small: filled in green, the rest an outline. */
+.dp__bar { display: block; margin: 0.5rem 0 0 auto; width: 6rem; height: 4px; box-sizing: border-box; border: 1px solid var(--color-border-light); }
+.dp__bar i { display: block; height: 2px; background: var(--color-green); }
 .dp__stage { display: inline-flex; align-items: center; gap: 0.5rem; font-family: var(--font-mono); font-size: 0.75rem; color: var(--color-text); white-space: nowrap; }
 .dp__stage i { width: 7px; height: 7px; border-radius: 50%; flex: none; box-sizing: border-box; }
 .dp__stage.is-filling i { background: var(--color-text); }
@@ -221,6 +233,7 @@
 .dp__stage.is-hold i { background: var(--color-text-muted); }
 .dp__stage.is-ready { color: var(--color-green); }
 .dp__stage.is-ready i { background: var(--color-green); }
+.dp__stage.is-act i { background: var(--color-beacon); }
 .dp__stage.is-off { color: var(--color-text-muted); }
 .dp__stage.is-off i { background: var(--color-border-light); }
 .dp__stage--big { font-family: var(--font-sans); font-size: 1.125rem; font-weight: 500; }
@@ -236,12 +249,21 @@
 .dp__crumbs { display: flex; gap: 0.5rem; flex-wrap: wrap; }
 .dp__crumbs a { color: var(--color-text-muted); text-decoration: none; }
 .dp__crumbs a:hover { color: var(--color-text); }
-.dp__progress { height: 2px; background: var(--color-border); }
-.dp__progress i { display: block; height: 2px; background: var(--color-accent); }
+/* The status page's fill bar: one green block per batch fill (money is a
+   mass), the live remainder an empty outline, a closed remainder dim. */
+.dp__fill { display: flex; flex-direction: column; gap: 0.625rem; }
+.dp__fillbar { display: flex; gap: 2px; height: 0.625rem; }
+.dp__fillbar i { display: block; flex-basis: 0; min-width: 2px; box-sizing: border-box; }
+.dp__fillbar .is-fill { background: var(--color-green); }
+.dp__fillbar .is-rest { border: 1px solid var(--color-border-light); }
+.dp__fillbar .is-gone { background: var(--color-border); }
+.dp__filllbl { display: flex; justify-content: space-between; gap: 0.5rem 1rem; flex-wrap: wrap; font-size: 0.875rem; color: var(--color-text-soft); }
+.dp__filllbl b { color: var(--color-text); font-weight: 500; }
 .dp__facts--grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(13rem, 1fr)); gap: 1.25rem 2rem; }
 .dp__facts--grid .dp__fact b { font-size: 0.9375rem; }
-.dp__events { list-style: none; margin: 0; padding: 0; border-top: 1px solid var(--color-border); }
-.dp__events li { display: grid; grid-template-columns: 11rem minmax(0, 1fr); gap: 1rem; padding: 0.875rem 0; border-bottom: 1px solid var(--color-border); font-size: 0.875rem; line-height: 1.5; }
+.dp__events { list-style: none; margin: 0; padding: 0 0 0 1.375rem; border-left: 1px solid var(--color-border-light); }
+.dp__events li { position: relative; display: grid; grid-template-columns: 11rem minmax(0, 1fr); gap: 1rem; padding: 0.75rem 0; font-size: 0.875rem; line-height: 1.5; }
+.dp__events li::before { content: ""; position: absolute; left: calc(-1.375rem - 4px); top: calc(0.75rem + 0.45em); width: 7px; height: 7px; border-radius: 50%; box-sizing: border-box; background: var(--color-void); border: 1px solid var(--color-text-muted); }
 .dp__events li .dp__mono { font-size: 0.8125rem; color: var(--color-text-soft); }
 .dp__events li.is-next { color: var(--color-text-muted); }
 .dp__events li.is-next .dp__mono { color: var(--color-text-muted); }

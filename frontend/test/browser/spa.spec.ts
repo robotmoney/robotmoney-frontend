@@ -225,12 +225,13 @@ test("the deposit skill's docs move to /early-access with their query", async ({
 
 // /deposit renders the deposit page and stays at /deposit (RM-146). Early
 // access asks for a code first (lib/deposit/access.js) and checks it as soon as
-// the tenth character lands; RM-LOCAL-TESTS opens it on a local host only. With
-// no vault addresses in the manifest it runs on the simulator and says so.
-test("/deposit is the deposit page, behind early access, on sample data until the vault is on Base", async ({ page }) => {
+// the tenth character lands; RM-LOCAL-TESTS opens it on a local host only. The
+// page reads the live vault on Base; `?vault=sim` (local hosts only) runs it on
+// the simulator, which says so, so this test needs no network.
+test("/deposit is the deposit page, behind early access, on the simulator when asked", async ({ page }) => {
   const errors = failOnBrowserErrors(page);
-  await page.goto("/deposit");
-  await expect(page).toHaveURL(/\/deposit$/);
+  await page.goto("/deposit?vault=sim");
+  await expect(page).toHaveURL(/\/deposit\?vault=sim$/);
   await expect(page.locator(".dpg__title")).toContainText("Early access to the vault");
   await page.locator("#dp-code").fill("RM-AAAAA-BBBBB");
   await expect(page.locator("#dp-code-msg")).toContainText("does not match");

@@ -10,6 +10,7 @@
 //   it back up.
 
 import { MANIFEST, isSimulated } from "./manifest.js";
+import { REQUEST_TOPICS } from "./abi.js";
 import { sharedSimQueue } from "./sim-queue.js";
 import { createChainSource } from "./chain.js";
 import { loadWallet, errorText } from "./wallet.js";
@@ -104,6 +105,40 @@ export const session = {
     try { const all = JSON.parse(localStorage.getItem(ACK_KEY) || "{}"); all[String(address).toLowerCase()] = Date.now(); localStorage.setItem(ACK_KEY, JSON.stringify(all)); } catch { /* per page only */ }
   },
 
+  /**
+   * Refuse to send unless the vault still runs the implementations this page
+   * was reviewed against (manifest.js pins). Contracts set by hand on a local
+   * host carry no pins and pass; anywhere else, no pins means no sends.
+   */
+  async checkPins() {
+    const pins = MANIFEST.pins;
+    if (!pins) {
+      if (isLocal()) return;
+      throw new Error("Deposits are not open on this site yet.");
+    }
+    const ok = (list, impl) => !!impl && list.some((p) => p.toLowerCase() === impl.toLowerCase());
+    const [fund, queue] = await Promise.all([this.wallet.implementationOf(MANIFEST.fund), this.wallet.implementationOf(MANIFEST.queue)]);
+    if (!ok(pins.fund, fund) || !ok(pins.queue, queue)) {
+      throw new Error("The vault's contracts changed since this page was last reviewed, so nothing was sent. Deposits reopen once the new version is checked.");
+    }
+  },
+
+  /**
+   * The id of the request a mined transaction made, from the queue's own
+   * DepositRequested / RedeemRequested log. Exact, unlike reading the owner's
+   * request list right after, which a node a block behind answers without it.
+   * Null when the transaction made none.
+   * @param {string} hash
+   */
+  async requestIdOf(hash) {
+    if (this.simulated || !hash) return null;
+    try {
+      const r = await this.wallet.receipt(hash);
+      const log = (r?.logs || []).find((l) => String(l.address).toLowerCase() === String(MANIFEST.queue).toLowerCase() && REQUEST_TOPICS.includes(String(l.topics?.[0]).toLowerCase()));
+      return log ? BigInt(log.topics[1]).toString() : null;
+    } catch { return null; }
+  },
+
   /** A sent transaction not yet mined, kept across reloads (board 25). */
   pending() { try { return JSON.parse(localStorage.getItem(PENDING_KEY) || "null"); } catch { return null; } },
   setPending(p) { try { if (p) localStorage.setItem(PENDING_KEY, JSON.stringify(p)); else localStorage.removeItem(PENDING_KEY); } catch { /* ignore */ } this.bump(); },
@@ -129,11 +164,11 @@ export const session = {
       this.bump();
       return hash;
     }
-    if (!MANIFEST.pins.fund.length && !isLocal()) throw new Error("Deposits are not open on this site yet.");
     if (!this.onBase()) throw new Error("Switch your wallet to Base first.");
+    await this.checkPins();
     try {
       if (calls.length === 1) await this.wallet.simulate(calls[0]);
-      if (calls.length > 1 && (await this.wallet.canBatch())) {
+      if (calls.length > 1 && !calls.some((c) => c.gas) && (await this.wallet.canBatch())) {
         calls.forEach((_, i) => step(i, "wallet"));
         const hash = await this.wallet.sendBatch(calls, (id) => { calls.forEach((_, i) => step(i, "sent")); this.setPending({ id, label: opts.label, at: Date.now(), from }); });
         calls.forEach((_, i) => step(i, "done", hash));

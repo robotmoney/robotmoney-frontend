@@ -15,8 +15,8 @@ import { MANIFEST } from "../../lib/deposit/manifest.js";
 import { buildCancel, buildWithdrawCredit, buildWithdrawExpired, buildClaimShares, buildClaimUsdc, buildGiveNotice, buildTakeBackNotice, buildReleaseWindDown } from "../../lib/deposit/builder.js";
 import { rowOf, nextBatchLabel, stopOf } from "../../lib/deposit/describe.js";
 import { claimableFills, liveRemaining } from "../../lib/deposit/stages.js";
-import { timelineFor } from "../../lib/deposit/schedule.js";
-import { fmtUsdc, fmtShares, shortAddr, shortHash } from "../../lib/deposit/format.js";
+import { timelineFor, fmtDuration } from "../../lib/deposit/schedule.js";
+import { fmtUsdc, fmtShares, fmtRm, shortAddr, shortHash } from "../../lib/deposit/format.js";
 
 const EPS = 1e-9;
 
@@ -82,11 +82,13 @@ export function registerDepositRequestsView(Alpine) {
       if (!a) return [];
       const out = [
         { key: "value", label: "Value", value: fmtUsdc(Math.floor(a.shares * this.price() * 100) / 100) },
-        { key: "shares", label: "Shares", value: fmtShares(a.shares) },
+        { key: "shares", label: "Shares", value: fmtRm(a.shares), tip: "rmFUND is the vault's share token. Each one is worth the share price." },
       ];
-      if (this.onHoldShares() > EPS) out.push({ key: "hold", label: "On hold", value: `${fmtShares(this.onHoldShares())} shares` });
-      if (this.queuedUsdc() > EPS) out.push({ key: "qd", label: "In the queue", value: fmtUsdc(this.queuedUsdc()) });
-      if (this.queuedShares() > EPS) out.push({ key: "qr", label: "Queued to redeem", value: `${fmtShares(this.queuedShares())} shares` });
+      // The (i) explains each holding that is not in the wallet yet (David, 17 Nov).
+      const hold = fmtDuration(this.flow().minHold);
+      if (this.onHoldShares() > EPS) out.push({ key: "hold", label: "On hold", value: fmtRm(this.onHoldShares()), tip: `Filled, and held for ${hold} after its batch. Then it is yours to claim.` });
+      if (this.queuedUsdc() > EPS) out.push({ key: "qd", label: "In the queue", value: fmtUsdc(this.queuedUsdc()), tip: "USDC waiting for a batch to fill it. You can cancel it until it locks." });
+      if (this.queuedShares() > EPS) out.push({ key: "qr", label: "Queued to redeem", value: fmtRm(this.queuedShares()), tip: "rmFUND waiting for a batch to sell it. You can cancel it until it locks." });
       return out;
     },
 
@@ -108,8 +110,9 @@ export function registerDepositRequestsView(Alpine) {
       const raw = fills.length && fills.every((x) => typeof x.leftRaw === "bigint") ? fills.reduce((t, x) => t + x.leftRaw, 0n) : null;
       return { usdc, shares, raw, any: usdc > EPS };
     },
-    credit() { const a = this.acct; return { usdc: a?.creditUsdc ?? 0, shares: a?.creditShares ?? 0, any: (a?.creditUsdc ?? 0) > EPS || (a?.creditShares ?? 0) > EPS }; },
-    words(usdc, shares) { return [usdc > EPS ? fmtUsdc(usdc) : "", shares > EPS ? `${fmtShares(shares)} shares` : ""].filter(Boolean).join(" and "); },
+    // Under a hundredth of a USDC or an rmFUND is rounding a batch left behind: not worth a banner, or the gas to withdraw it.
+    credit() { const a = this.acct; return { usdc: a?.creditUsdc ?? 0, shares: a?.creditShares ?? 0, any: (a?.creditUsdc ?? 0) >= 0.01 || (a?.creditShares ?? 0) >= 0.01 }; },
+    words(usdc, shares) { return [usdc > EPS ? fmtUsdc(usdc) : "", shares > EPS ? fmtRm(shares) : ""].filter(Boolean).join(" and "); },
     creditWords() { const c = this.credit(); return this.words(c.usdc, c.shares); },
     /** In a wind-down: what the owner's queued requests released. */
     released() {
@@ -158,7 +161,7 @@ export function registerDepositRequestsView(Alpine) {
     giveNotice(id) { this.act(`notice-${id}`, buildGiveNotice(id), "Ask for the unfilled shares back"); },
     takeBack(id) { this.act(`back-${id}`, buildTakeBackNotice(id), "Take back the unfilled shares"); },
 
-    fmtUsdc, fmtShares, shortHash,
+    fmtUsdc, fmtShares, fmtRm, shortHash,
 
     // Simulation controls, as on the deposit page.
     simNext() { session.source.toNextBatch(); },

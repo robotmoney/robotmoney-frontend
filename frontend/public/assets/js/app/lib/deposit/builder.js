@@ -44,7 +44,15 @@ export const priceToScaled = (p) => toUnits(p, PRICE_DECIMALS);
 /** PRICE_SCALE units to USDC a share. @param {bigint} v */
 export const scaledToPrice = (v) => fromUnits(v, PRICE_DECIMALS);
 
-/** @typedef {{ label: string, to: `0x${string}` | null, abi: any[], functionName: string, args: any[] }} Call */
+/** @typedef {{ label: string, to: `0x${string}` | null, abi: any[], functionName: string, args: any[], gas?: bigint }} Call */
+
+/**
+ * A redemption request needs more gas than a wallet's estimate gives it: the
+ * Deploy 4 rehearsal (0.9.0, signed off 21 Nov 2026) sends it with 1,500,000.
+ * A call that carries `gas` is sent with it and never batched, because a
+ * batch leaves the limit to the wallet.
+ */
+export const REDEEM_GAS = 1_500_000n;
 
 const fmt = (n, max = 2) => n.toLocaleString("en-US", { maximumFractionDigits: max });
 
@@ -75,9 +83,9 @@ export function buildRedeem({ shares, owner, allowance = 0n }, m = MANIFEST) {
   const amount = toUnits(shares, SHARE_DECIMALS);
   const calls = [];
   if (allowance < amount) {
-    calls.push({ label: `Approve exactly ${fmt(shares, 4)} shares`, to: m.fund, abi: FUND_ABI, functionName: "approve", args: [m.queue, amount] });
+    calls.push({ label: `Approve exactly ${fmt(shares, 4)} rmFUND`, to: m.fund, abi: FUND_ABI, functionName: "approve", args: [m.queue, amount] });
   }
-  calls.push({ label: "Request the redemption", to: m.queue, abi: QUEUE_ABI, functionName: "requestRedeem", args: [amount, owner] });
+  calls.push({ label: "Request the redemption", to: m.queue, abi: QUEUE_ABI, functionName: "requestRedeem", args: [amount, owner], gas: REDEEM_GAS });
   return calls;
 }
 
@@ -137,5 +145,5 @@ export const buildReleaseWindDown = (owner, m = MANIFEST) => [
  * @param {number} shares @param {`0x${string}`} owner @returns {Call[]}
  */
 export const buildExitInKind = (shares, owner, m = MANIFEST) => [
-  { label: `Exit ${fmt(shares, 4)} shares in kind`, to: m.fund, abi: FUND_ABI, functionName: "redeemInKind", args: [toUnits(shares, SHARE_DECIMALS), owner, owner] },
+  { label: `Exit ${fmt(shares, 4)} rmFUND in kind`, to: m.fund, abi: FUND_ABI, functionName: "redeemInKind", args: [toUnits(shares, SHARE_DECIMALS), owner, owner] },
 ];

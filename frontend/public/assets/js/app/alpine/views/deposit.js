@@ -19,9 +19,10 @@ import { session, MIN_ETH } from "../../lib/deposit/session.js";
 import { MANIFEST } from "../../lib/deposit/manifest.js";
 import { buildDeposit, buildRedeem, buildExitInKind } from "../../lib/deposit/builder.js";
 import { depositWait, redeemWait, fmtDuration, fmtCountdown, timelineFor, expiresAtOf, epochOf } from "../../lib/deposit/schedule.js";
-import { fmtUsdc, fmtShares, fmtPrice, fmtBps, fmtFee, floorTo, fmtWhen, fmtWhenShort, shortAddr, shortHash } from "../../lib/deposit/format.js";
+import { fmtUsdc, fmtShares, fmtRm, fmtPrice, fmtBps, fmtFee, floorTo, fmtWhen, fmtWhenShort, shortAddr, shortHash } from "../../lib/deposit/format.js";
 import { isOpen, tryCode, bodyOf } from "../../lib/deposit/access.js";
 import { stopOf } from "../../lib/deposit/describe.js";
+import { tokenIcon } from "../../lib/deposit/tokens.js";
 import { CATEGORICAL } from "../../lib/chart-theme.js";
 
 const num = (v) => { const n = Number(String(v ?? "").replace(/,/g, "")); return Number.isFinite(n) ? n : NaN; };
@@ -131,6 +132,7 @@ export function registerDepositView(Alpine) {
     tvl() { return fmtUsdc(this.vault?.tvlUsdc); },
     room() { return this.vault ? Math.max(0, this.vault.tvlCapUsdc - this.vault.tvlUsdc) : null; },
     roomLabel() { return fmtUsdc(this.room()); },
+    capTip() { return this.vault ? `What the vault can still take before it reaches its ${fmtUsdc(this.vault.tvlCapUsdc)} cap.` : "What the vault can still take before it reaches its cap."; },
     holdings() {
       const hs = this.vault?.holdings || [];
       return hs.map((h, i) => ({ ...h, hue: CATEGORICAL[i % CATEGORICAL.length], value: fmtUsdc(h.valueUsdc).replace(" USDC", ""), target: h.targetBps == null ? "—" : fmtBps(h.targetBps), actual: fmtBps(h.actualBps), venueLabel: /^0x/.test(h.venue) ? shortAddr(h.venue) : h.venue }));
@@ -159,6 +161,16 @@ export function registerDepositView(Alpine) {
     },
     fees() { return this.vault ? `Entry ${fmtFee(this.vault.entryFeeBps)} · Exit ${fmtFee(this.vault.exitFeeBps)}` : "—"; },
     contractsLabel() { return MANIFEST.fund ? `Vault ${shortAddr(MANIFEST.fund)} · Queue ${shortAddr(MANIFEST.queue)}` : "Not on Base yet"; },
+    // The (i) beside a row or a step (.rm-tip, components.css): what the label
+    // means, so the panel does not spend a sentence under it (David, 17 Nov).
+    receiveTip() { return "At today's price. The batch sets the price your deposit buys at."; },
+    redeemReceiveTip() { return "At today's price, after the exit fee. The batch sets the price your rmFUND sells at."; },
+    cancelTip(kind = "deposit") { return `Until then, cancelling returns your ${kind === "deposit" ? "USDC" : "rmFUND"}. After it, the request is locked for its batch.`; },
+    batchTip() { return `A batch runs every ${this.epochLabel()}. It sets the price and fills the requests locked before it.`; },
+    arriveTip() { return `New rmFUND is held for ${this.holdLabel()} after its batch, then arrives in your wallet.`; },
+    usdcReadyTip() { return "Once its batch fills your request, the USDC is yours to claim."; },
+    priceTip() { return "The price comes from the vault's holdings at market prices, after requests lock. Only the difference between deposits and redemptions trades in the market."; },
+    landTip() { return `A large deposit can fill over several batches. Anything unfilled after ${this.expiryLabel()} is yours to take back.`; },
     /** What stops the vault right now, in words (describe.js); null when nothing does. */
     stop() { return stopOf(this.vault); },
 
@@ -195,7 +207,7 @@ export function registerDepositView(Alpine) {
       const options = [
         { v: a.usdc, why: "Max is your whole balance." },
         { v: v.maxRequestUsdc, why: `Max is the largest request, ${fmtUsdc(v.maxRequestUsdc)}.` },
-        { v: this.room() ?? Infinity, why: `Max is the room left in the vault, ${fmtUsdc(this.room())}.` },
+        { v: this.room() ?? Infinity, why: `Max is the vault's remaining capacity, ${fmtUsdc(this.room())}.` },
       ];
       const m = options.reduce((best, o) => (o.v < best.v ? o : best));
       this.amount = String(floorTo(m.v, 2));
@@ -207,7 +219,7 @@ export function registerDepositView(Alpine) {
       if (!(n > 0)) return "Enter an amount in USDC.";
       if (n < this.flow().minRequestUsdc) return `The smallest request is ${fmtUsdc(this.flow().minRequestUsdc)}.`;
       if (n > v.maxRequestUsdc) return `The largest request is ${fmtUsdc(v.maxRequestUsdc)}.`;
-      if (n > (this.room() ?? Infinity)) return `The vault has room for ${fmtUsdc(this.room())} more.`;
+      if (n > (this.room() ?? Infinity)) return `The vault can take ${fmtUsdc(this.room())} more.`;
       if (a && n > a.usdc + 1e-9) return `This wallet holds ${fmtUsdc(a.usdc)}.`;
       return "";
     },
@@ -219,7 +231,7 @@ export function registerDepositView(Alpine) {
       this.dqLoading = false;
     },
     /** About how many shares, at today's price. Not binding: the batch sets the price (D17). */
-    estShares(n = this.amountN()) { const p = this.vault?.priceUsdc; return n > 0 && p ? `${fmtShares(floorTo(n / p, 4))} shares` : "—"; },
+    estShares(n = this.amountN()) { const p = this.vault?.priceUsdc; return n > 0 && p ? fmtRm(floorTo(n / p, 4)) : "—"; },
     timeline() { return timelineFor(this.now, this.flow()); },
     lockAt() { return this.dq?.lockAt ?? this.timeline().lockAt; },
     nextBatch() { return fmtWhen(this.dq?.settlesAt ?? this.timeline().settlesAt); },
@@ -234,7 +246,7 @@ export function registerDepositView(Alpine) {
       const n = this.sharesN();
       if (!this.shares) return "";
       if (!(n > 0)) return "Enter a number of shares.";
-      if (n > this.heldShares() + 1e-9) return `You hold ${fmtShares(this.heldShares())} shares.`;
+      if (n > this.heldShares() + 1e-9) return `You hold ${fmtRm(this.heldShares())}.`;
       if (this.exitMode === "queue" && this.vault && n * this.vault.priceUsdc < this.flow().minRequestUsdc && Math.abs(n - this.heldShares()) > 1e-4) return `The smallest redemption is ${fmtUsdc(this.flow().minRequestUsdc)}, unless you redeem everything.`;
       return "";
     },
@@ -278,7 +290,7 @@ export function registerDepositView(Alpine) {
         amount = this.sharesN();
         calls = buildExitInKind(amount, from);
       }
-      const batch = calls.length > 1 && !session.simulated && (await session.wallet.canBatch());
+      const batch = calls.length > 1 && !calls.some((c) => c.gas) && !session.simulated && (await session.wallet.canBatch());
       this.dlg = { open: true, kind, phase: "review", checks: [], calls, steps: calls.map((c) => ({ label: c.label, state: "idle", hash: "" })), batch, error: "", ack: false, result: null, quote, amount };
       session.accountSwitched = false;
       this.$nextTick(() => this.$refs.dlgTitle?.focus());
@@ -293,7 +305,7 @@ export function registerDepositView(Alpine) {
         const enough = (a.usdc ?? 0) + 1e-9 >= d.amount;
         checks.push({ key: "usdc", ok: enough, text: `${fmtUsdc(d.amount)} in your wallet`, aside: fmtUsdc(a.usdc), note: !enough && a.usdbc > 0 ? "This wallet holds USDbC, the older bridged USDC. The vault takes native USDC." : "" });
       } else {
-        checks.push({ key: "shares", ok: (a.shares ?? 0) + 1e-9 >= d.amount, text: `${fmtShares(d.amount)} shares in your wallet`, aside: fmtShares(a.shares) });
+        checks.push({ key: "shares", ok: (a.shares ?? 0) + 1e-9 >= d.amount, text: `${fmtRm(d.amount)} in your wallet`, aside: fmtShares(a.shares) });
       }
       checks.push({ key: "eth", ok: eth >= MIN_ETH, text: "ETH for the network fee", aside: eth >= MIN_ETH ? "" : "None", note: eth >= MIN_ETH ? "" : `Base charges its network fee in ETH, and this wallet has none. Send a little ETH on Base to ${shortAddr(session.acct.address)}; this checks again on its own.` });
       if (d.calls.length === 1 && !session.simulated) {
@@ -308,11 +320,6 @@ export function registerDepositView(Alpine) {
     needsAck() { return this.dlg.kind === "deposit" && !session.acked(); },
     accountSwitched() { this.rev; return session.accountSwitched; },
     canConfirm() { return this.checksOk() && (!this.needsAck() || this.dlg.ack) && !this.accountSwitched(); },
-    signatureLine() {
-      const d = this.dlg;
-      if (d.calls.length === 1) return "One confirmation in your wallet";
-      return d.batch ? "One confirmation in your wallet" : `${d.calls.length} confirmations in your wallet`;
-    },
     async confirm() {
       if (!this.canConfirm()) return;
       // The dialog can be closed while Base confirms ("Close and keep waiting"),
@@ -327,8 +334,9 @@ export function registerDepositView(Alpine) {
           onStep: (i, state, h) => { d.steps[i].state = state; if (h) d.steps[i].hash = h; },
         });
         const src = await session.src();
-        const latest = d.kind === "inkind" ? null : (await src.requestsOf(session.acct.address))[0];
-        d.result = { hash, id: latest?.id || null };
+        // The new request's id: from the transaction's own log on chain, from the list in the simulator.
+        const id = d.kind === "inkind" ? null : session.simulated ? (await src.requestsOf(session.acct.address))[0]?.id : await session.requestIdOf(hash);
+        d.result = { hash, id: id || null };
         d.phase = "requested";
         if (d.kind === "deposit") { this.amount = ""; this.dq = null; } else { this.shares = ""; this.rq = null; }
         this.refreshAccount(); this.loadVault();
@@ -350,29 +358,24 @@ export function registerDepositView(Alpine) {
     },
     closeDialog() { if (this.dlg.phase === "signing" && !this.dlg.error) return; this.dlg.open = false; },
     stepWords(st) { return { idle: "", wallet: "Waiting for your wallet", sent: "Sent, waiting for Base", done: "Confirmed" }[st.state] || ""; },
-    /** "Step 2 of 2" while the calls go one after another (board 4). */
-    stepOf() {
-      const s = this.dlg.steps;
-      const i = s.findIndex((st) => st.state !== "done");
-      return `Step ${i < 0 ? s.length : i + 1} of ${s.length}`;
-    },
     signingLede() {
       const d = this.dlg;
-      const what = d.kind === "deposit" ? `${fmtUsdc(d.amount)} to the Robot Money queue` : d.kind === "redeem" ? `${fmtShares(d.amount)} shares to the Robot Money queue` : `${fmtShares(d.amount)} shares out of the vault`;
+      const what = d.kind === "deposit" ? `${fmtUsdc(d.amount)} to the Robot Money queue` : d.kind === "redeem" ? `${fmtRm(d.amount)} to the Robot Money queue` : `${fmtRm(d.amount)} out of the vault`;
       return `Your wallet shows the request. Check that it is for ${what}, then confirm.`;
     },
-    /** What closing now leaves behind (board 4's footnote, board 16). */
+    /** What closing now leaves behind, as one line and its (i) (board 4's footnote, board 16). */
     closeNote() {
       const st = this.dlg.steps;
-      if (st.some((s) => s.state === "sent")) return "It is already sent. Close this and it still lands; Your requests shows it when it does.";
+      if (st.some((s) => s.state === "sent")) return { text: "Already sent. Closing this does not stop it.", tip: "Your requests shows it once Base confirms it." };
       const approved = st.some((s, i) => s.state === "done" && this.dlg.calls[i]?.functionName === "approve");
-      return approved ? "Close now and nothing more is requested. The approval stays until you use it or revoke it in your wallet." : "Close now and nothing is requested.";
+      return approved ? { text: "Close now and nothing more is requested.", tip: "The approval stays until you use it or revoke it in your wallet." } : { text: "Close now and nothing is requested.", tip: "" };
     },
-    callNote(c) {
-      if (c.functionName === "approve") return "Only the Robot Money queue can spend it.";
+    /** The (i) on a wallet step in What happens next (board 3). */
+    callTip(c) {
+      const both = this.dlg.batch ? " Your wallet shows both steps as one confirmation: they go through together, or not at all." : "";
+      if (c.functionName === "approve") return `Only the Robot Money queue can spend it.${both}`;
       if (c.functionName === "redeemInKind") return "Settled at once, straight from the vault.";
-      const lock = this.dlg.quote?.lockAt;
-      return lock ? `You can cancel it until ${fmtWhenShort(lock)}. Then it locks for the batch.` : "You can cancel it until it locks for the batch.";
+      return both.trim();
     },
     /** When an unfilled remainder of a request made now can be taken back (deposit) or given notice (redemption). */
     expiresAt() { return expiresAtOf(epochOf(this.now, this.flow()), this.flow()); },
@@ -394,16 +397,16 @@ export function registerDepositView(Alpine) {
         { key: "r", label: "Requested", when: nowWhen, done: true },
         { key: "b", label: "Next batch", when: fmtWhenShort(q.settlesAt), done: false },
         { key: "h", label: "Held", when: this.holdLabel(), done: false },
-        { key: "a", label: "Shares arrive", when: fmtWhenShort(q.readyAt), done: false },
+        { key: "a", label: "Shares arrive", when: fmtWhenShort(q.readyAt), done: false, money: true },
       ];
       return [
         { key: "r", label: "Requested", when: nowWhen, done: true },
         { key: "b", label: "Next batch", when: fmtWhenShort(q.settlesAt), done: false },
-        { key: "a", label: "USDC ready", when: fmtWhenShort(q.readyAt), done: false },
+        { key: "a", label: "USDC ready", when: fmtWhenShort(q.readyAt), done: false, money: true },
       ];
     },
 
-    fmtUsdc, fmtShares, fmtPrice, fmtWhen, fmtWhenShort, fmtFee, shortHash, floorTo,
+    fmtUsdc, fmtShares, fmtRm, fmtPrice, fmtWhen, fmtWhenShort, fmtFee, shortHash, floorTo, tokenIcon,
     hashUrl(h) { return h && /^0x[0-9a-f]{64}$/i.test(h) && !session.simulated ? `${MANIFEST.explorer}/tx/${h}` : null; },
 
     // ── Simulation controls ──────────────────────────────────────────────

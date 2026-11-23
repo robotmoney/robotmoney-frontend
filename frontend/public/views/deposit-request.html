@@ -25,8 +25,16 @@
         <div class="dp__stack">
           <p class="dp__eyebrow"><span class="dp__lbl">Public status</span><template x-if="sample()"><span class="dp__tag">Sample data</span></template></p>
           <h1 class="dp__title dp__title--page" x-text="title()"></h1>
-          <p class="dp__lede" x-text="summary()"></p>
-          <div class="dp__progress" aria-hidden="true"><i :style="`width:${pct()}%`"></i></div>
+          <!-- How much has filled, as a bar: one green block per batch fill, the
+               rest an empty outline (David, 17 Nov: "more obvious visually
+               without so much copy"). The sentence shows only when no bar does. -->
+          <template x-if="bar().length">
+            <div class="dp__fill">
+              <div class="dp__fillbar" role="img" :aria-label="`${filledLabel()} filled`"><template x-for="b in bar()" :key="b.key"><i :class="b.cls" :style="`flex-grow:${b.w}`"></i></template></div>
+              <div class="dp__filllbl"><span><b class="dp__mono" x-text="filledLabel()"></b> filled</span><span class="dp__muted" x-text="restLabel()"></span></div>
+            </div>
+          </template>
+          <template x-if="!bar().length || !barSays()"><p class="dp__lede" x-text="summary()"></p></template>
         </div>
 
         <div class="dp__facts dp__facts--grid">
@@ -41,7 +49,7 @@
         <section aria-labelledby="tl-h">
           <h2 class="dp__h2" id="tl-h">Timeline</h2>
           <ol class="dp__events">
-            <template x-for="e in events()" :key="e.key"><li :class="e.next ? 'is-next' : ''"><span class="dp__mono" x-text="e.when"></span><span><span x-text="e.what"></span><template x-if="e.sub"><span class="dp__sub" x-text="e.sub"></span></template></span></li></template>
+            <template x-for="e in events()" :key="e.key"><li :class="[`is-${e.mark}`, e.next ? 'is-next' : '']"><span class="dp__mono" x-text="e.when"></span><span><span x-text="e.what"></span><template x-if="e.tip"><span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="About this batch">i</button><span class="rm-tip__bub" role="tooltip" x-text="e.tip"></span></span></template></span></li></template>
           </ol>
         </section>
 
@@ -50,7 +58,7 @@
           <div class="dp__txs">
             <template x-if="!txs().length"><p class="dp__fine dp__txempty">Listed here once the vault's indexer is live. Until then, the owner's wallet history on Basescan has them.</p></template>
             <template x-for="t in txs()" :key="t.key">
-              <div class="dp__tx"><span class="dp__mono dp__muted" x-text="t.short"></span><template x-if="t.url"><a class="dp__txt" :href="t.url" target="_blank" rel="noopener noreferrer">Basescan</a></template></div>
+              <div class="dp__tx"><span class="dp__mono dp__muted" x-text="t.short"></span><template x-if="t.url"><a class="dp__ext" :href="t.url" target="_blank" rel="noopener noreferrer">Basescan</a></template></div>
             </template>
           </div>
         </section>

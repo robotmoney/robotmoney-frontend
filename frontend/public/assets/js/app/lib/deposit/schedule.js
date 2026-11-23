@@ -21,16 +21,29 @@ import { DEFAULT_FLOW } from "./manifest.js";
 
 const S = 1000;
 
-/** @typedef {{ epochLength: number, settleWindow: number, minHold: number, maxRoll: number, cancelBuffer?: number }} Flow */
+/**
+ * Epochs are numbered from an anchor (FlowEpochs, 0.9.0): epoch `anchorIndex - 1`
+ * ends at `anchorTime` (seconds) and each later epoch `epochLength` after it.
+ * chain.js reads the anchor from the queue; the simulator leaves it at 0, which
+ * numbers epochs from 1970. Epochs from before an `epochLength` change ended at
+ * stored times, so a request's own times come from the chain (requestLockAt,
+ * requestExpiresAt), not from this arithmetic.
+ * @typedef {{ epochLength: number, settleWindow: number, minHold: number, maxRoll: number, cancelBuffer?: number, anchorIndex?: number, anchorTime?: number }} Flow
+ */
+
+/** When epoch `e` ends. @param {number} e @param {Flow} [f] */
+export function epochEndAt(e, f = DEFAULT_FLOW) {
+  return ((f.anchorTime ?? 0) + (e + 1 - (f.anchorIndex ?? 0)) * f.epochLength) * S;
+}
 
 /** The epoch a request made at `now` belongs to. @param {number} now @param {Flow} [f] */
 export function epochOf(now, f = DEFAULT_FLOW) {
-  return Math.floor(now / (f.epochLength * S));
+  return (f.anchorIndex ?? 0) + Math.floor((now / S - (f.anchorTime ?? 0)) / f.epochLength);
 }
 
 /** The earliest time epoch `e` can settle. @param {number} e @param {Flow} [f] */
 export function settleableAt(e, f = DEFAULT_FLOW) {
-  return (e + 1) * f.epochLength * S + f.settleWindow * S;
+  return epochEndAt(e, f) + f.settleWindow * S;
 }
 
 /**
@@ -40,7 +53,7 @@ export function settleableAt(e, f = DEFAULT_FLOW) {
  * @param {number} e @param {Flow} [f]
  */
 export function lockAtOf(e, f = DEFAULT_FLOW) {
-  return (e + 1) * f.epochLength * S - (f.cancelBuffer ?? DEFAULT_FLOW.cancelBuffer) * S;
+  return epochEndAt(e, f) - (f.cancelBuffer ?? DEFAULT_FLOW.cancelBuffer) * S;
 }
 
 /**
@@ -52,7 +65,17 @@ export function lockAtOf(e, f = DEFAULT_FLOW) {
  * @param {number} e @param {Flow} [f]
  */
 export function expiresAtOf(e, f = DEFAULT_FLOW) {
-  return (e + f.maxRoll + 1) * f.epochLength * S;
+  return epochEndAt(e + f.maxRoll, f);
+}
+
+/** When a request locks: its own epoch's end as the chain stored it (`endAt`), else computed. @param {any} r @param {Flow} [f] */
+export function requestLockAt(r, f = DEFAULT_FLOW) {
+  return r.endAt != null ? r.endAt - (f.cancelBuffer ?? DEFAULT_FLOW.cancelBuffer) * S : lockAtOf(r.epoch, f);
+}
+
+/** When a deposit expires, or a redemption can be given notice: the end of its `expiryEpoch` as read from the chain, else computed. @param {any} r @param {Flow} [f] */
+export function requestExpiresAt(r, f = DEFAULT_FLOW) {
+  return r.expiresAt != null ? r.expiresAt : expiresAtOf(r.epoch, f);
 }
 
 /**

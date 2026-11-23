@@ -16,13 +16,16 @@
 // indexer derives it. Untested against a deployment: 0.9.0 is not on chain
 // yet (16 Nov 2026).
 
-import { MANIFEST, DEFAULT_FLOW } from "./manifest.js";
+import { MANIFEST, DEFAULT_FLOW, VENUES as MANIFEST_VENUES } from "./manifest.js";
 import { QUEUE_ABI, FUND_ABI, ERC20_ABI, SETTLE_CHECK, REQUEST_STATUS } from "./abi.js";
 import { fromUnits, toUnits, SHARE_DECIMALS } from "./builder.js";
-import { settleableAt } from "./schedule.js";
 
 const S = 1000;
 const lower = (a) => (a || "").toLowerCase();
+/** Under a hundredth of a USDC or an rmFUND short of the request is rounding, not a cancel (describe.js DUST). */
+const DUST = 0.01;
+/** A lending sleeve by the venue its adapter lends to (manifest.js VENUES), else the adapter's address. */
+const venueName = (adapter) => MANIFEST_VENUES[lower(adapter)] || adapter;
 
 /** Plain words for why no batch can run (SettleCheck), or "" when one can. */
 export const SETTLE_REASON = {
@@ -46,13 +49,17 @@ export function createChainSource(w, m = MANIFEST) {
   let windDown = false;
 
   async function vault() {
-    const [nav, supply, cfg, depPaused, depPausedUntil, configs, held, weights, targets, params, live, check] = await w.readMany([
+    const [nav, supply, cfg, depPaused, depPausedUntil, configs, held, weights, targets, params, live, check, cur] = await w.readMany([
       f("lastGoodNav"), f("totalSupply"), f("config"), f("depositsPaused"), f("depositsPausedUntil"), f("assetConfigs"),
-      f("heldBalances"), f("currentWeightsBps"), f("targetBps"), q("flowParams"), q("liveness"), q("checkSettle"),
+      f("heldBalances"), f("currentWeightsBps"), f("targetBps"), q("flowParams"), q("liveness"), q("checkSettle"), q("currentEpoch"),
     ]);
+    // Epochs count from the queue's anchor, not from 1970 (schedule.js): the
+    // current epoch ends at settleableAt(cur) - settleWindow, and later ones follow it.
+    const curEnd = Number(await w.read(q("settleableAt", [cur]))) - Number(params.settleWindow);
     flow = {
       epochLength: Number(params.epochLength), settleWindow: Number(params.settleWindow), minHold: Number(params.minHold),
       maxRoll: Number(params.maxRoll), cancelBuffer: Number(params.cancelBuffer), minRequestUsdc: fromUnits(params.minRequestUsdc, m.usdcDecimals),
+      anchorIndex: Number(cur) + 1, anchorTime: curEnd,
     };
     windDown = live.windDownActive;
     const navUsdc = fromUnits(nav[0], m.usdcDecimals);
@@ -64,7 +71,7 @@ export function createChainSource(w, m = MANIFEST) {
       key: `a${i}`,
       kind: Number(c.kind) === 0 ? "lending" : "token",
       label: Number(c.kind) === 0 ? "USDC lending" : symbols[si++] || "Token",
-      venue: Number(c.kind) === 0 ? c.adapter : "In the vault",
+      venue: Number(c.kind) === 0 ? venueName(c.adapter) : "In the vault",
       active: c.active,
       valueUsdc: fromUnits(values[i] ?? 0n, m.usdcDecimals),
       actualBps: Number(weights[0][i] ?? 0n),
@@ -141,6 +148,11 @@ export function createChainSource(w, m = MANIFEST) {
       const mineIdx = reqs.map((r, i) => (mine(r) ? i : -1)).filter((i) => i >= 0);
       const pending = await w.readMany(mineIdx.map((i) => q(Number(reqs[i].kind) === 0 ? "pendingDepositRequest" : "pendingRedeemRequest", [ids[i], owner])));
       const pendingOf = new Map(mineIdx.map((i, j) => [i, pending[j]]));
+      // Each request's own epoch ends, read from the queue: epochs from before the
+      // 20 Nov upgrade had another length, so they cannot be computed.
+      const epochs = [...new Set(mineIdx.flatMap((i) => [reqs[i].epoch, reqs[i].expiryEpoch, reqs[i].noticeRound].filter((e) => Number(e) > 0).map(String)))];
+      const settles = await w.readMany(epochs.map((e) => q("settleableAt", [BigInt(e)])));
+      const endOf = new Map(epochs.map((e, j) => [e, (Number(settles[j]) - flow.settleWindow) * S]));
       const byRequest = new Map();
       claims.forEach((c, i) => {
         if (!mine(c)) return;
@@ -173,14 +185,16 @@ export function createChainSource(w, m = MANIFEST) {
         const filled = fills.reduce((s, x) => s + x.amountIn, 0);
         const status = REQUEST_STATUS[Number(statuses[i])];
         const noticeRound = Number(r.noticeRound);
-        const noticeAt = noticeRound ? settleableAt(noticeRound, flow) : null;
+        const noticeEnd = noticeRound ? endOf.get(String(noticeRound)) : null;
+        const noticeAt = noticeEnd != null ? noticeEnd + flow.settleWindow * S : null;
         // The notice batch has ended once the next epoch has closed (FlowMatchLib.claimNoticeReturn reverts before).
-        const noticeDone = !!noticeRound && !r.closed && nowMs >= (noticeRound + 2) * flow.epochLength * S;
+        const noticeDone = noticeEnd != null && !r.closed && nowMs >= noticeEnd + flow.epochLength * S;
         return {
           id: String(ids[i]), kind: dep ? "deposit" : "redeem", owner: r.owner, amount, remaining,
           epoch: Number(r.epoch), createdAt: Number(r.createdAt) * S, exitFeeBps: Number(r.exitFeeBps),
+          endAt: endOf.get(String(r.epoch)) ?? null, expiresAt: endOf.get(String(r.expiryEpoch)) ?? null,
           closed: r.closed, expired: status === "Expired",
-          cancelled: r.closed && !noticeRound && status !== "Expired" && filled + 1e-9 < amount && remaining <= 1e-9,
+          cancelled: r.closed && !noticeRound && status !== "Expired" && filled + DUST < amount && remaining <= 1e-9,
           noticeAt, noticeRound: noticeRound || null, noticeDone, released: windDown && !r.closed,
           fills, txs: [],
         };
