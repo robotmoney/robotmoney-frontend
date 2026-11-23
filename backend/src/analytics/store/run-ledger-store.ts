@@ -166,6 +166,14 @@ const selectHistoricalSourceValues = registerQuery({
   },
 });
 
+const historicalCustomPlan = registerStatement({
+  role: "rm_app",
+  shape: "customPlanSession",
+  site: "src/analytics/store/run-ledger-store:loadHistoricalSourceValues.customPlan",
+  purpose: "Plan the freeze's ledger head read for its own cutoffs, not the prepared statement's generic plan (issue 1690).",
+  callers: [ANALYTICS_ROUTE],
+});
+
 const selectCommittedInputs = registerQuery({
   role: "rm_app",
   object: "source_value_versions",
@@ -446,14 +454,19 @@ export async function loadCurrentSourceValues(db: DbHandle = sql): Promise<Froze
 // are the same. Inside the subquery it let the generic plan (postgres.js prepares the statement;
 // after five runs Postgres keeps one plan for every cutoff) estimate a third of the table, pick a
 // bitmap scan of both indexes and sort 560k rows on disk: 3.9 s on the production copy, against
-// 0.9 s this way. The fence keeps Postgres from pushing the cutoff back in.
+// 0.9 s this way. The fence keeps Postgres from pushing the cutoff back in. Even so, the generic
+// plan guesses a third of the table for `knowledge_time <= $1`, and on some tables that makes a
+// sequential scan and a sort look cheaper. So the read runs under force_custom_plan: planned for
+// the real cutoff, which keeps nearly every row, the ordered index-only scan always wins.
 export async function loadHistoricalSourceValues(
   knowledgeTimeCutoff: string,
   marketTimeCutoff: string,
   db: DbHandle = sql,
   excludeSourceKeys: readonly string[] = [],
 ): Promise<FrozenSourceValue[]> {
-  const rows = (await on(db, selectHistoricalSourceValues)`
+  const read = async (tx: DbHandle) => {
+    await onStatement(tx, historicalCustomPlan)`SELECT set_config('plan_cache_mode', 'force_custom_plan', true)`;
+    return on(tx, selectHistoricalSourceValues)`
     SELECT source_key, string_agg(
       id::text || E'\t' || coalesce(market_date::text, '') || E'\t' || coalesce(market_instant::text, '') || E'\t' || value::text,
       E'\n' ORDER BY market_date, market_instant) AS points
@@ -469,7 +482,11 @@ export async function loadHistoricalSourceValues(
     WHERE (market_date IS NULL OR market_date <= ${marketTimeCutoff}::date)
       AND (market_instant IS NULL OR (market_instant AT TIME ZONE 'UTC')::date <= ${marketTimeCutoff}::date)
     GROUP BY source_key
-  `) as unknown as { source_key: string; points: string }[];
+  `;
+  };
+  // On a pool, its own transaction, so the plan setting ends with it; in the
+  // caller's transaction, the setting lasts to that transaction's end.
+  const rows = ("begin" in db ? await db.begin(read) : await read(db)) as unknown as { source_key: string; points: string }[];
   const out: FrozenSourceValue[] = [];
   for (const row of rows) {
     for (const line of row.points.split("\n")) {

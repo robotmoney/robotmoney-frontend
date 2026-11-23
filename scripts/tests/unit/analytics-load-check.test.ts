@@ -47,9 +47,18 @@ describe("parseApiLog", () => {
   test("reads the fix build's slow line with its split, and the old line with none", () => {
     const parsed = parseApiLog([FIVE_SECONDS, VINTAGES_OLD].join("\n"));
     expect(parsed.requests).toEqual([
-      { at: T("31:10"), method: "POST", path: "/api/analytics/source-acquisitions", ms: 5000, status: "200", limiterMs: 0, poolMs: 12, handlerMs: 4988 },
-      { at: T("33:40"), method: "POST", path: "/api/analytics/vintages", ms: 9500, status: "200", limiterMs: null, poolMs: null, handlerMs: null },
+      { at: T("31:10"), method: "POST", path: "/api/analytics/source-acquisitions", ms: 5000, status: "200", limiterMs: 0, poolMs: 12, handlerMs: 4988, phases: {} },
+      { at: T("33:40"), method: "POST", path: "/api/analytics/vintages", ms: 9500, status: "200", limiterMs: null, poolMs: null, handlerMs: null, phases: {} },
     ]);
+  });
+
+  test("reads the vintages freeze's phase split after handler_ms (issue 1690)", () => {
+    const line = `${T("00:05")} [api] slow request: POST /api/analytics/vintages took 7.6s status=200 limiter_wait_ms=0 pool_wait_ms=3 handler_ms=7597 heads_ms=6100 manifest_ms=402 members_ms=1095 ${ua}`;
+    const [r] = parseApiLog(line).requests;
+    expect(r).toEqual({
+      at: T("00:05"), method: "POST", path: "/api/analytics/vintages", ms: 7600, status: "200",
+      limiterMs: 0, poolMs: 3, handlerMs: 7597, phases: { heads: 6100, manifest: 402, members: 1095 },
+    });
   });
 
   test("reads a db_saturated refusal in both forms, with its gate, and ignores a 503 that is not one", () => {

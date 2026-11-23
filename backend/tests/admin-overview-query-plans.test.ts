@@ -27,6 +27,7 @@ import { MONITORED_KINDS, getOverviewProjection } from "../src/admin/overview.ts
 import { explainText, flatten, type ExplainResult } from "../../scripts/release/jobs-query-plans.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
 import { fixtureDb } from "./support/fixture-db.ts";
+import { vacuumAnalyzeAsOwner } from "./support/vacuum-as-owner.ts";
 
 useCleanDatabase(import.meta.file);
 
@@ -97,8 +98,7 @@ beforeAll(async () => {
     SELECT ${kindOf}, now() - make_interval(mins => g), now() - make_interval(mins => g) + interval '2 seconds', 'succeeded',
            jsonb_build_object('note', repeat('y', 200))
       FROM generate_series(1, ${ROWS}) g`);
-  await fixtureDb.unsafe("VACUUM ANALYZE jobs");
-  await fixtureDb.unsafe("VACUUM ANALYZE job_runs");
+  await vacuumAnalyzeAsOwner("jobs", "job_runs");
   const [counts] = await fixtureDb<{ jobs: number; runs: number; none: number }[]>`
     SELECT (SELECT count(*) FROM jobs)::int AS jobs, (SELECT count(*) FROM job_runs)::int AS runs,
            (SELECT count(*) FROM jobs WHERE kind IN ('regime.classify', 'research.refresh'))::int

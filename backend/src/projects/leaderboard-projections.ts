@@ -17,7 +17,7 @@
 //
 // `backend/src/api/routes/dashboards.ts` is the thin adapter exposing this as
 // GET /api/dashboards/leaderboard.
-import { sql } from "../db/client.ts";
+import { sql, type DbHandle } from "../db/client.ts";
 import { on, registerQuery } from "../db/registry.ts";
 
 // Registered queries (smoke-production-spec.md §7.1): reads, one per
@@ -197,30 +197,45 @@ function evidenceStatus(present: boolean, partial: boolean): EvidenceStatus {
   return "missing";
 }
 
-export async function fetchLeaderboard(): Promise<LeaderboardResponse> {
+/** The rows the leaderboard is computed from, one list per read. */
+export interface LeaderboardRows {
+  readonly agents: readonly Record<string, unknown>[];
+  readonly wallets: readonly Record<string, unknown>[];
+  readonly revenue30: readonly Record<string, unknown>[];
+  readonly revenue182: readonly Record<string, unknown>[];
+  readonly agentSnaps30: readonly Record<string, unknown>[];
+  readonly projectCoins: readonly Record<string, unknown>[];
+}
+
+/** `db`: the request pool in the api; a test passes its own gated pool. */
+export async function fetchLeaderboard(db: DbHandle = sql): Promise<LeaderboardResponse> {
   // One statement at a time (issue 1690): each takes one request-pool permit
   // and returns it before the next starts. Run together they took five of the
   // api's six request connections, and two leaderboard requests at once left
   // none free (503 db_saturated on production, 2026-11-18).
-  const agents = await on(sql, leaderboardAgents)`
+  const agents = await on(db, leaderboardAgents)`
     SELECT id, project_id, name, protocol_standard, wallet_address, enriched_at, is_active
     FROM openclaw_agents WHERE is_active = true
   `;
   const cutoff30 = since(30);
   const cutoff182 = since(182);
-  const wallets = await on(sql, leaderboardWallets)`SELECT address, balance_usd, refreshed_at FROM tracked_wallets WHERE is_active = true`;
-  const revenue30 = await on(sql, leaderboardRevenue, leaderboardRevenueAgents)`SELECT r.agent_id, r.revenue_usd, r.revenue_date::text AS revenue_date
+  const wallets = await on(db, leaderboardWallets)`SELECT address, balance_usd, refreshed_at FROM tracked_wallets WHERE is_active = true`;
+  const revenue30 = await on(db, leaderboardRevenue, leaderboardRevenueAgents)`SELECT r.agent_id, r.revenue_usd, r.revenue_date::text AS revenue_date
       FROM agent_revenue_daily r JOIN openclaw_agents a ON a.id = r.agent_id
      WHERE a.is_active = true AND r.revenue_date >= ${cutoff30}::date`;
-  const revenue182 = await on(sql, leaderboardRevenue, leaderboardRevenueAgents)`SELECT r.agent_id, r.revenue_usd, r.revenue_date::text AS revenue_date
+  const revenue182 = await on(db, leaderboardRevenue, leaderboardRevenueAgents)`SELECT r.agent_id, r.revenue_usd, r.revenue_date::text AS revenue_date
       FROM agent_revenue_daily r JOIN openclaw_agents a ON a.id = r.agent_id
      WHERE a.is_active = true AND r.revenue_date >= ${cutoff182}::date`;
-  const agentSnaps30 = await on(sql, leaderboardSnapshots, leaderboardSnapshotsAgents)`SELECT s.agent_id, s.snapshot_date::text AS snapshot_date, s.x402_volume_usd, s.x402_txn_count
+  const agentSnaps30 = await on(db, leaderboardSnapshots, leaderboardSnapshotsAgents)`SELECT s.agent_id, s.snapshot_date::text AS snapshot_date, s.x402_volume_usd, s.x402_txn_count
       FROM daily_agent_snapshots s JOIN openclaw_agents a ON a.id = s.agent_id
      WHERE a.is_active = true AND s.snapshot_date >= ${cutoff30}::date`;
-  const projectCoins = await on(sql, leaderboardCoins, leaderboardCoinsAgents)`SELECT c.id, c.project_id, c.ticker, c.market_cap FROM lobster_coins c
+  const projectCoins = await on(db, leaderboardCoins, leaderboardCoinsAgents)`SELECT c.id, c.project_id, c.ticker, c.market_cap FROM lobster_coins c
      WHERE c.is_active = true AND c.project_id IN (SELECT a.project_id FROM openclaw_agents a WHERE a.is_active = true)`;
+  return buildLeaderboard({ agents, wallets, revenue30, revenue182, agentSnaps30, projectCoins });
+}
 
+/** PURE but for the clock. The leaderboard response from its rows. */
+export function buildLeaderboard({ agents, wallets, revenue30, revenue182, agentSnaps30, projectCoins }: LeaderboardRows): LeaderboardResponse {
   const walletByAddress = new Map<string, { balance_usd: unknown; refreshed_at: unknown }>();
   for (const w of wallets) {
     const addr = (w.address as string | null)?.toLowerCase();
