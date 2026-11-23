@@ -175,9 +175,12 @@ records production's state through `rm_readonly`: the ledger and its reconciliat
 flight and the database size. It refuses any pending migration that is not `compat: additive`
 (§4.7). P08-log-baseline grades the running stack's logs; each finding there is triaged by the
 owner (`--triage <file>`). P09-coingecko-credit (from v0.9.2) runs `scripts/release/coingecko-credit.ts`
-with the key from production's `~/.env`: one `GET /key`, red when the remaining monthly CoinGecko
-credit is below `COINGECKO_CREDIT_FLOOR_PCT` (default 10) percent. It prints the used, remaining and
-monthly credit and never the key (issue 1664).
+with the key from production's `~/.env`: one `GET /key` and one paid `GET /ping`. Overage is
+authorized on the account (owner, 2026-11-21), so it goes red only when CoinGecko refuses the paid
+call (HTTP 429 or `error_code` 10006: the account is hitting its credit limit and overage is not
+covering it). Remaining credit below `COINGECKO_CREDIT_FLOOR_PCT` (default 10) percent, or past zero,
+prints an `ADVISORY` line and stays green. It prints the used, remaining and monthly credit and never
+the key (issue 1664).
 
 **An accepted stage step carries to production, reported (owner, 2026-11-19; issue 1684).** A
 stage step the owner accepted counts as done for SP.8. The v0.9.1 stage run's acceptance, as the
