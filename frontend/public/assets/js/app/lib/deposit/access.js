@@ -109,5 +109,7 @@ export async function tryCode(code) {
   const h = await hashCode(code);
   if (!valid(h)) return false;
   try { localStorage.setItem(KEY, h); } catch { /* this visit only */ }
+  // The site's calls to action switch to Deposit now (lib/access-cta.js).
+  try { dispatchEvent(new Event("rm:access")); } catch { /* no window */ }
   return true;
 }

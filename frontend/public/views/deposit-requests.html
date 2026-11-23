@@ -48,7 +48,7 @@
         <p class="dp__eyebrow"><a class="dp__lbl dp__lbl--link" href="/deposit">Deposit</a><template x-if="sample()"><span class="dp__tag">Sample data</span></template></p>
         <h1 class="dp__title dp__title--page">Your position</h1>
       </div>
-      <template x-if="connected() && onBase()"><a class="btn-primary dp__btn dp__btn--auto" href="/deposit">Deposit more</a></template>
+      <template x-if="(connected() && onBase()) || restoring()"><a class="btn-primary dp__btn dp__btn--auto" href="/deposit">Deposit more</a></template>
     </div>
 
     <p class="dp__err" x-show="loadError" x-text="loadError" x-cloak></p>
@@ -132,7 +132,11 @@
             <table class="dp__tbl dp__reqs">
               <thead><tr><th scope="col">Request</th><th scope="col" class="n">Amount</th><th scope="col" class="n">Filled</th><th scope="col">Stage</th><th scope="col" class="n">Next</th><th scope="col"><span class="dp__sr">Actions</span></th></tr></thead>
               <tbody>
-                <template x-if="loaded && !rows().length">
+                <!-- Holds one row's height while the list loads, so the stage guide and the footer do not jump when it arrives. -->
+                <template x-if="!dataReady()">
+                  <tr aria-hidden="true"><td colspan="6"><span>&#8203;</span><span class="dp__sub">&#8203;</span></td></tr>
+                </template>
+                <template x-if="dataReady() && !rows().length">
                   <tr><td colspan="6" class="dp__empty">No requests from this wallet yet. A deposit or redemption you request shows here until it is delivered.</td></tr>
                 </template>
                 <template x-for="r in rows()" :key="r.id">
@@ -140,7 +144,7 @@
                     <td><a :href="r.href" x-text="r.kind"></a><span class="dp__sub" x-text="r.created"></span></td>
                     <td class="n" x-text="r.amount"></td>
                     <td class="n" data-k="Filled"><span :class="r.tone === 'off' && r.pct === 0 ? 'dp__muted' : ''" x-text="r.filled"></span><template x-if="r.out"><span class="dp__sub" x-text="`→ ${r.out}`"></span></template><template x-if="r.tone === 'filling'"><span class="dp__bar" aria-hidden="true"><i :style="`width:${r.pct}%`"></i></span></template></td>
-                    <td><span class="dp__stage" :class="`is-${r.tone}`"><i aria-hidden="true"></i><span x-text="r.stage"></span></span><template x-if="r.sub"><span class="dp__sub"><span x-text="r.sub"></span><template x-if="r.tip"><span class="rm-tip"><button class="rm-tip__btn" type="button" :aria-label="`About ${r.stage}`">i</button><span class="rm-tip__bub" role="tooltip" x-text="r.tip"></span></span></template></span></template></td>
+                    <td><span class="dp__stage" :class="`is-${r.tone}`"><i aria-hidden="true"></i><span x-text="r.stage"></span></span><span class="rm-tip"><button class="rm-tip__btn" type="button" :aria-label="`About ${r.stage}`">i</button><span class="rm-tip__bub" role="tooltip" x-text="r.help"></span></span><template x-if="r.sub"><span class="dp__sub"><span x-text="r.sub"></span><template x-if="r.tip"><span class="rm-tip"><button class="rm-tip__btn" type="button" :aria-label="`About ${r.stage}`">i</button><span class="rm-tip__bub" role="tooltip" x-text="r.tip"></span></span></template></span></template></td>
                     <td class="n" data-k="Next"><span :class="r.next ? '' : 'dp__muted'" x-text="r.next || '—'"></span><template x-if="r.nextIn"><span class="dp__sub" x-text="r.nextIn"></span></template></td>
                     <td class="dp__acts">
                       <template x-if="r.canCancel && asking !== r.id"><button type="button" class="dp__txt" :disabled="!!busy" @click="asking = r.id" x-text="r.filledShort ? 'Cancel unfilled' : 'Cancel'"></button></template>
@@ -168,6 +172,23 @@
               <p class="dp__err dp__confirmerr" x-show="errKey === `cancel-${r.id}`" x-text="errText"></p>
             </div>
           </template>
+        </section>
+
+        <!-- What each stage means, in the order a deposit moves through them, read as a stepper: a check on the steps this wallet's requests have passed, the stage's own mark where they stand now. -->
+        <section class="dp__stack" aria-labelledby="stages-h">
+          <h2 class="dp__h2 dp__h2--flush" id="stages-h">Stages</h2>
+          <ol class="dp__life">
+            <template x-for="s in lifecycle()" :key="s.stage">
+              <li :class="`is-${s.state}`" :aria-current="s.state === 'here' ? 'step' : null">
+                <span class="dp__stage" :class="s.state === 'here' ? `is-${s.tone}` : ''">
+                  <svg class="dp__tick" x-show="s.state === 'done'" width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M1.5 5.25 4 7.75 8.75 2.5" fill="none" stroke="currentColor" stroke-width="1.5"></path></svg>
+                  <i x-show="s.state !== 'done'" aria-hidden="true"></i><span x-text="s.stage"></span><span class="rm-visually-hidden" x-text="s.state === 'done' ? ', done' : ''"></span>
+                </span>
+                <p x-text="s.help"></p>
+                <span class="dp__life-n" x-show="s.count" x-text="s.count === 1 ? '1 of yours' : `${s.count} of yours`"></span>
+              </li>
+            </template>
+          </ol>
         </section>
       </div>
       </div>

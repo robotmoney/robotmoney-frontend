@@ -5,7 +5,7 @@
 // table and another on its own page.
 
 import { stageOf, filledOf, outOf, liveRemaining, canCancel, canWithdrawExpired, canGiveNotice, canTakeBack, claimableFills, lockOf, nextBatchFor, STAGE, IN_FLIGHT } from "./stages.js";
-import { requestExpiresAt, requestLockAt, fmtCountdown, fmtDuration, fmtWhenIn, fmtAt } from "./schedule.js";
+import { requestExpiresAt, requestLockAt, fmtCountdown, fmtDuration, fmtAt, fmtSay } from "./schedule.js";
 import { fmtUsdc, fmtRm, fmtWhen, fmtWhenShort } from "./format.js";
 
 const EPS = 1e-9;
@@ -44,19 +44,55 @@ export function splitOf(r, x) {
 }
 
 /**
+ * What each stage means, in one or two sentences from the requester's side:
+ * the (i) beside a stage, and the stage guide on Your position.
+ * @param {string} stage @param {"deposit" | "redeem"} [kind] @param {any} [f] flow parameters
+ */
+export function stageHelp(stage, kind = "deposit", f = null) {
+  const dep = kind === "deposit";
+  const unit = dep ? "USDC" : "rmFUND";
+  const out = dep ? "rmFUND" : "USDC";
+  const hold = fmtDuration(f?.minHold ?? 3600);
+  // The same lead the deposit page gives: the cancel buffer plus the settle window.
+  const lead = fmtDuration((f?.cancelBuffer ?? 900) + (f?.settleWindow ?? 720));
+  const span = f ? fmtDuration(f.maxRoll * f.epochLength) : "8 h";
+  return {
+    [STAGE.PENDING]: `Your ${unit} waits for the next batch, which sets the price. You can cancel until it locks, ${lead} before that batch. If a batch fills only part, the rest joins the next one.`,
+    [STAGE.ON_HOLD]: dep
+      ? `The batch bought your rmFUND at its price. It is yours to claim ${hold} after the batch: the wait protects every holder from a manipulated price.`
+      : "The batch sold your rmFUND at its price. Your USDC is yours to claim once its wait ends.",
+    [STAGE.READY]: `Your ${out} is ready. One signature moves it into your wallet.`,
+    [STAGE.CLAIMED]: `Your ${out} is in your wallet.`,
+    [STAGE.CANCELLED]: `Cancelled before it locked. The ${unit} came back to you.`,
+    [STAGE.EXPIRED]: `No batch filled it within ${span}. The unfilled USDC is yours to withdraw.`,
+    [STAGE.NOTICE]: "You asked for the unfilled rmFUND back. It takes part in one more batch; whatever that batch does not fill comes back.",
+    [STAGE.TAKE_BACK]: "No batch filled the rest. Take the rmFUND back into your wallet.",
+    [STAGE.RETURNED]: "No batch filled it, and the rmFUND came back to you.",
+    [STAGE.RELEASED]: "The vault is winding down, so this request was released. Withdraw it to your wallet.",
+  }[stage] || "";
+}
+
+/** The stages a deposit moves through, in order, for the stage guide on Your position. */
+export const LIFECYCLE = Object.freeze([
+  { stage: STAGE.PENDING, tone: "waiting" },
+  { stage: STAGE.ON_HOLD, tone: "hold" },
+  { stage: STAGE.READY, tone: "ready" },
+  { stage: STAGE.CLAIMED, tone: "off" },
+]);
+
+/**
  * A stage's colour, one vocabulary on every surface (David, 17 Nov 2026: "lets
- * be consistent across the app"): green when money is yours (filled, ready,
- * delivered), white while it is in motion, a hollow ring while it waits, the
- * Beacon point when it needs the owner to act, and dim once it is closed.
+ * be consistent across the app"): green when it is ready to claim, grey while
+ * the hold runs, a hollow ring while it waits for a batch, the Beacon point
+ * when it needs the owner to act, and dim once it is closed.
  * @param {string} stage @param {any} r
- * @returns {"ready" | "filling" | "hold" | "waiting" | "act" | "off"}
+ * @returns {"ready" | "hold" | "waiting" | "act" | "off"}
  */
 export function toneOf(stage, r) {
   if (stage === STAGE.READY) return "ready";
   if (stage === STAGE.TAKE_BACK || stage === STAGE.RELEASED || (stage === STAGE.EXPIRED && canWithdrawExpired(r))) return "act";
   if (stage === STAGE.ON_HOLD) return "hold";
-  if (stage === STAGE.FILLING) return "filling";
-  if (stage === STAGE.WAITING || stage === STAGE.NOTICE) return "waiting";
+  if (stage === STAGE.PENDING || stage === STAGE.NOTICE) return "waiting";
   return "off";
 }
 
@@ -75,9 +111,12 @@ export function rowOf(r, now, f, ctx = {}) {
   const notice = canGiveNotice(r, now, f);
   const span = fmtDuration(f.maxRoll * f.epochLength);
   let sub = "", tip = "";
-  if (st.stage === STAGE.WAITING && lock) sub = `You can cancel until ${fmtWhenIn(lock, now)}`;
+  const part = st.stage === STAGE.PENDING && filled > EPS;
+  if (st.stage === STAGE.PENDING && !part && lock) sub = `You can cancel until ${fmtSay(lock, now)}`;
+  // The Next column carries the time, so the line says what happens then.
+  else if (st.stage === STAGE.ON_HOLD) sub = `Ready to claim after a ${fmtDuration(f.minHold)} wait`;
   else if (notice) { sub = "You can ask for the rmFUND back"; tip = `No batch has filled ${inUnit(r, left)} in ${span}.`; }
-  else if (st.stage === STAGE.FILLING) sub = `${inUnit(r, left)} joins the next batch`;
+  else if (part) sub = `${inUnit(r, left)} joins the next batch`;
   else if (st.stage === STAGE.NOTICE) { sub = `${inUnit(r, left)} comes back if unfilled`; tip = "It takes part in one more batch. Whatever that batch does not fill comes back."; }
   else if (st.stage === STAGE.TAKE_BACK) sub = `${inUnit(r, r.remaining)} to take back`;
   else if (st.stage === STAGE.RELEASED) sub = `${inUnit(r, r.remaining)} to withdraw`;
@@ -97,6 +136,7 @@ export function rowOf(r, now, f, ctx = {}) {
     tone,
     sub,
     tip,
+    help: stageHelp(st.stage, r.kind, f),
     next: st.at && IN_FLIGHT.includes(st.stage) ? fmtAt(st.at, now) : "",
     nextIn: st.at && IN_FLIGHT.includes(st.stage) && st.at > now ? fmtCountdown(st.at - now) : "",
     canCancel: canCancel(r, now, f, ctx),
@@ -129,14 +169,14 @@ export function timelineOf(r, now, f) {
   if (lockedForBatch) ev.push(lockAt > now ? { at: lockAt, what: "Locks, and cancelling closes", mark: "act", next: true } : { at: lockAt, what: "Locked", mark: "done" });
   for (const x of r.fills) {
     ev.push({ at: x.at, what: `Filled ${inUnit(r, x.amountIn)} at ${x.price.toFixed(4)} → ${outUnit(r, x.out)}`, tip: splitOf(r, x), mark: "money" });
-    if (dep && !x.claimed && x.unlockAt > now) ev.push({ at: x.unlockAt, what: `${fmtRm(x.out)} arrives`, mark: "money", next: true });
+    if (dep && !x.claimed && x.unlockAt > now) ev.push({ at: x.unlockAt, what: `${fmtRm(x.out)} ready to claim`, mark: "money", next: true });
   }
   if (r.noticeGivenAt) ev.push({ at: r.noticeGivenAt, what: "Notice given", tip: "Unfilled rmFUND comes back after one more batch.", mark: "done" });
   const st = stageOf(r, now, f);
   const left = liveRemaining(r);
   if (left > EPS && st.at) {
     ev.push({ at: st.at, what: `Next batch: ${inUnit(r, left)}`, tip: "The batch sets the price it fills at.", mark: "next", next: true });
-    if (dep) ev.push({ at: st.at + f.minHold * 1000, what: r.fills.length ? "The rest arrives, if filled" : "rmFUND arrives, if filled", mark: "next", next: true });
+    if (dep) ev.push({ at: st.at + f.minHold * 1000, what: r.fills.length ? "The rest ready to claim, if that batch fills it" : "rmFUND ready to claim, if that batch fills it", mark: "next", next: true });
     if (dep) ev.push({ at: requestExpiresAt(r, f), what: "Unfilled USDC can be taken back", mark: "next", next: true });
     else if (!r.noticeAt && requestExpiresAt(r, f) > now) ev.push({ at: requestExpiresAt(r, f), what: "You can ask for unfilled rmFUND back", mark: "next", next: true });
   }
@@ -155,10 +195,10 @@ export function summaryOf(r, now, f) {
   const filled = filledOf(r);
   const left = liveRemaining(r);
   const lock = lockOf(r, now, f);
-  if (st.stage === STAGE.FILLING) return `${inUnit(r, filled).replace(/ USDC$/, "")} of ${inUnit(r, r.amount)} has filled. The other ${inUnit(r, left)} joins the next batch.`;
-  if (st.stage === STAGE.WAITING) return `Waiting for the batch at ${fmtWhen(st.at)}, which sets the price.${lock ? ` It can be cancelled until ${fmtWhenShort(lock)}.` : ""}`;
-  if (st.stage === STAGE.ON_HOLD) return `Filled. ${r.kind === "deposit" ? "The rmFUND is held until" : "Ready at"} ${fmtWhen(st.at)}.`;
-  if (st.stage === STAGE.NOTICE) return `Notice given. rmFUND still unfilled after the batch at ${fmtWhen(st.at)} come back.`;
+  if (st.stage === STAGE.PENDING && filled > EPS) return `${inUnit(r, filled).replace(/ USDC$/, "")} of ${inUnit(r, r.amount)} has filled. The other ${inUnit(r, left)} joins the next batch.`;
+  if (st.stage === STAGE.PENDING) return `Waiting for the batch at ${fmtSay(st.at, now)}, which sets the price.${lock ? ` You can cancel until ${fmtSay(lock, now)}.` : ""}`;
+  if (st.stage === STAGE.ON_HOLD) return r.kind === "deposit" ? `Filled. Your ${fmtRm(outOf(r))} is ready to claim at ${fmtSay(st.at, now)}.` : `Filled. Your USDC is ready to claim at ${fmtSay(st.at, now)}.`;
+  if (st.stage === STAGE.NOTICE) return `Notice given. Any rmFUND the batch at ${fmtSay(st.at, now)} does not fill comes back to you.`;
   return st.note;
 }
 
