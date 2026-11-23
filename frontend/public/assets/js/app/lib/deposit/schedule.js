@@ -18,6 +18,7 @@
 // chain read is available.
 
 import { DEFAULT_FLOW } from "./manifest.js";
+import { fmtWhen, fmtWhenShort } from "./format.js";
 
 const S = 1000;
 
@@ -117,6 +118,37 @@ export function fmtDuration(seconds) {
   const rest = m % 60;
   if (h >= 24 && rest === 0 && h % 24 === 0) return h === 24 ? "1 day" : `${h / 24} days`;
   return rest ? `${h} h ${rest} min` : `${h} h`;
+}
+
+/** "2 days ago", "35 min ago", "just now". @param {number} ms */
+export function fmtAgo(ms) {
+  if (ms < 60 * S) return "just now";
+  return `${fmtDuration(ms >= 2 * 86400 * S ? Math.floor(ms / (86400 * S)) * 86400 : ms / S)} ago`;
+}
+
+/**
+ * A time with how far off it is, so nobody does the arithmetic (David, 23 Nov):
+ * "14:45 · in 35 min" today, "Sat 00:12 · 2 days ago" within a week, the full
+ * date beyond. @param {number|null|undefined} ms @param {number} now
+ */
+export function fmtWhenIn(ms, now) {
+  if (ms == null || !Number.isFinite(ms)) return "—";
+  return `${fmtAt(ms, now)} · ${ms >= now ? fmtCountdown(ms - now) : fmtAgo(now - ms)}`;
+}
+
+/** The time alone when it is today ("15:12"), the weekday within a week ("Sat 00:12"), else the date. @param {number} ms @param {number} now */
+export function fmtAt(ms, now) {
+  if (ms == null || !Number.isFinite(ms)) return "—";
+  if (new Date(ms).toDateString() === new Date(now).toDateString()) return fmtWhenShort(ms).split(" ")[1];
+  return Math.abs(ms - now) < 6 * 86400 * S ? fmtWhenShort(ms) : fmtWhen(ms);
+}
+
+/** A ticking countdown: "54:12", "1:02:15", "0:00" once it is due. @param {number} ms */
+export function fmtClock(ms) {
+  const t = Math.max(0, Math.floor(ms / S));
+  const h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), s = t % 60;
+  const two = (n) => String(n).padStart(2, "0");
+  return h ? `${h}:${two(m)}:${two(s)}` : `${m}:${two(s)}`;
 }
 
 /** "in 5 h 25 min", "in under a minute", "now". @param {number} ms */

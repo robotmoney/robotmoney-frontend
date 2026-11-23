@@ -18,7 +18,8 @@
 import { session, MIN_ETH } from "../../lib/deposit/session.js";
 import { MANIFEST } from "../../lib/deposit/manifest.js";
 import { buildDeposit, buildRedeem, buildExitInKind } from "../../lib/deposit/builder.js";
-import { depositWait, redeemWait, fmtDuration, fmtCountdown, timelineFor, expiresAtOf, epochOf } from "../../lib/deposit/schedule.js";
+import { depositWait, redeemWait, fmtDuration, fmtCountdown, fmtWhenIn, fmtClock, timelineFor, expiresAtOf, epochOf, epochEndAt } from "../../lib/deposit/schedule.js";
+import { nextBatchFor, stageOf, canWithdrawExpired, STAGE } from "../../lib/deposit/stages.js";
 import { fmtUsdc, fmtShares, fmtRm, fmtPrice, fmtBps, fmtFee, floorTo, fmtWhen, fmtWhenShort, shortAddr, shortHash } from "../../lib/deposit/format.js";
 import { isOpen, tryCode, bodyOf } from "../../lib/deposit/access.js";
 import { stopOf } from "../../lib/deposit/describe.js";
@@ -75,6 +76,8 @@ export function registerDepositView(Alpine) {
     vault: null,
     loadError: "",
     acctData: null,
+    reqCounts: { open: 0, ready: 0 },
+    tick: 0,
     tab: "deposit",
     menuOpen: false,
     copied: false,
@@ -112,10 +115,13 @@ export function registerDepositView(Alpine) {
         if (!session.simulated && ++ticks % 4 === 0) this.loadVault();
       }, 15_000);
       if (!session.simulated) session.ready().catch(() => { this.loadError = "The vault could not be read. Try again in a moment."; });
+      // The Queue countdown ticks each second; nothing else reads `tick`.
+      this.tick = session.now();
+      this._clock = setInterval(() => { this.tick = session.now(); }, 1000);
       await this.loadVault();
       this.refreshAccount();
     },
-    destroy() { clearInterval(this._t); this._unsub?.(); },
+    destroy() { clearInterval(this._t); clearInterval(this._clock); this._unsub?.(); },
 
     // ── Vault ────────────────────────────────────────────────────────────
     async loadVault() {
@@ -171,6 +177,31 @@ export function registerDepositView(Alpine) {
     usdcReadyTip() { return "Once its batch fills your request, the USDC is yours to claim."; },
     priceTip() { return "The price comes from the vault's holdings at market prices, after requests lock. Only the difference between deposits and redemptions trades in the market."; },
     landTip() { return `A large deposit can fill over several batches. Anything unfilled after ${this.expiryLabel()} is yours to take back.`; },
+    // The queue, for every depositor (chain.js `queue`).
+    queue() { return this.vault?.queue || null; },
+    queueBatchLast() { const t = this.queue()?.lastBatchAt; return t ? fmtWhenIn(t, this.now) : "None yet"; },
+    /**
+     * The cycle of the next batch, for the Queue block's line: from the start of
+     * the hour whose requests it fills, through the moment they lock and the
+     * hour's end, to the batch itself (settleWindow after). Percentages place
+     * the marks; `fill` is how far along now is.
+     */
+    batchClock() { return fmtClock(this.cycle().batch - this.tick); },
+    cycle() {
+      const f = this.flow(), now = this.now, W = f.settleWindow * 1000;
+      const e = epochOf(now - W, f);
+      const start = epochEndAt(e - 1, f), end = epochEndAt(e, f), batch = end + W, lock = end - (f.cancelBuffer ?? 900) * 1000;
+      const pct = (t) => Math.max(0, Math.min(100, ((t - start) / (batch - start)) * 100));
+      return { start, end, batch, lock, fill: pct(now), lockAt: pct(lock), endAt: pct(end), locked: now >= lock, ended: now >= end, toBatch: fmtCountdown(batch - now) };
+    },
+    /** When a due batch is more than 10 minutes late, the time it was due; else null. */
+    batchLate() {
+      if (!this.queue()?.batchDue) return null;
+      const f = this.flow();
+      const due = epochEndAt(epochOf(this.now, f) - 1, f) + f.settleWindow * 1000;
+      return this.now - due > 600_000 ? due : null;
+    },
+    requestsSummary() { const c = this.reqCounts; return c.ready ? `${c.ready} ready to claim` : c.open ? `${c.open} open` : ""; },
     /** What stops the vault right now, in words (describe.js); null when nothing does. */
     stop() { return stopOf(this.vault); },
 
@@ -181,6 +212,7 @@ export function registerDepositView(Alpine) {
     short() { return shortAddr(this.address()); },
     walletName() { this.rev; return session.acct.walletName; },
     walletLoading() { this.rev; return session.walletLoading; },
+    restoring() { this.rev; return session.restoring && !session.connected(); },
     walletError() { this.rev; return session.walletError; },
     connect() { session.connect(); },
     useTestAddress() { session.useTestAddress(); },
@@ -194,6 +226,13 @@ export function registerDepositView(Alpine) {
         const a = await src.account(session.acct.address);
         a.eth = await session.ethBalance(session.acct.address);
         this.acctData = a;
+        // Where this wallet's requests stand, for the row that leads to Your requests.
+        const rs = await src.requestsOf(session.acct.address);
+        const t = session.now();
+        this.reqCounts = {
+          open: rs.filter((r) => !r.closed || r.fills.some((x) => !x.claimed)).length,
+          ready: rs.filter((r) => [STAGE.READY, STAGE.TAKE_BACK].includes(stageOf(r, t, this.flow()).stage) || canWithdrawExpired(r)).length,
+        };
       } catch (e) { console.error(e); }
     },
     async copyAddress() { try { await navigator.clipboard.writeText(this.address()); this.copied = true; setTimeout(() => (this.copied = false), 2000); } catch { /* blocked */ } },
@@ -234,8 +273,10 @@ export function registerDepositView(Alpine) {
     estShares(n = this.amountN()) { const p = this.vault?.priceUsdc; return n > 0 && p ? fmtRm(floorTo(n / p, 4)) : "—"; },
     timeline() { return timelineFor(this.now, this.flow()); },
     lockAt() { return this.dq?.lockAt ?? this.timeline().lockAt; },
-    nextBatch() { return fmtWhen(this.dq?.settlesAt ?? this.timeline().settlesAt); },
-    sharesArrive() { return fmtWhen(this.dq?.readyAt ?? this.timeline().sharesAt); },
+    nextBatch() { return fmtWhenIn(this.dq?.settlesAt ?? this.timeline().settlesAt, this.now); },
+    sharesArrive() { return fmtWhenIn(this.dq?.readyAt ?? this.timeline().sharesAt, this.now); },
+    /** A time and how far off it is: "14:45 · in 35 min". */
+    when(ms) { this.now; return fmtWhenIn(ms, this.now); },
     canReview() { return this.connected() && this.onBase() && this.vault?.depositsOpen && this.amountN() > 0 && !this.amountError() && this.dq && !this.dqLoading; },
 
     // ── Redeem form ──────────────────────────────────────────────────────

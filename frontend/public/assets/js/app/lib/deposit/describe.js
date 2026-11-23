@@ -5,7 +5,7 @@
 // table and another on its own page.
 
 import { stageOf, filledOf, outOf, liveRemaining, canCancel, canWithdrawExpired, canGiveNotice, canTakeBack, claimableFills, lockOf, nextBatchFor, STAGE, IN_FLIGHT } from "./stages.js";
-import { requestExpiresAt, requestLockAt, fmtCountdown, fmtDuration } from "./schedule.js";
+import { requestExpiresAt, requestLockAt, fmtCountdown, fmtDuration, fmtWhenIn, fmtAt } from "./schedule.js";
 import { fmtUsdc, fmtRm, fmtWhen, fmtWhenShort } from "./format.js";
 
 const EPS = 1e-9;
@@ -75,7 +75,7 @@ export function rowOf(r, now, f, ctx = {}) {
   const notice = canGiveNotice(r, now, f);
   const span = fmtDuration(f.maxRoll * f.epochLength);
   let sub = "", tip = "";
-  if (st.stage === STAGE.WAITING && lock) sub = `You can cancel until ${fmtWhenShort(lock)}`;
+  if (st.stage === STAGE.WAITING && lock) sub = `You can cancel until ${fmtWhenIn(lock, now)}`;
   else if (notice) { sub = "You can ask for the rmFUND back"; tip = `No batch has filled ${inUnit(r, left)} in ${span}.`; }
   else if (st.stage === STAGE.FILLING) sub = `${inUnit(r, left)} joins the next batch`;
   else if (st.stage === STAGE.NOTICE) { sub = `${inUnit(r, left)} comes back if unfilled`; tip = "It takes part in one more batch. Whatever that batch does not fill comes back."; }
@@ -97,8 +97,8 @@ export function rowOf(r, now, f, ctx = {}) {
     tone,
     sub,
     tip,
-    next: st.at && IN_FLIGHT.includes(st.stage) ? fmtWhenShort(st.at) : "",
-    nextIn: st.at && st.stage === STAGE.ON_HOLD ? fmtCountdown(st.at - now) : "",
+    next: st.at && IN_FLIGHT.includes(st.stage) ? fmtAt(st.at, now) : "",
+    nextIn: st.at && IN_FLIGHT.includes(st.stage) && st.at > now ? fmtCountdown(st.at - now) : "",
     canCancel: canCancel(r, now, f, ctx),
     cancelAmount: inUnit(r, left),
     filledShort: filled > EPS ? inUnit(r, filled).replace(/ USDC$/, "") : "",

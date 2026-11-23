@@ -12,6 +12,10 @@
 
     <p class="dp__err" x-show="loadError" x-text="loadError" x-cloak></p>
 
+    <!-- A placeholder in the page's shape until the request is read (.impeccable.md). -->
+    <div class="dp__load" :class="loaded ? 'is-ready' : ''">
+    <div class="dp__skel dp__skel--status" aria-hidden="true"><span class="dp__skeltitle"></span><span class="dp__skelbar"></span><span class="dp__skelfacts"><i></i><i></i><i></i></span><span class="dp__skelrows"><i></i><i></i><i></i><i></i></span></div>
+    <div class="dp__live">
     <template x-if="loaded && !r && !loadError">
       <div class="dp__stack">
         <h1 class="dp__title dp__title--page">Request not found</h1>
@@ -85,6 +89,8 @@
         <p class="dp__err" x-show="errText" x-text="errText" x-cloak></p>
       </div>
     </template>
+    </div>
+    </div>
 
     <footer class="dp__foot">
       <span>Robot Money is software that builds transactions your wallet signs. Nothing here is investment advice.</span>

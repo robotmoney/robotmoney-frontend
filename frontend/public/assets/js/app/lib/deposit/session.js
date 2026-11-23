@@ -26,6 +26,8 @@ const listeners = new Set();
 const emit = () => listeners.forEach((cb) => cb());
 const pause = (ms) => new Promise((r) => setTimeout(r, ms));
 const isLocal = () => /^(localhost|127\.0\.0\.1|\[::1\])$|\.localhost$/.test(location.hostname);
+/** Whether this browser had a wallet connected last time, so the kit will reconnect it (AppKit and wagmi storage). */
+const hadWallet = () => { try { return localStorage.getItem("@appkit/connection_status") === "connected" || !!localStorage.getItem("wagmi.recentConnectorId"); } catch { return false; } };
 
 export const session = {
   simulated: isSimulated(),
@@ -34,6 +36,12 @@ export const session = {
   acct: { address: null, chainId: null, walletName: "", isSafe: false, testAddress: false },
   walletLoading: false,
   walletError: "",
+  /**
+   * True from page load until the kit has reconnected a wallet this browser
+   * used before (or found none): the pages show a placeholder, not a "Connect
+   * wallet" that vanishes a second later.
+   */
+  restoring: !isSimulated() && hadWallet(),
   rev: 0,
 
   subscribe(cb) { listeners.add(cb); return () => listeners.delete(cb); },
@@ -49,10 +57,12 @@ export const session = {
     if (!this.simulated) this.source = createChainSource(this.wallet);
     this.wallet.onChange((a) => this.setAccount(a));
     this.setAccount(this.wallet.account());
+    // A reconnect that never settles must not hold the page in its placeholder.
+    setTimeout(() => { if (this.restoring) { this.restoring = false; this.bump(); } }, 8000);
     return this.wallet;
   },
   async connect() {
-    this.walletError = ""; this.walletLoading = true; this.bump();
+    this.walletError = ""; this.walletLoading = true; this.restoring = false; this.bump();
     try {
       await this.ready();
       if (!this.acct.address) await this.wallet.open();
@@ -71,6 +81,10 @@ export const session = {
     const prev = this.acct.address;
     if (this.acct.testAddress && !a.address) return;
     this.acct = { address: a.address, chainId: a.chainId, walletName: a.walletName, isSafe: a.isSafe, testAddress: false };
+    // Connected ends the reconnect at once. The kit can report "disconnected" for
+    // a moment before its reconnect starts, so that ends it only if it lasts.
+    if (a.status === "connected") this.restoring = false;
+    else if (a.status === "disconnected" && this.restoring) setTimeout(() => { if (this.restoring && !this.acct.address) { this.restoring = false; this.bump(); } }, 1500);
     // A different account mid-flow: whatever was being reviewed was for the old one.
     if (prev && a.address && prev.toLowerCase() !== a.address.toLowerCase()) this.accountSwitched = true;
     this.bump();

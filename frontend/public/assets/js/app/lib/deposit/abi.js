@@ -50,6 +50,11 @@ const QUOTE = tuple("", [
   u("feeBps"), u("cancelCutoff", "uint64"), u("earliestSettle", "uint64"), u("holdEnds", "uint64"),
   u("refBandBps", "uint16"), u("legBandBps", "uint16"),
 ]);
+// What the queue holds right now, for every depositor (FlowTypes.sol FlowBooks).
+const BOOKS = tuple("", [
+  u("pendingUsdc"), u("owedUsdc"), u("creditUsdc"), u("dustUsdc"),
+  u("escrowShares"), u("heldShares"), u("creditShares"), u("dustShares"),
+]);
 const LIVENESS = tuple("", [
   u("keeperConfigured", "bool"), u("queuePausedNow", "bool"), u("queuePausedUntil", "uint64"),
   u("depositsStoppedNow", "bool"), u("windDownActive", "bool"), u("cancelBuffer", "uint32"), u("maxPause", "uint32"),
@@ -86,6 +91,8 @@ export const QUEUE_ABI = [
   view("getSettlement", [u("settlementId")], [SETTLEMENT]),
   view("requestCount", [], [u("")]),
   view("claimCount", [], [u("")]),
+  view("settlementCount", [], [u("")]),
+  view("books", [], [BOOKS]),
   view("creditOf", [u("owner", "address")], [u("usdc"), u("shares")]),
   view("queuedSharesOf", [u("account", "address")], [u("")]),
   view("quoteDeposit", [u("usdc")], [QUOTE]),
