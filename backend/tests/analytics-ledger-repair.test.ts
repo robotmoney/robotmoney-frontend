@@ -444,7 +444,8 @@ function assertMemberResolutionPlan(plan: PlanNode): void {
   let probes = 0;
   for (const n of versions) {
     if (n["Node Type"] === "Index Scan" || n["Node Type"] === "Index Only Scan") {
-      expect(n["Index Name"]).toBe("source_value_versions_pkey");
+      // The primary key, or its covering twin (id) INCLUDE (knowledge_time) from migration 0134 (issue 1690).
+      expect(["source_value_versions_pkey", "source_value_versions_id_time_idx"]).toContain(n["Index Name"]);
       // Equality on the expanded id, never a range.
       expect(n["Index Cond"]).toMatch(/^\(id = g\.id\)$/);
       probes++;
