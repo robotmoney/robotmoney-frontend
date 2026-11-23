@@ -213,7 +213,7 @@ describes, not by the day it was known. One mechanism fixes all four.
 | ID | Design |
 |---|---|
 | P1 | `prepareRegimeInputs` cuts `lastRaw` at the as-of day. The "Not cut at asof" exception is removed. |
-| P2 | Add `calendar: "daily" \| "exchange"` to each indicator. `prepareRegimeInputs` returns a `carried` mask per indicator (it already computes the fill age: carried means age > 0). |
+| P2 | Add `calendar: "daily" \| "exchange" \| "periodic"` to each indicator. `periodic` covers weekly and monthly releases (`ICSA`, `SHILLER_CAPE`), whose carried rows keep counting as they do today: skipping them would leave `SHILLER_CAPE` under the 60-observation floor and `ICSA` with no shared days. How periodic series should count is an open method question (1741, 1673). `prepareRegimeInputs` returns a `carried` mask per indicator (it already computes the fill age: carried means age > 0). |
 
 ### Transform
 
@@ -227,7 +227,7 @@ describes, not by the day it was known. One mechanism fixes all four.
 |---|---|
 | A2 | `rollingPercentileRank` and the weight fit take the `carried` mask and skip carried rows when counting. Window lengths stay in calendar days, so 1,095 days still means three years. |
 | A3 to A6, A8 | Each becomes a declared parameter of the methodology version, next to `REGIME_LOOKBACK`, with today's value as the default. The tooling ships first, and the values are chosen in issue 1673. |
-| A7 | `computeRegime` returns no composite for a day with a missing included panel. The complete-day rule (issue 1655) already refuses such a day for the live run. This extends it to every past row. |
+| A7 | `computeRegime` returns no composite for a day with a missing included panel. The complete-day rule (issue 1655) works per indicator and ships with the `score-newest` day rule, so it does not refuse such a day today. This is a separate, per-panel rule. It amends decision D89 item 2, which averages the panels finite that day. |
 
 T1, A2 and A7 change past values. They ship as one methodology change, so
 history moves once.
@@ -249,10 +249,10 @@ history moves once.
 
 | ID | Design |
 |---|---|
-| R1 | `CorrelationCell` gains `n_eff` (n divided by the horizon, rounded down). The page reads it. |
-| R2 | Add a purity test: no module under `allocate/` or `backend/src/swarm/` imports `analyze/correlations.ts`. |
+| R1 | `CorrelationCell` gains `n_eff` (n divided by the horizon, rounded down) on forward cells, in the payload and the contract type. No page shows these today. |
+| R2 | Add a purity test: no module under `allocate/` or `backend/src/swarm/` imports `analyze/correlations.ts` directly, and no `allocate/` file reads `RunResult.correlations`. A transitive rule would fail today, because `allocate/labels.ts` imports `run.ts`, which computes correlations. |
 | R3 | Both comparison generators call `periodStats` with the adoption-date split (B4). |
-| R4 | Add a guard in the swarm session entry point: a session whose as-of date is before the configured model's cutoff date is refused with a named error. |
+| R4 | Declare a cutoff date per model (none exists today) and add a guard: a session dated before the configured model's cutoff is refused with a named error. Sessions take no as-of date today, so the guard sits on the session date in the epoch insert path and in brief publication. |
 | R5 | Review task, not a design: list each brief field and its source, then apply the rules above. |
 
 ### Test that covers every phase

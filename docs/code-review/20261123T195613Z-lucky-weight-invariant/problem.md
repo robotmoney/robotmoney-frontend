@@ -32,32 +32,32 @@ Code paths are under `packages/analyst-sdk/src/` unless they start with
 | E1 | Extract | Slow-release series dated by the period they describe | Look-ahead | 1733 |
 | E2 | Extract | Later revisions replayed into the past | Look-ahead | 1733 |
 | E3 | Extract | Dividend-adjusted closes embed later dividends | Look-ahead | 1733 |
-| E4 | Extract | Partial-day capture of 24/7 series | Skew | 1733 (line to add) |
-| E5 | Extract | UTC day boundary of each extractor | Unverified | none |
-| P1 | Prepare | `lastRaw` is not cut at the as-of day | Look-ahead (display) | 1733 (line to add) |
-| P2 | Prepare | Calendar axis repeats the last close on closed days | Windowing (root cause of T1, A2) | none |
-| T1 | Transform | "Day" windows count calendar days on forward-filled series | Windowing | none |
+| E4 | Extract | Partial-day capture of 24/7 series | Skew | 1733 |
+| E5 | Extract | UTC day boundary of each extractor | Unverified | 1733 |
+| P1 | Prepare | `lastRaw` is not cut at the as-of day | Look-ahead (display) | 1733 |
+| P2 | Prepare | Calendar axis repeats the last close on closed days | Windowing (root cause of T1, A2) | 1741 |
+| T1 | Transform | "Day" windows count calendar days on forward-filled series | Windowing | 1741 |
 | A1 | Analyze | **Last-day weight refit** | Run variance | 1739 |
-| A2 | Analyze | Rank and weight windows count each Friday three times | Windowing | none |
+| A2 | Analyze | Rank and weight windows count each Friday three times | Windowing | 1741 |
 | A3 | Analyze | Rank starts after only 30 observations | Skew | 1673 |
 | A4 | Analyze | v4 cuts a composite bunched near 0.5 at uniform-scale cut-offs | Skew | 1673 |
 | A5 | Analyze | The 25% weight cap does nothing in a small panel | Skew | 1673 |
 | A6 | Analyze | Absolute correlation treats a diversifier as redundant; noisy fit | Skew | 1673 |
-| A7 | Analyze | Composite jumps when a panel is missing; panels equal-weighted | Skew | 1673 |
+| A7 | Analyze | Composite jumps when a panel is missing; panels equal-weighted | Skew | 1741 |
 | A8 | Analyze | Smoothing: easy fast-track, no buffer zone at the cut-offs | Skew | 1673 |
 | B1 | Backtest | Trade at the same close as the signal | Look-ahead | 1734 |
 | B2 | Backtest | Weekend and holiday trades at a stale price | Look-ahead | 1734 |
 | B3 | Backtest | Sharpe ignores the T-bill rate and trading costs | Bias | 1734 |
 | B4 | Backtest | Method chosen with hindsight, reported as out-of-sample | Bias | 1734 |
-| B5 | Backtest | Cash rate quoted on a discount basis, compounded as a yield | Skew | 1734 (line to add) |
-| B6 | Backtest | 10 bps cost is light for ETH | Bias | 1734 (line to add) |
-| B7 | Backtest | Max drawdown may be measured on month-end values | Unverified | none |
+| B5 | Backtest | Cash rate quoted on a discount basis, compounded as a yield | Skew | 1734 |
+| B6 | Backtest | 10 bps cost is light for ETH | Bias | 1734 |
+| B7 | Backtest | Max drawdown may be measured on month-end values | Unverified | 1734 |
 | B8 | Backtest | Backtest input inherits E1-E3 and A1 | Inherited | 1733, 1739 |
-| R1 | Report | Forward correlations overstate their sample size | Bias | partly handled on the page |
-| R2 | Report | Forward correlations look forward by design | Guard needed | none |
+| R1 | Report | Forward correlations overstate their sample size | Bias | 1742 |
+| R2 | Report | Forward correlations look forward by design | Guard needed | 1742 |
 | R3 | Report | Research comparisons score on the full sample | Bias | 1734 |
-| R4 | Report | A historical committee replay would leak model training data | Guard needed | none |
-| R5 | Report | Swarm brief contents | Unverified | none |
+| R4 | Report | A historical committee replay would leak model training data | Guard needed | 1742 |
+| R5 | Report | Swarm brief contents | Unverified | 1742 |
 
 ## Extract
 
@@ -106,8 +106,8 @@ ETFs with different yields drifts as a result (`indicators.ts:290-578`).
   `XLP_XLY`, and `SPX_TREND` slightly.
 - **Size:** `XLU_SPY` drifts about 1.5% a year, or about 5% across a 3-year
   rank window.
-- **Status:** the factor panel is outside the composite today, so this is
-  dormant. It goes live if the factor panel is included.
+- **Status:** live. The factor panel is included in the composite
+  (`PANEL_MEMBERSHIP`, decision D89), so these ratios feed the label.
 
 ### E4. Partial-day capture of 24/7 series (skew)
 
@@ -118,8 +118,7 @@ value. The parity audit saw this on `BTC_ACTIVE` and BTC price
 
 - **Effect:** the live value for today differs from the value any later run
   sees for the same day.
-- **Tracking:** 1733 covers it only if a same-day refetch counts as a
-  revision. The issue needs a line saying so.
+- **Tracking:** 1733 treats a same-day refetch as a revision.
 
 ### E5. UTC day boundary of each extractor (unverified)
 
@@ -322,8 +321,9 @@ produced).
 
 The 30, 90 and 180-day forward returns overlap. The number of independent
 observations is about n divided by the horizon, and the payload reports n
-(`analyze/correlations.ts`). The page computes a rough band in its tooltip.
-The payload does not carry it.
+(`analyze/correlations.ts`). The payload carries no effective sample size.
+No page renders these correlations today: the table was removed from the
+regime page on 2026-11-04.
 
 ### R2. Forward correlations look forward by design (guard needed)
 

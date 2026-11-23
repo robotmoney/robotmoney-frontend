@@ -101,10 +101,11 @@ no part in defining what the value should be.
 
 - **What:** the composite on day *t* is the plain mean of the included panels'
   indices on *t* (`compute.ts:150`).
-- **Panels included:** `PANELS` lists them (`analyze/indicators.ts:662`). Today
-  that is macro and on-chain.
-- **The factor panel:** it is computed in a separate run of every panel (`r3`).
-  It is reported, but it is not in the composite.
+- **Panels included:** `PANEL_MEMBERSHIP` marks each panel included or
+  excluded, and `PANELS` is the included set (`analyze/indicators.ts:652-662`).
+  Today all three are included: macro, on-chain and factor (decision D89).
+- **Excluded panels:** a panel marked excluded is still computed and reported
+  (the `r3` run of every panel). It is not in the composite.
 
 ### i) Label
 
@@ -261,7 +262,7 @@ leaves the value open.
 | ID | Rule |
 |---|---|
 | P1 | Every field a run returns for as-of day *t*, including display fields such as the last raw value, is cut at *t*. |
-| P2 | Each series declares its trading calendar: every day, or exchange days. The axis may carry a value forward on a closed day, and it marks that row as carried. |
+| P2 | Each series declares its calendar: every day, exchange days, or periodic (weekly or monthly releases). The axis may carry a value forward on a closed day, and it marks that row as carried. |
 
 ### Transform
 
@@ -299,7 +300,7 @@ leaves the value open.
 
 | ID | Rule |
 |---|---|
-| R1 | A correlation over overlapping windows reports its effective sample size next to n. |
+| R1 | A correlation over overlapping windows carries its effective sample size next to n in the payload. |
 | R2 | No decision input reads a forward-looking statistic. A test enforces it. |
 | R3 | A research comparison reports in-sample and out-of-sample results apart, split at the adoption date (B4). |
 | R4 | No language model is asked to act as of a date before its training cutoff. A historical committee simulation is refused. |

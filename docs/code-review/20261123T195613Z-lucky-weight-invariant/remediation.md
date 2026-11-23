@@ -13,7 +13,7 @@ with a check for each step.
 
 | # | Decision | Owner | Default if not decided |
 |---|---|---|---|
-| D-a | Change v4 in place, or ship a new tag (v5)? | lucky | **Decided 2026-11-23: change v4 in place.** No v5 tag. |
+| D-a | Change v4 in place, or ship a new version tag? | lucky | **Decided 2026-11-23: change v4 in place.** No new tag. |
 | D-b | Approve the method change: weights refit only on the fixed 21-day calendar. | Lex | None. Lex's written yes is needed before merge (method changes need it). |
 | D-c | Keep the 21-day interval, or refit daily? | Lex | Keep 21 days. Changing it is a separate method change. |
 
@@ -131,40 +131,45 @@ every other finding from `problem.md`.
 | E1 | Extract | Series dated by period | 1733 | none |
 | E2 | Extract | Revisions replayed into the past | 1733 | none |
 | E3 | Extract | Dividend-adjusted closes | 1733 | none |
-| E4 | Extract | Partial-day capture | 1733 | add a line: a same-day refetch is a revision |
-| E5 | Extract | UTC day boundary per extractor | none | add to 1733 as an audit task |
-| P1 | Prepare | `lastRaw` not cut at as-of | 1733 | add a line |
-| P2 | Prepare | Carried rows not marked | none | new issue W (below) |
-| T1 | Transform | Calendar-day windows | none | new issue W |
+| E4 | Extract | Partial-day capture | 1733 | none |
+| E5 | Extract | UTC day boundary per extractor | 1733 | none |
+| P1 | Prepare | `lastRaw` not cut at as-of | 1733 | none |
+| P2 | Prepare | Carried rows not marked | 1741 | none |
+| T1 | Transform | Calendar-day windows | 1741 | none |
 | A1 | Analyze | Last-day weight refit | 1739 | none |
-| A2 | Analyze | Fridays counted three times | none | new issue W |
-| A3 | Analyze | 30-observation rank warm-up | 1673 | add as a parameter to choose |
-| A4 | Analyze | Cut-offs on a bunched composite | 1673 | add as a parameter to choose |
-| A5 | Analyze | Cap does nothing in a small panel | 1673 | add as a parameter to choose |
-| A6 | Analyze | Absolute correlation | 1673 | add as a parameter to choose |
-| A7 | Analyze | Composite jumps on a missing panel | none | new issue W |
-| A8 | Analyze | Smoothing buffer and σ | 1673 | add as a parameter to choose |
+| A2 | Analyze | Fridays counted three times | 1741 | none |
+| A3 | Analyze | 30-observation rank warm-up | 1673 | none (listed in a comment) |
+| A4 | Analyze | Cut-offs on a bunched composite | 1673 | none (listed in a comment) |
+| A5 | Analyze | Cap does nothing in a small panel | 1673 | none (listed in a comment) |
+| A6 | Analyze | Absolute correlation | 1673 | none (listed in a comment) |
+| A7 | Analyze | Composite jumps on a missing panel | 1741 | none |
+| A8 | Analyze | Smoothing buffer and σ | 1673 | none (listed in a comment) |
 | B1 | Backtest | Same-close trade | 1734 | none |
 | B2 | Backtest | Closed-market trade | 1734 | none |
 | B3 | Backtest | Sharpe | 1734 | none |
 | B4 | Backtest | Hindsight reported as out-of-sample | 1734 | none |
-| B5 | Backtest | Cash rate basis | 1734 | add a line |
-| B6 | Backtest | ETH cost rate | 1734 | add a line |
-| B7 | Backtest | Max drawdown series | 1734 | add a line |
+| B5 | Backtest | Cash rate basis | 1734 | none |
+| B6 | Backtest | ETH cost rate | 1734 | none |
+| B7 | Backtest | Max drawdown series | 1734 | none |
 | B8 | Backtest | Inherited defects | 1733, 1739 | none |
-| R1 | Report | Effective sample size | none | new issue G (below) |
-| R2 | Report | Forward statistics as inputs | none | new issue G |
+| R1 | Report | Effective sample size | 1742 | none |
+| R2 | Report | Forward statistics as inputs | 1742 | none |
 | R3 | Report | Full-sample comparisons | 1734 | none |
-| R4 | Report | Historical committee replay | none | new issue G |
-| R5 | Report | Swarm brief contents | none | new issue G, as a review task |
+| R4 | Report | Historical committee replay | 1742 | none |
+| R5 | Report | Swarm brief contents | 1742 | none |
 
-### Issues still to file
+### Issues filed from this review
 
-- **Issue W, observation-day windows:** P2, T1, A2 and A7. One methodology
+- **1739, run-invariant weights:** A1.
+- **1733, source data known on each day:** E1 to E5 and P1.
+- **1741, observation-day windows:** P2, T1, A2 and A7. One methodology
   change, because all four move past values. It needs the quant analyst's
-  sign-off.
-- **Issue G, guards and reporting:** R1, R2, R4 and R5. It changes no
-  computed value.
+  sign-off. It has one open question: how weekly and monthly series count.
+- **1734, backtest timing and reporting:** B1 to B7 and R3.
+- **1742, guards and reporting:** R1, R2, R4 and R5. It changes no computed
+  value.
+- **1673, parameter choices for the next methodology version:** A3 to A6
+  and A8.
 
 ### Order of work
 
@@ -175,9 +180,9 @@ the v4 golden fixtures, so they merge one at a time.
 |---|---|---|---|
 | 1 | 1739 | Analyze | It makes the calculation give one answer per day. Every later check depends on that. |
 | 2 | 1733 | Extract, Prepare | It makes the input for each day correct. The whole-pipeline test passes after it. |
-| 3 | Issue W | Prepare, Transform, Analyze | The windows count real observations. It needs the calendars that step 2 declares. |
+| 3 | 1741 | Prepare, Transform, Analyze | The windows count real observations. It needs the calendars that step 2 declares. |
 | 4 | 1734 | Backtest | The backtest then trades a correct series, the way a real strategy could. |
-| 5 | Issue G | Report | Guards and reporting on top of correct values. |
+| 5 | 1742 | Report | Guards and reporting on top of correct values. |
 | 6 | 1673 | Analyze | The method values are chosen last, from backtests that no longer look ahead. |
 
 Step 6 is last on purpose. Any parameter chosen before steps 1 to 4 is chosen
