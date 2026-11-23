@@ -602,7 +602,8 @@ async function runReleaseOnce(
   journal.cutoverSeconds = cutoverSeconds(journal, target.rmEnv);
   writeJournal(runDir, journal);
   const side: Side = target.rmEnv;
-  if (journal.cutoverSeconds !== undefined) deps.log(`[${NAME}] cutover window ${MIGRATE_STEP[side]} to READY (${READY_STEP[side]}): ${journal.cutoverSeconds} s; the website stayed up (${PROBE_GRADE_STEP[side]})`);
+  const summary = cutoverSummary(journal, side);
+  if (summary !== undefined) deps.log(`[${NAME}] ${summary}`);
   deps.log(`\n[${NAME}] run ${runTs}: ${journal.status}. Step list ${hash}. Journal ${runDir}`);
   const note = endNote(journal, ids, inOrder(failedSteps), selected.at(-1), (stepId) => resumeCommand({ target: args.target!, go: args.go!, runTs, stepId, stageJournal: args.stageJournal }));
   // A final stage pass tears stage down once (issue 1684); a failed teardown leaves the run passed and says so.
@@ -682,6 +683,18 @@ export function cutoverSeconds(journal: Pick<RunJournal, "steps">, side: Side): 
   const b = journal.steps[READY_STEP[side]];
   if (a?.status !== "ok" || b?.status !== "ok" || !b.endedAt) return undefined;
   return Math.round((Date.parse(b.endedAt) - Date.parse(a.startedAt)) / 1000);
+}
+
+/**
+ * PURE. The cutover summary line, once the cutover window is known. It says the website stayed up only when
+ * the probe grade step passed; otherwise it names the grade step and its state (issue 1703).
+ */
+export function cutoverSummary(journal: Pick<RunJournal, "steps" | "cutoverSeconds">, side: Side): string | undefined {
+  if (journal.cutoverSeconds === undefined) return undefined;
+  const head = `cutover window ${MIGRATE_STEP[side]} to READY (${READY_STEP[side]}): ${journal.cutoverSeconds} s`;
+  const grade = journal.steps[PROBE_GRADE_STEP[side]];
+  if (grade?.status === "ok") return `${head}; the website stayed up (${PROBE_GRADE_STEP[side]})`;
+  return `${head}; the website probe grade ${PROBE_GRADE_STEP[side]} did not pass (${grade?.status ?? "not run"}), so this run does not show the website stayed up`;
 }
 
 function newJournal(target: ReleaseTarget, commit: string, hash: string, ids: readonly string[], go: ResolvedGo, runTs: string, now: Date): RunJournal {

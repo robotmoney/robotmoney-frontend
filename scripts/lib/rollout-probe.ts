@@ -65,8 +65,14 @@ export const PROBE_JITTER_MS = 2_000;
 export interface ProbeReceipt {
   /** Epoch milliseconds the probe asked. */
   at: number;
-  /** HTTP status of the answer; 0 when there was none. */
+  /** HTTP status of the answer; 0 when there was none or it timed out. */
   status: number;
+  /** Epoch milliseconds the answer (or the timeout) came; absent on receipts written before issue 1703. */
+  endedAt?: number;
+  /** endedAt minus at; absent on receipts written before issue 1703. */
+  latencyMs?: number;
+  /** The path asked, when the probe asks more than one. */
+  path?: string;
   /**
    * Set only on an answer from the maintenance status route (issue 1501): true
    * when it was a 200 whose body is a valid active MaintenanceStatus. A receipt
@@ -86,6 +92,21 @@ export function maintenanceAnswer(status: number, body: string): boolean {
 /** A receipt the site answered (`/`, `/version.json`), not the maintenance status route. */
 const isSiteAnswer = (r: ProbeReceipt): boolean => r.maintenance === undefined;
 
+/** The worst latency the probe saw on one path (issue 1703): a report, never a failure. `step` is the release step running then, when known. */
+export interface LatencyFinding { path: string; latencyMs: number; at: number; step?: string }
+
+/** PURE. The worst latencyMs per path, over the receipts that recorded one, ordered by path. */
+export function latencyReport(receipts: readonly ProbeReceipt[]): LatencyFinding[] {
+  const worst = new Map<string, LatencyFinding>();
+  for (const r of receipts) {
+    if (typeof r.latencyMs !== "number") continue;
+    const path = r.path ?? (r.maintenance === undefined ? "/" : "/api/status/maintenance");
+    const had = worst.get(path);
+    if (had === undefined || r.latencyMs > had.latencyMs) worst.set(path, { path, latencyMs: r.latencyMs, at: r.at });
+  }
+  return [...worst.values()].sort((a, b) => a.path.localeCompare(b.path));
+}
+
 export interface ProbeGrade {
   ok: boolean;
   receipts: number;
@@ -93,8 +114,12 @@ export interface ProbeGrade {
   nonOk: ProbeReceipt[];
   /** Site answers that were not 200 inside an excused span: a swap's measured gap (issue 1630). */
   excused?: ProbeReceipt[];
-  /** Gaps longer than the interval, as [from, to] epoch ms. */
+  /** Spans longer than the interval plus jitter with no successful site answer started in them, as [from, to] epoch ms. */
   gaps: Array<[number, number]>;
+  /** Maintenance status route answers that were not 200, outside every excused span and declared window (issue 1703). */
+  maintenanceFailures: ProbeReceipt[];
+  /** The worst latency per path (issue 1703). Slow answers are reported here and fail nothing. */
+  latency: LatencyFinding[];
   problems: string[];
 }
 
@@ -108,9 +133,12 @@ const inSpan = (spans: readonly ExcusedSpan[], at: number): boolean => spans.som
  * Grade the receipts of one window. `windowStart` and `windowEnd` (epoch ms)
  * bound it: the first receipt must land within one interval of the start and
  * the last within one interval of the end, so a probe that died is a failure.
- * A site answer that is not 200 fails the grade unless it was asked inside one
- * of `excused`: the gaps a swap's receipt measured (issue 1630). Nothing else is
- * excused, and an excused answer still counts toward the gap rule.
+ * A site answer that is not 200 (a timeout is status 0) fails the grade unless
+ * it was asked inside one of `excused`: the gaps a swap's receipt measured
+ * (issue 1630). The gap rule is measured on the starts of successful site
+ * answers (an excused one counts as successful), so a slow 200 is no gap
+ * (issue 1703). A maintenance status route answer that is not 200 outside an
+ * excused span fails too. Latency is reported, never failed.
  */
 export function gradeProbeReceipts(
   receipts: readonly ProbeReceipt[],
@@ -124,15 +152,19 @@ export function gradeProbeReceipts(
   const failedAnswers = sorted.filter((r) => r.status !== 200);
   const nonOk = failedAnswers.filter((r) => !inSpan(excused, r.at));
   const excusedAnswers = failedAnswers.filter((r) => inSpan(excused, r.at));
+  const maintenanceFailures = receipts.filter((r) => !isSiteAnswer(r) && r.status !== 200 && !inSpan(excused, r.at)).sort((a, b) => a.at - b.at);
   const gaps: Array<[number, number]> = [];
-  const marks = [window.start, ...sorted.map((r) => r.at), window.end];
+  const marks = [window.start, ...sorted.filter((r) => r.status === 200 || inSpan(excused, r.at)).map((r) => r.at), window.end];
   for (let i = 1; i < marks.length; i++) if (marks[i]! - marks[i - 1]! > limit) gaps.push([marks[i - 1]!, marks[i]!]);
   const problems: string[] = [];
   if (sorted.length === 0) problems.push("no probe receipts in the window");
   if (nonOk.length > 0) problems.push(`${nonOk.length} probe answer(s) were not 200${excused.length > 0 ? " outside the swap gap(s) the receipts recorded" : ""}`);
-  if (gaps.length > 0) problems.push(`${gaps.length} gap(s) between receipts exceeded ${intervalMs / 1000} s`);
-  return { ok: problems.length === 0, receipts: sorted.length, nonOk, ...(excused.length > 0 ? { excused: excusedAnswers } : {}), gaps, problems };
+  if (gaps.length > 0) problems.push(`${gaps.length} span(s) with no successful site answer exceeded ${(intervalMs + jitterMs) / 1000} s`);
+  if (maintenanceFailures.length > 0) problems.push(maintenanceProblem(maintenanceFailures.length));
+  return { ok: problems.length === 0, receipts: sorted.length, nonOk, ...(excused.length > 0 ? { excused: excusedAnswers } : {}), gaps, maintenanceFailures, latency: latencyReport(receipts), problems };
 }
+
+const maintenanceProblem = (n: number) => `${n} answer(s) of the maintenance status route were not 200 outside a declared maintenance window`;
 
 /**
  * Grade the receipts of a window that holds one declared maintenance window
@@ -157,15 +189,17 @@ export function gradeProbeWithDeclaredWindow(
   const limit = intervalMs + jitterMs;
   const inWindow = (at: number) => at >= declared.start && at <= declared.end;
   const gaps = base.gaps.filter(([from, to]) => !(from >= declared.start - limit && to <= declared.end + limit));
+  const maintenanceFailures = base.maintenanceFailures.filter((r) => !inWindow(r.at));
   const problems: string[] = [];
   if (base.receipts === 0) problems.push("no probe receipts in the window");
   if (base.nonOk.length > 0) problems.push(`${base.nonOk.length} probe answer(s) of the site were not 200 (the site stays up through a declared maintenance window)`);
   if (gaps.length > 0) problems.push(`${gaps.length} gap(s) outside the declared maintenance window exceeded ${intervalMs / 1000} s`);
+  if (maintenanceFailures.length > 0) problems.push(maintenanceProblem(maintenanceFailures.length));
   if (!receipts.some((r) => r.maintenance === true && inWindow(r.at))) problems.push("no answer inside the declared maintenance window announced an active maintenance window (/api/status/maintenance)");
-  return { ok: problems.length === 0, receipts: base.receipts, nonOk: base.nonOk, ...(base.excused !== undefined ? { excused: base.excused } : {}), gaps, problems };
+  return { ok: problems.length === 0, receipts: base.receipts, nonOk: base.nonOk, ...(base.excused !== undefined ? { excused: base.excused } : {}), gaps, maintenanceFailures, latency: base.latency, problems };
 }
 
-/** Receipts are JSON lines: {"at": <epoch ms>, "status": <int>}. */
+/** Receipts are JSON lines: {"at": <epoch ms>, "status": <int>}, with optional maintenance, path, endedAt and latencyMs (older lines lack the last three). */
 export function parseProbeReceipts(text: string): ProbeReceipt[] {
   return text
     .split("\n")
@@ -173,7 +207,13 @@ export function parseProbeReceipts(text: string): ProbeReceipt[] {
     .map((l) => {
       const r = JSON.parse(l) as Partial<ProbeReceipt>;
       if (typeof r.at !== "number" || typeof r.status !== "number") throw new Error(`bad probe receipt line: ${l}`);
-      return typeof r.maintenance === "boolean" ? { at: r.at, status: r.status, maintenance: r.maintenance } : { at: r.at, status: r.status };
+      return {
+        at: r.at, status: r.status,
+        ...(typeof r.maintenance === "boolean" ? { maintenance: r.maintenance } : {}),
+        ...(typeof r.endedAt === "number" ? { endedAt: r.endedAt } : {}),
+        ...(typeof r.latencyMs === "number" ? { latencyMs: r.latencyMs } : {}),
+        ...(typeof r.path === "string" ? { path: r.path } : {}),
+      };
     });
 }
 
@@ -181,24 +221,37 @@ export function readProbeReceipts(path: string): ProbeReceipt[] {
   return parseProbeReceipts(readFileSync(path, "utf8"));
 }
 
-/** One probe: ask `url` and say what came back. Never throws. */
-export async function probeOnce(url: string, fetchImpl: typeof fetch = fetch, now: () => number = Date.now): Promise<ProbeReceipt> {
+/** How long one ask may take before it is a timeout receipt (status 0). */
+export const PROBE_TIMEOUT_MS = 10_000;
+
+/** Wait for `p`, or resolve undefined after `ms`. The timer is cleared when `p` settles first. */
+function within<T>(p: Promise<T>, ms: number): Promise<T | undefined> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const limit = new Promise<undefined>((done) => { timer = setTimeout(() => done(undefined), ms); });
+  return Promise.race([p, limit]).finally(() => clearTimeout(timer));
+}
+
+/** Ask `url` once with its own timeout: the status and body, or status 0 when the fetch failed or timed out. Never throws. */
+async function ask(url: string, fetchImpl: typeof fetch, timeoutMs: number, readBody: boolean): Promise<{ status: number; body: string }> {
+  const go = (async () => {
+    const res = await fetchImpl(url, { cache: "no-store", signal: AbortSignal.timeout(timeoutMs) });
+    return { status: res.status, body: readBody ? await res.text() : "" };
+  })().catch(() => ({ status: 0, body: "" }));
+  return (await within(go, timeoutMs)) ?? { status: 0, body: "" };
+}
+
+/** One probe: ask `url` and say what came back, when it was asked and answered, and how long it took. Never throws. */
+export async function probeOnce(url: string, fetchImpl: typeof fetch = fetch, now: () => number = Date.now, timeoutMs: number = PROBE_TIMEOUT_MS): Promise<ProbeReceipt> {
   const at = now();
-  try {
-    const res = await fetchImpl(url, { cache: "no-store", signal: AbortSignal.timeout(10_000) });
-    return { at, status: res.status };
-  } catch {
-    return { at, status: 0 };
-  }
+  const { status } = await ask(url, fetchImpl, timeoutMs, false);
+  const endedAt = now();
+  return { at, status, endedAt, latencyMs: endedAt - at };
 }
 
 /** One ask of the maintenance status route (issue 1501): the receipt records whether it announced an active window. Never throws. */
-export async function probeMaintenance(url: string, fetchImpl: typeof fetch = fetch, now: () => number = Date.now): Promise<ProbeReceipt> {
+export async function probeMaintenance(url: string, fetchImpl: typeof fetch = fetch, now: () => number = Date.now, timeoutMs: number = PROBE_TIMEOUT_MS): Promise<ProbeReceipt> {
   const at = now();
-  try {
-    const res = await fetchImpl(url, { cache: "no-store", signal: AbortSignal.timeout(10_000) });
-    return { at, status: res.status, maintenance: maintenanceAnswer(res.status, await res.text()) };
-  } catch {
-    return { at, status: 0, maintenance: false };
-  }
+  const { status, body } = await ask(url, fetchImpl, timeoutMs, true);
+  const endedAt = now();
+  return { at, status, maintenance: maintenanceAnswer(status, body), endedAt, latencyMs: endedAt - at };
 }

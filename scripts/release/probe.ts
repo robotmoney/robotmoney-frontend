@@ -9,8 +9,12 @@
 // Every PROBE_EVERY_MS the probe asks `/` and `/version.json`, and
 // `/api/status/maintenance`, whose receipt records `maintenance: true` only for
 // a 200 with a valid active MaintenanceStatus body (issue 1501). The grade fails
-// on any site answer that is not 200, on a gap between ticks over the interval
-// plus jitter, and on a probe that died (scripts/lib/rollout-probe.ts). In a
+// on any site answer that is not 200 or timed out, on a span over the interval
+// plus jitter with no successful site answer started in it, on a probe that
+// died, and on a maintenance status route answer that is not 200 outside a
+// declared window (scripts/lib/rollout-probe.ts). Ticks start on the schedule
+// and ask the paths concurrently, so a slow 200 is reported in the grade's
+// latency report and is never a gap (issue 1703). In a
 // declared maintenance window the site still answers 200 (website-server stays
 // up), and the window must hold a receipt with `maintenance: true`. A
 // website-server swap may drop requests for its measured gap (web-serving-
@@ -99,12 +103,22 @@ export function swapGaps(journal: readonly ImageReceipt[], window: { start: numb
  */
 export function gradeRun(receipts: readonly ProbeReceipt[], window: { start: number; end: number }, steps: RunJournal["steps"], rmEnv: RunJournal["rmEnv"], everyMs: number, slackMs: number, gaps: readonly ExcusedSpan[] = []): ProbeGrade {
   const declared = declaredWindow(steps, rmEnv);
-  if (declared === "none") return gradeProbeReceipts(receipts, window, everyMs, slackMs, gaps);
-  if ("problem" in declared) {
-    const base = gradeProbeReceipts(receipts, window, everyMs, slackMs, gaps);
-    return { ...base, ok: false, problems: [declared.problem, ...base.problems] };
+  const grade = declared === "none" ? gradeProbeReceipts(receipts, window, everyMs, slackMs, gaps)
+    : "problem" in declared ? (() => { const base = gradeProbeReceipts(receipts, window, everyMs, slackMs, gaps); return { ...base, ok: false, problems: [declared.problem, ...base.problems] }; })()
+    : gradeProbeWithDeclaredWindow(receipts, window, declared.window, everyMs, slackMs, gaps);
+  return { ...grade, latency: grade.latency.map((f) => { const step = stepAt(steps, f.at); return step === undefined ? f : { ...f, step }; }) };
+}
+
+/** PURE. The id of the step running at `at` (epoch ms), from the run journal; the latest-started when several overlap. */
+export function stepAt(steps: RunJournal["steps"], at: number): string | undefined {
+  let best: { id: string; start: number } | undefined;
+  for (const r of Object.values(steps)) {
+    if (r.status === "skipped" || !r.startedAt) continue;
+    const start = Date.parse(r.startedAt);
+    const end = r.endedAt ? Date.parse(r.endedAt) : Infinity;
+    if (at >= start && at <= end && (best === undefined || start > best.start)) best = { id: r.id, start };
   }
-  return gradeProbeWithDeclaredWindow(receipts, window, declared.window, everyMs, slackMs, gaps);
+  return best?.id;
 }
 
 /** The image receipts `bun smoke:web` journaled for a target's instance on this control machine, oldest first; none when there is no journal. */
@@ -153,15 +167,29 @@ function flag(name: string): string | undefined {
   return at >= 0 ? process.argv[at + 1] : undefined;
 }
 
-async function loop(origin: string, out: string): Promise<never> {
-  for (;;) {
-    const tick = Date.now();
+export interface LoopDeps { readonly fetchImpl: typeof fetch; readonly now: () => number; readonly sleep: (ms: number) => Promise<unknown> }
+
+/**
+ * The probe loop (issue 1703). Tick k starts at start + k * everyMs, whatever earlier answers are doing: each
+ * tick asks every PROBE_PATHS path concurrently, each with its own timeout, and writes each receipt line as its
+ * answer comes. A tick the process missed (a stalled host) is skipped, not burst. Runs `ticks` ticks (forever by
+ * default), then waits for the answers still in flight.
+ */
+export async function probeLoop(origin: string, write: (line: string) => void, deps: LoopDeps = { fetchImpl: fetch, now: Date.now, sleep: Bun.sleep }, everyMs: number = PROBE_EVERY_MS, ticks: number = Infinity): Promise<void> {
+  const start = deps.now();
+  const inFlight = new Set<Promise<void>>();
+  for (let k = 0; k < ticks; k++) {
+    await deps.sleep(Math.max(0, start + k * everyMs - deps.now()));
+    k = Math.max(k, Math.floor((deps.now() - start) / everyMs));
     for (const path of PROBE_PATHS) {
       const url = new URL(path, origin).toString();
-      appendFileSync(out, `${JSON.stringify({ ...(await (path === MAINTENANCE_STATUS_PATH ? probeMaintenance(url) : probeOnce(url))), path })}\n`);
+      const asked = (path === MAINTENANCE_STATUS_PATH ? probeMaintenance : probeOnce)(url, deps.fetchImpl, deps.now)
+        .then((r) => write(`${JSON.stringify({ ...r, path })}\n`));
+      inFlight.add(asked);
+      void asked.finally(() => inFlight.delete(asked));
     }
-    await Bun.sleep(Math.max(0, PROBE_EVERY_MS - (Date.now() - tick)));
   }
+  await Promise.all(inFlight);
 }
 
 if (import.meta.main) {
@@ -169,7 +197,8 @@ if (import.meta.main) {
   const target = flag("--target");
   const runTs = flag("--run");
   if (mode === "loop") {
-    await loop(flag("--origin")!, flag("--out")!);
+    const out = flag("--out")!;
+    await probeLoop(flag("--origin")!, (line) => appendFileSync(out, line));
   }
   if (!target || !runTs || !/^\d{8}T\d{6}Z$/.test(runTs)) {
     console.error("usage: probe.ts start --origin <url> --target <name> --run <run-ts> | grade --target <name> --run <run-ts>");
@@ -207,6 +236,7 @@ if (import.meta.main) {
     writeFileSync(join(dir, "grade.json"), `${JSON.stringify({ ...grade, swapGaps: gaps, startMs: state.startMs, endMs }, null, 2)}\n`, { mode: 0o600 });
     const excused = grade.excused?.length ? `; ${grade.excused.length} failed answer(s) inside ${gaps.length} recorded swap gap(s) excused` : "";
     console.log(`[probe] ${grade.receipts} answers over ${Math.round((endMs - state.startMs) / 1000)} s: ${grade.ok ? `every answer 200, no gap${excused}` : grade.problems.join("; ")}`);
+    for (const f of grade.latency) console.log(`[probe] latency: worst ${f.path} ${f.latencyMs} ms at ${new Date(f.at).toISOString()}${f.step ? ` during ${f.step}` : ""} (reported, not graded)`);
     process.exit(grade.ok ? 0 : 1);
   } else {
     console.error(`unknown mode ${mode}`);
