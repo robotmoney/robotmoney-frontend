@@ -464,11 +464,6 @@ const META = {
     description: "What the four tracked entity types are and how discovery works in the Robot Money analytics dashboard.",
     robots: "noindex, nofollow",
   },
-  "/ask-mr-roboto": {
-    title: "Ask Mr. Roboto — Robot Money Analytics",
-    description: "Delegate a task to a tracked agent through the Robot Money analytics dashboard's chat assistant.",
-    robots: "noindex, nofollow",
-  },
   "/submit": {
     title: "Submit a Community Commit — Robot Money Analytics",
     description: "Submit an agent, coin, vault, or wallet for inclusion in the Robot Money analytics dashboard.",

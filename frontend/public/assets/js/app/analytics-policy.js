@@ -18,7 +18,7 @@ export function isPrivilegedRoute(pathname) {
     pathname = new URL(decoded, "https://robotmoney.network").pathname.replace(/\/+$/, "") || "/";
   }
   catch { return true; }
-  return /^\/(admin|dashboard|market|list|list2|list3|agents|lobster|vaults|wallets|methodology|about|ask-mr-roboto)(?:\/|$)/.test(pathname)
+  return /^\/(admin|dashboard|market|list|list2|list3|agents|lobster|vaults|wallets|methodology|about)(?:\/|$)/.test(pathname)
     || !!routeMetaFor(pathname)?.gated;
 }
 
