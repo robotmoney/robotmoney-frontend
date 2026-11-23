@@ -4,7 +4,7 @@
 - **Author:** lucky
 - **Methodology version:** v4 (`packages/analyst-sdk/src/analyze/regime-versions.ts`)
 - **Audited at:** `main` d3f89e8b0
-- **Companion:** `problem.md` (how the weights went wrong in v0 and in the refactor)
+- **Companions:** `problem.md` (every defect found, by pipeline phase), `design.md`, `remediation.md`
 
 This document states how the regime algorithm is meant to work. Code paths are
 cited so each step can be checked against it. Where the code differs from this
@@ -239,9 +239,74 @@ run-invariance rule.
 - **No forward reads:** a refit on *f* is unchanged when every row after *f* is
   removed from its input.
 
+## Rules by pipeline phase
+
+Each rule states the correct behaviour for one finding in `problem.md`. The
+IDs match. A rule marked *method choice* needs the quant analyst's decision
+before it is implemented (issue 1673). The spec states what must hold, and
+leaves the value open.
+
+### Extract
+
+| ID | Rule |
+|---|---|
+| E1 | Every source series declares a publication rule. A value is visible from the date it was published, not the period it describes. |
+| E2 | A run for day *t* reads each value as it was known on *t*. A later revision is visible from the date of the revision. |
+| E3 | A ratio of two prices is computed from raw closes. A dividend-adjusted close may be used only as adjusted on day *t*. |
+| E4 | A value fetched before its day is complete is marked provisional. The complete value replaces it as a revision, dated when the day closed. |
+| E5 | Each extractor documents which instant ends a day. A value for day *t* covers data up to the end of *t* in UTC. |
+
+### Prepare
+
+| ID | Rule |
+|---|---|
+| P1 | Every field a run returns for as-of day *t*, including display fields such as the last raw value, is cut at *t*. |
+| P2 | Each series declares its trading calendar: every day, or exchange days. The axis may carry a value forward on a closed day, and it marks that row as carried. |
+
+### Transform
+
+| ID | Rule |
+|---|---|
+| T1 | A window counts the series's own observation days. For an exchange-day series, `trend_50_200` covers 50 and 200 trading days. The result is then placed on the calendar axis. A window meant in calendar days says so in its name. |
+
+### Analyze
+
+| ID | Rule |
+|---|---|
+| A1 | Weights are refit only on the fixed refresh calendar. Day *t* uses the fit from the latest refresh date on or before *t*. See [The weights](#the-weights). |
+| A2 | The rank window and the weight window count each real observation once. A carried row is not a new observation. |
+| A3 | *Method choice.* The minimum number of observations before a rank is produced is a declared parameter, sized against the window. |
+| A4 | *Method choice.* The label cut-offs are calibrated to the spread of the series they cut. Either the series is put on an even 0-to-1 scale first, or the cut-offs are set from its own distribution. |
+| A5 | *Method choice.* The weight cap is defined for every panel size. When the cap cannot be met, the rule says what applies instead. |
+| A6 | *Method choice.* The redundancy measure states how a negative correlation counts. |
+| A7 | A day with a missing included panel is incomplete. The composite is not re-based onto the remaining panels. Panel weighting in the composite is a declared parameter. |
+| A8 | *Method choice.* Smoothing declares a buffer zone at each cut-off, and the series on which the fast-track σ is measured. |
+
+### Backtest
+
+| ID | Rule |
+|---|---|
+| B1 | A label known at day *t*'s close is traded no earlier than the next trading session. |
+| B2 | No trade executes in a closed market. It waits for that market's next open day. |
+| B3 | Sharpe uses daily returns after costs, minus that day's cash rate. An all-cash portfolio reports 0. |
+| B4 | Each methodology version declares an adoption date. Results before it are reported as in-sample, and results after it as out-of-sample. |
+| B5 | The cash rate is converted from its quoted basis to a yield before it is compounded. |
+| B6 | The cost rate is declared per asset. |
+| B7 | Max drawdown is measured on daily values. |
+| B8 | The backtest trades the run-invariant series (A1), built from data known on each day (E1 to E3). |
+
+### Report and consume
+
+| ID | Rule |
+|---|---|
+| R1 | A correlation over overlapping windows reports its effective sample size next to n. |
+| R2 | No decision input reads a forward-looking statistic. A test enforces it. |
+| R3 | A research comparison reports in-sample and out-of-sample results apart, split at the adoption date (B4). |
+| R4 | No language model is asked to act as of a date before its training cutoff. A historical committee simulation is refused. |
+| R5 | Every value the swarm brief and the judge receive is a value for the as-of day, under the rules above. |
+
 ## Out of scope here
 
-- Dating source data by its release date: issue 1733.
-- Backtest execution timing, and keeping in-sample results apart from
-  out-of-sample ones: issue 1734.
-- Where v0 and the refactor depart from the weight rules above: `problem.md`.
+- Choosing the values of the *method choice* rules: issue 1673.
+- The design for each rule: `design.md`.
+- The order of work and where each rule is tracked: `remediation.md`.

@@ -1,4 +1,4 @@
-# Remediation: removing the last-day weight refit
+# Remediation: the last-day weight refit, and the other audit findings
 
 - **Date:** 2026-11-23
 - **Author:** lucky
@@ -118,3 +118,76 @@ Record each answer here before step 1.
   diff note lists every changed label day.
 - **Rollback:** revert the PR. v3 runs still replay exactly. v4 runs computed
   under the corrected rule stop replaying exactly, because v4 is changed in place.
+
+## Remediation for all findings, by phase
+
+Sections 0 to 8 above fix the main finding (A1, issue 1739). This part places
+every other finding from `problem.md`.
+
+### Where each finding is tracked
+
+| ID | Phase | Finding | Tracked in | Action still needed |
+|---|---|---|---|---|
+| E1 | Extract | Series dated by period | 1733 | none |
+| E2 | Extract | Revisions replayed into the past | 1733 | none |
+| E3 | Extract | Dividend-adjusted closes | 1733 | none |
+| E4 | Extract | Partial-day capture | 1733 | add a line: a same-day refetch is a revision |
+| E5 | Extract | UTC day boundary per extractor | none | add to 1733 as an audit task |
+| P1 | Prepare | `lastRaw` not cut at as-of | 1733 | add a line |
+| P2 | Prepare | Carried rows not marked | none | new issue W (below) |
+| T1 | Transform | Calendar-day windows | none | new issue W |
+| A1 | Analyze | Last-day weight refit | 1739 | none |
+| A2 | Analyze | Fridays counted three times | none | new issue W |
+| A3 | Analyze | 30-observation rank warm-up | 1673 | add as a parameter to choose |
+| A4 | Analyze | Cut-offs on a bunched composite | 1673 | add as a parameter to choose |
+| A5 | Analyze | Cap does nothing in a small panel | 1673 | add as a parameter to choose |
+| A6 | Analyze | Absolute correlation | 1673 | add as a parameter to choose |
+| A7 | Analyze | Composite jumps on a missing panel | none | new issue W |
+| A8 | Analyze | Smoothing buffer and σ | 1673 | add as a parameter to choose |
+| B1 | Backtest | Same-close trade | 1734 | none |
+| B2 | Backtest | Closed-market trade | 1734 | none |
+| B3 | Backtest | Sharpe | 1734 | none |
+| B4 | Backtest | Hindsight reported as out-of-sample | 1734 | none |
+| B5 | Backtest | Cash rate basis | 1734 | add a line |
+| B6 | Backtest | ETH cost rate | 1734 | add a line |
+| B7 | Backtest | Max drawdown series | 1734 | add a line |
+| B8 | Backtest | Inherited defects | 1733, 1739 | none |
+| R1 | Report | Effective sample size | none | new issue G (below) |
+| R2 | Report | Forward statistics as inputs | none | new issue G |
+| R3 | Report | Full-sample comparisons | 1734 | none |
+| R4 | Report | Historical committee replay | none | new issue G |
+| R5 | Report | Swarm brief contents | none | new issue G, as a review task |
+
+### Issues still to file
+
+- **Issue W, observation-day windows:** P2, T1, A2 and A7. One methodology
+  change, because all four move past values. It needs the quant analyst's
+  sign-off.
+- **Issue G, guards and reporting:** R1, R2, R4 and R5. It changes no
+  computed value.
+
+### Order of work
+
+Each step builds on correct output from the one before. All of them regenerate
+the v4 golden fixtures, so they merge one at a time.
+
+| Order | Issue | Phase | Why here |
+|---|---|---|---|
+| 1 | 1739 | Analyze | It makes the calculation give one answer per day. Every later check depends on that. |
+| 2 | 1733 | Extract, Prepare | It makes the input for each day correct. The whole-pipeline test passes after it. |
+| 3 | Issue W | Prepare, Transform, Analyze | The windows count real observations. It needs the calendars that step 2 declares. |
+| 4 | 1734 | Backtest | The backtest then trades a correct series, the way a real strategy could. |
+| 5 | Issue G | Report | Guards and reporting on top of correct values. |
+| 6 | 1673 | Analyze | The method values are chosen last, from backtests that no longer look ahead. |
+
+Step 6 is last on purpose. Any parameter chosen before steps 1 to 4 is chosen
+from evidence that carries the defects above.
+
+### Check for the whole set
+
+- **Each step:** the step's own acceptance checks pass, and the golden
+  fixtures are regenerated with a note of what moved.
+- **After step 2:** the whole-pipeline test in `design.md` passes.
+- **After step 4:** the published backtest statistics are restated once, with
+  a changelog line naming each cause.
+- **Published rows:** frozen rows are never restated by any step.

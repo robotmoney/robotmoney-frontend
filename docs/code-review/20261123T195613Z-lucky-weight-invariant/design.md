@@ -1,4 +1,4 @@
-# Design: run-invariant panel weights
+# Design: run-invariant panel weights, and the other audit findings
 
 - **Date:** 2026-11-23
 - **Author:** lucky
@@ -177,3 +177,90 @@ on current `main`, which shows the defect, and passes after the change.
     applicable).
 - **Decisions:** add a decision to `docs/decisions.md`. Weights follow a
   fixed refresh calendar, and no step may depend on the run's end date.
+
+## Design for the other findings, by phase
+
+The sections above cover the main finding (A1). This part gives the design
+direction for every other finding in `problem.md`, by pipeline phase. The IDs
+match `problem.md` and the rules in `spec.md`.
+
+### One shared mechanism: knowledge time
+
+Findings E1, E2, E4 and P1 share one cause: a value is selected by the day it
+describes, not by the day it was known. One mechanism fixes all four.
+
+- **Each stored value has two dates:** the observation date (the day or
+  period it describes) and the known date (when it became public, or when the
+  revision was fetched).
+- **Each read takes an as-of day:** it returns, for every observation date,
+  the latest value whose known date is on or before the as-of day.
+- **The ledger already holds this.** `source_value_versions` records each
+  value with its fetch time. The read path needs the cut. It needs no
+  migration.
+
+### Extract
+
+| ID | Design |
+|---|---|
+| E1 | Add a `publication` rule to each registry indicator and research input, next to `fill`. Kinds: `same-day`, `lag` (a number of days), and `release-calendar` (weekly on a weekday, month end, quarter plus weeks). The loader refuses an indicator without one, as it does for `fill`. For FRED series, first-release dates come from ALFRED (`extract/fred.ts`, `firstReleaseValues`). |
+| E2 | `loadCommittedInputs` and `asofLabels` take a knowledge-time cut-off. The backtest and the history replay build their input through it. |
+| E3 | Set `ratioClose: "raw"` on the equity ratios, and compute `SPX_TREND` from the raw close. The legs are already stored separately (issue 1644). |
+| E4 | An acquisition made before the UTC day ends is stored with a `provisional` flag. The first fetch after the day ends is a revision with that known date. |
+| E5 | Add a day-boundary note to each extractor's header, and a test per source with a fixture around midnight UTC. |
+
+### Prepare
+
+| ID | Design |
+|---|---|
+| P1 | `prepareRegimeInputs` cuts `lastRaw` at the as-of day. The "Not cut at asof" exception is removed. |
+| P2 | Add `calendar: "daily" \| "exchange"` to each indicator. `prepareRegimeInputs` returns a `carried` mask per indicator (it already computes the fill age: carried means age > 0). |
+
+### Transform
+
+| ID | Design |
+|---|---|
+| T1 | `applyTransform` runs on the series's own observations for an `exchange` series, then aligns the result to the axis. A `daily` series is unchanged. Rename nothing: `trend_50_200` then means what it says. This is a methodology change and ships with A2. |
+
+### Analyze
+
+| ID | Design |
+|---|---|
+| A2 | `rollingPercentileRank` and the weight fit take the `carried` mask and skip carried rows when counting. Window lengths stay in calendar days, so 1,095 days still means three years. |
+| A3 to A6, A8 | Each becomes a declared parameter of the methodology version, next to `REGIME_LOOKBACK`, with today's value as the default. The tooling ships first, and the values are chosen in issue 1673. |
+| A7 | `computeRegime` returns no composite for a day with a missing included panel. The complete-day rule (issue 1655) already refuses such a day for the live run. This extends it to every past row. |
+
+T1, A2 and A7 change past values. They ship as one methodology change, so
+history moves once.
+
+### Backtest
+
+| ID | Design |
+|---|---|
+| B1 | `scheduleFromLabels` takes a `lagSessions` option, default 1. The reference backtest uses it. |
+| B2 | `simulate` takes a per-asset `calendar`. A target change on a closed day is held and applied at that asset's next open day. |
+| B3 | `periodStats` receives post-cost returns and the cash rate series, and computes Sharpe on the difference. |
+| B4 | `regime-versions.ts` declares `adoptedOn` per version. `periodStats` splits at it, replacing `BACKTEST_IN_SAMPLE_END`. |
+| B5 | Convert `DTB3` from discount basis to a bond-equivalent yield in one helper, used by both simulators. |
+| B6 | `SimulateOptions.costBps` accepts a per-asset map. |
+| B7 | `periodStats` requires daily values and throws on a sparser series. |
+| B8 | No design of its own. It is met when E1 to E3 and A1 are done. |
+
+### Report and consume
+
+| ID | Design |
+|---|---|
+| R1 | `CorrelationCell` gains `n_eff` (n divided by the horizon, rounded down). The page reads it. |
+| R2 | Add a purity test: no module under `allocate/` or `backend/src/swarm/` imports `analyze/correlations.ts`. |
+| R3 | Both comparison generators call `periodStats` with the adoption-date split (B4). |
+| R4 | Add a guard in the swarm session entry point: a session whose as-of date is before the configured model's cutoff date is refused with a named error. |
+| R5 | Review task, not a design: list each brief field and its source, then apply the rules above. |
+
+### Test that covers every phase
+
+The run-invariance test in the Tests section above checks A1 on identical
+inputs. A second test checks the whole pipeline:
+
+> For sampled days *t*, a run as of *t* on data known on *t* equals row *t* of
+> a later full run that reads through the knowledge-time cut.
+
+It fails today because of E1, E2, E4 and A1. It passes when those are fixed.
