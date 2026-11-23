@@ -131,6 +131,15 @@ export const SETTLE_CHECK = [
   "Ok", "Window", "Caller", "Paused", "Sequencer", "Feed", "UsdcPeg", "TwapQuorum", "TwapVsFeed", "LendRate",
   "SharePrice", "RedeemLeg", "DepositLeg", "Proportion", "RealizedPrice",
 ];
+/**
+ * topic0 of the queue's request events, whose first indexed field is the new
+ * request's id: `DepositRequested(uint256,address,address,uint256,uint64)` and
+ * `RedeemRequested(uint256,address,address,uint256,uint64)` (FlowTypes.sol).
+ */
+export const REQUEST_TOPICS = Object.freeze([
+  "0xb8cbb91f85c0ecbb8b541805846bc3a6e090a8147b47523c51583a4815daebf9",
+  "0x4e6558a3f3bfe9109a9a42f577ad5068d47c1e903f1f059cd8844db8d524d879",
+]);
 /** `RequestStatus`. */
 export const REQUEST_STATUS = ["None", "Pending", "Expired", "Closed"];
 export const PRICE_SCALE = 10n ** 36n;

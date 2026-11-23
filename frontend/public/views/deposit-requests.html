@@ -74,7 +74,7 @@
     <template x-if="connected() && onBase()">
       <div class="dp__stack dp__stack--loose">
         <div class="dp__facts">
-          <template x-for="f in facts()" :key="f.key"><div class="dp__fact"><span class="dp__lbl" x-text="f.label"></span><b x-text="f.value"></b></div></template>
+          <template x-for="f in facts()" :key="f.key"><div class="dp__fact"><span class="dp__lbl"><span x-text="f.label"></span><template x-if="f.tip"><span class="rm-tip"><button class="rm-tip__btn" type="button" :aria-label="`About ${f.label}`">i</button><span class="rm-tip__bub" role="tooltip" x-text="f.tip"></span></span></template></span><b x-text="f.value"></b></div></template>
           <template x-if="!facts().length"><div class="dp__fact"><span class="dp__lbl">Shares</span><b>—</b></div></template>
         </div>
 
@@ -86,14 +86,14 @@
         <template x-if="pending()">
           <div class="dp__banner">
             <div class="dp__bannerl"><svg class="dp__spin" width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="#f2f4f9" stroke-width="1.6" aria-hidden="true"><circle cx="10" cy="10" r="7" stroke="#2e3a4e"></circle><path d="M10 3a7 7 0 0 1 7 7"></path></svg><p><span x-text="pending().label"></span> is sent and waiting for Base.</p></div>
-            <template x-if="pendingUrl()"><a class="dp__txt" :href="pendingUrl()" target="_blank" rel="noopener noreferrer">Basescan</a></template>
+            <template x-if="pendingUrl()"><a class="dp__ext" :href="pendingUrl()" target="_blank" rel="noopener noreferrer">Basescan</a></template>
           </div>
         </template>
 
         <!-- Ready to claim (board 6) -->
         <template x-if="readyDeposits().any">
           <div class="dp__banner">
-            <div class="dp__bannerl"><i class="dp__dot is-ok" aria-hidden="true"></i><p><span class="dp__mono" x-text="`${fmtShares(readyDeposits().shares)} shares`"></span> from <span x-text="fmtUsdc(readyDeposits().paid)"></span> of deposits are ready.</p></div>
+            <div class="dp__bannerl"><i class="dp__dot is-ok" aria-hidden="true"></i><p><span class="dp__mono" x-text="fmtRm(readyDeposits().shares)"></span> from <span x-text="fmtUsdc(readyDeposits().paid)"></span> of deposits is ready.</p></div>
             <div class="dp__bannerr">
               <button type="button" class="btn-primary dp__btn dp__btn--auto" :disabled="!!busy" @click="claimShares()" x-text="busy === 'claim-shares' ? busyText : 'Claim into wallet'"></button>
               <p class="dp__err" x-show="errKey === 'claim-shares'" x-text="errText"></p>
@@ -102,7 +102,7 @@
         </template>
         <template x-if="readyRedemptions().any">
           <div class="dp__banner">
-            <div class="dp__bannerl"><i class="dp__dot is-ok" aria-hidden="true"></i><p><span class="dp__mono" x-text="fmtUsdc(readyRedemptions().usdc)"></span> from <span x-text="`${fmtShares(readyRedemptions().shares)} shares`"></span> redeemed is ready.</p></div>
+            <div class="dp__bannerl"><i class="dp__dot is-ok" aria-hidden="true"></i><p><span class="dp__mono" x-text="fmtUsdc(readyRedemptions().usdc)"></span> from <span x-text="fmtRm(readyRedemptions().shares)"></span> redeemed is ready.</p></div>
             <div class="dp__bannerr">
               <button type="button" class="btn-primary dp__btn dp__btn--auto" :disabled="!!busy" @click="claimUsdc()" x-text="busy === 'claim-usdc' ? busyText : 'Claim into wallet'"></button>
               <p class="dp__err" x-show="errKey === 'claim-usdc'" x-text="errText"></p>
@@ -145,7 +145,7 @@
                     <td><a :href="r.href" x-text="r.kind"></a><span class="dp__sub" x-text="r.created"></span></td>
                     <td class="n" x-text="r.amount"></td>
                     <td class="n"><span :class="r.tone === 'off' && r.pct === 0 ? 'dp__muted' : ''" x-text="r.filled"></span><template x-if="r.out"><span class="dp__sub" x-text="`→ ${r.out}`"></span></template><template x-if="r.tone === 'filling'"><span class="dp__bar" aria-hidden="true"><i :style="`width:${r.pct}%`"></i></span></template></td>
-                    <td><span class="dp__stage" :class="`is-${r.tone}`"><i aria-hidden="true"></i><span x-text="r.stage"></span></span><template x-if="r.sub"><span class="dp__sub" x-text="r.sub"></span></template></td>
+                    <td><span class="dp__stage" :class="`is-${r.tone}`"><i aria-hidden="true"></i><span x-text="r.stage"></span></span><template x-if="r.sub"><span class="dp__sub"><span x-text="r.sub"></span><template x-if="r.tip"><span class="rm-tip"><button class="rm-tip__btn" type="button" :aria-label="`About ${r.stage}`">i</button><span class="rm-tip__bub" role="tooltip" x-text="r.tip"></span></span></template></span></template></td>
                     <td class="n"><span :class="r.next ? '' : 'dp__muted'" x-text="r.next || '—'"></span><template x-if="r.nextIn"><span class="dp__sub" x-text="r.nextIn"></span></template></td>
                     <td class="dp__acts">
                       <template x-if="r.canCancel && asking !== r.id"><button type="button" class="dp__txt" :disabled="!!busy" @click="asking = r.id" x-text="r.filledShort ? 'Cancel unfilled' : 'Cancel'"></button></template>

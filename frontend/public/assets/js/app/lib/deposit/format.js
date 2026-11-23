@@ -14,6 +14,14 @@ export function fmtShares(n) {
   if (n == null || !Number.isFinite(n)) return "—";
   return n.toLocaleString("en-US", { minimumFractionDigits: 4, maximumFractionDigits: 4 });
 }
+/**
+ * The vault's share token as a wallet shows it: the fund's `symbol()` on Base,
+ * read 17 Nov 2026 (name "Robot Money Fund"). A share amount carries it, so
+ * the page and the wallet name the same thing; sentences still say "shares".
+ */
+export const SHARE_SYMBOL = "rmFUND";
+/** "1,500.4210 rmFUND". @param {number|null|undefined} n */
+export const fmtRm = (n) => `${fmtShares(n)} ${SHARE_SYMBOL}`;
 /** "1.0213 USDC". @param {number|null|undefined} p */
 export const fmtPrice = (p) => (p == null || !Number.isFinite(p) ? "—" : `${p.toFixed(4)} USDC`);
 /** "25%", "24.6%". @param {number|null|undefined} bps */

@@ -26,6 +26,9 @@ export const REOWN_PROJECT_ID = "47925b0f4aa68c28fb5b0760e9dd0a36";
 let loading = null;
 
 /** Load the kit once and open a session. Resolves to the handle the page uses. */
+/** EIP-1967: keccak256("eip1967.proxy.implementation") - 1. */
+const IMPL_SLOT = "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc";
+
 export function loadWallet() {
   // A literal specifier: the asset stamper (scripts/lib/stamp-assets.ts) refuses a
   // computed import(), and vendor files are versioned by name, so this stays as is.
@@ -35,13 +38,16 @@ export function loadWallet() {
 
 function boot(kit) {
   const networks = [kit.base];
-  const adapter = new kit.WagmiAdapter({ networks, projectId: REOWN_PROJECT_ID });
+  // A local-only node (manifest.js `rpc`, an anvil fork) replaces Base's RPC for reads and sends alike.
+  const customRpcUrls = MANIFEST.rpc ? { [`eip155:${MANIFEST.chainId}`]: [{ url: MANIFEST.rpc }] } : undefined;
+  const adapter = new kit.WagmiAdapter({ networks, projectId: REOWN_PROJECT_ID, customRpcUrls });
   const config = adapter.wagmiConfig;
   const modal = kit.createAppKit({
     adapters: [adapter],
     networks,
     defaultNetwork: kit.base,
     projectId: REOWN_PROJECT_ID,
+    customRpcUrls,
     metadata: {
       name: "Robot Money",
       description: "Deposit into the Robot Money model portfolio",
@@ -94,6 +100,13 @@ function boot(kit) {
       const res = await kit.readContracts(config, { contracts: cs.map((c) => ({ chainId: MANIFEST.chainId, ...c })), allowFailure: false });
       return res;
     },
+    /** A mined transaction's receipt. */
+    receipt: (hash) => kit.getTransactionReceipt(config, { chainId: MANIFEST.chainId, hash }),
+    /** The implementation behind a proxy: its EIP-1967 slot. */
+    async implementationOf(address) {
+      const v = await kit.getStorageAt(config, { chainId: MANIFEST.chainId, address, slot: IMPL_SLOT });
+      return v ? `0x${v.slice(-40)}` : null;
+    },
     async ethBalance(address) {
       const b = await kit.getBalance(config, { chainId: MANIFEST.chainId, address });
       return Number(kit.formatUnits(b.value, 18));
@@ -114,7 +127,7 @@ function boot(kit) {
     },
     /** Send one call and wait for it to be mined. Resolves to the hash. `onSent` fires with the hash first. */
     async write(call, onSent) {
-      const hash = await kit.writeContract(config, { chainId: MANIFEST.chainId, address: call.to, abi: call.abi, functionName: call.functionName, args: call.args });
+      const hash = await kit.writeContract(config, { chainId: MANIFEST.chainId, address: call.to, abi: call.abi, functionName: call.functionName, args: call.args, ...(call.gas ? { gas: call.gas } : {}) });
       onSent?.(hash);
       await kit.waitForTransactionReceipt(config, { chainId: MANIFEST.chainId, hash });
       return hash;
