@@ -3,10 +3,11 @@
 // Monument hero (app/home/*).
 //
 // Reads, each failing on its own:
-//   the latest recommendation  the model portfolio itself, through the same
-//                              loader /allocation and the vault pages use, so
-//                              the home ring can never disagree with theirs
-//   the allocation framework   each sleeve's assets, and the hero's lane names
+//   the latest recommendation  the model portfolio itself and the regime
+//                              reading it was made on, through the same loader
+//                              /allocation and the vault pages use
+//   the allocation framework   each sleeve's assets, the hero's lane names, and
+//                              the targets in force when no session has weights
 //   the swarm roster           analysts and judges, and the seats left
 //   the regime snapshots       the block under the ring (home-regime.js), read
 //                              only as that section nears the viewport
@@ -46,6 +47,20 @@ const EMPTY_RING = `<svg class="sv__wdonut" viewBox="0 0 42 42" aria-hidden="tru
 /** "86.5%": one decimal at most, no trailing zero. @param {number} v */
 const pctText = (v) => `${Number(v.toFixed(1))}%`;
 
+/**
+ * The regime reading a session was given, for the block under the ring: its
+ * composite and label, on the session's date. Null when the session carries
+ * no usable reading, and the block reads today's snapshot instead.
+ * @param {any} s
+ * @returns {{ composite: number, regime: string, date: string } | null}
+ */
+function sessionReading(s) {
+  const rs = s?.regimeSummary ?? s?.regime_summary;
+  const c = rs?.composite;
+  if (c === null || c === undefined || c === "" || !Number.isFinite(Number(c)) || !rs?.regime) return null;
+  return { composite: Number(c), regime: String(rs.regime), date: String(s.date || s.publishedAt || "").slice(0, 10) };
+}
+
 const reducedMotion = () => !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 
 // The hero copy rises in on CSS alone, from first paint of the prerendered
@@ -62,7 +77,7 @@ export function registerHomeView(Alpine) {
   Alpine.data("homeView", () => ({
     ...allocationFramework(),
 
-    /** @type {null | { date: string, receiptHref: string | null, rows: { key: string, label: string, pct: number, colour: string, assets: string }[], ringHtml: string }} */
+    /** @type {null | { date: string, receiptHref: string | null, rows: { key: string, label: string, pct: number, colour: string, assets: string }[], ringHtml: string, reading: { composite: number, regime: string, date: string } | null }} */
     model: null,
     modelLoaded: false,
     // The latest published session, where a reader sees the takes, the
@@ -113,16 +128,17 @@ export function registerHomeView(Alpine) {
       if (this._destroyed) return;
 
       const session = rec.status === "fulfilled" ? rec.value?.session : null;
-      // The targets in force, as the model portfolio page reads them
-      // (RM-115): the framework's sleeves in its published order. The latest
-      // session's weights stand in only when the framework cannot be read,
-      // leaving out a closed sleeve it gives 0%; the session's own page keeps
-      // it.
-      const fw = this._targetRows();
-      const rows = fw.length ? fw : session
+      // The swarm's latest recommendation (RM-215): the newest published
+      // allocation session with weights, dated and with its receipt, so the
+      // ring is what the swarm made and the regime block beside it is the
+      // reading that session was given. A closed sleeve it gives 0% is left
+      // out; the session's own page keeps it. The targets in force (the model
+      // portfolio page's) stand in only when no session has weights.
+      const recRows = session
         ? (sessionSummary.sessionWeights(session) || []).filter((r) => !retiredAndEmpty(r.key, r.pct))
         : [];
-      const fromSession = !fw.length && !!session;
+      const fromSession = recRows.length > 0;
+      const rows = fromSession ? recRows : this._targetRows();
       this.latestSessionHref = session ? sessionTakes().sessionHref(session) : null;
       const fwSession = this.allocationFw?.provenance?.sessionId;
       this.model = rows.length ? {
@@ -130,6 +146,7 @@ export function registerHomeView(Alpine) {
         receiptHref: fromSession ? sessionTakes().sessionHref(session) : fwSession ? `/swarm/sessions/${fwSession}` : null,
         rows: rows.map((r) => ({ ...r, assets: this._assetsFor(r.key) })),
         ringHtml: sessionSummary.ringSvg(rows),
+        reading: fromSession ? sessionReading(session) : null,
       } : null;
       this.modelLoaded = true;
 

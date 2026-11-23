@@ -1030,7 +1030,7 @@ test("a live aggregate reached by id draws the record from its own brief and pri
   // Live method: factor is context, drawn apart.
   await expect(context.locator(".sig__row").nth(3)).toHaveClass(/is-context/);
   // Its row says so on hover, and each label opens its panel on the regime page.
-  await expect(context.locator(".sig__row").nth(3).locator(".rr-meta__i")).toHaveAttribute("title", /Not in the composite/);
+  await expect(context.locator(".sig__row").nth(3).locator(".rr-meta__i")).toHaveAttribute("title", /left out of this reading's composite/);
   await expect(context.locator(".sig__row").nth(3).locator("a.sig__l")).toHaveAttribute("href", "/regime#panel-factor");
   await expect(context.locator(".sig__row.is-lead a.sig__l")).toHaveAttribute("href", "/regime#composite");
 
@@ -1268,7 +1268,7 @@ test("a v0 session imported past the archive date draws factor as the input it w
   await expect(signal.locator(".sig__row")).toHaveCount(4);
   await expect(signal.locator(".sig__row").nth(3)).not.toHaveClass(/is-context/);
   await expect(signal.locator(".rr-note")).toHaveText("Each index is a weighted mean of its indicators' percentiles, on a scale of 0 to 1.");
-  await expect(signal.locator(".sig__row").nth(3).locator(".rr-meta__i")).toHaveAttribute("title", /in the composite of this older reading/);
+  await expect(signal.locator(".sig__row").nth(3).locator(".rr-meta__i")).toHaveAttribute("title", /averaged into the composite/);
 });
 
 // From v0.10.0 a session stores no composite percentile (#1685). The composite
@@ -1298,6 +1298,11 @@ test("a reading with no composite percentile and with panel levels plots every l
   await expect(signal.locator(".sig__row .sig__dot")).toHaveCount(4);
   await expect(signal).not.toContainText(/\b\d{1,3}(st|nd|rd|th)\b/);
   await expect(signal.locator(".sig")).toHaveAttribute("aria-label", "Index levels, on a scale of 0 to 1: Composite 0.325, Macro 0.315, On-chain 0.334, Equity factor 0.391.");
+  // From 21 Nov 2026 the composite averages factor too (#1709), so factor is
+  // an input like the other two, and the tips say so (RM-214).
+  await expect(signal.locator(".sig__row").nth(3)).not.toHaveClass(/is-context/);
+  await expect(signal.locator(".sig__row").nth(3).locator(".sig__tip span")).toHaveText("Eight equity factor signals, averaged into the composite.");
+  await expect(signal.locator(".sig__row.is-lead .sig__tip span")).toHaveText("Macro, on-chain and equity factor averaged. Its cuts set the regime.");
 });
 
 // A sleeve published with no weight has none: it is not a move to zero.
