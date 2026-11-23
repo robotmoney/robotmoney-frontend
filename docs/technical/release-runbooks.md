@@ -498,7 +498,9 @@ C22-collect-logs copies every container's logs and `docker inspect` into the jou
 from v0.7.0) run the analyst SDK against the target from the control machine, read-only. From release v0.7.4,
 Q37a-db-stats and C25a-db-stats (`scripts/release/db-stats-check.ts`, issue 1581) exit non-zero unless `pg_extension`
 lists `pg_stat_statements` and `rm_readonly` reads other roles' rows in `pg_stat_statements` and `pg_stat_activity`
-with no query text hidden. Q37b-jobs-plans (`scripts/release/jobs-query-plans.ts`, stage only) runs `EXPLAIN
+with no query text hidden. Hidden `pg_stat_activity` sessions of a managed-provider role (default `postgres`, DigitalOcean's
+management-agent; `DB_STATS_PROVIDER_ROLES` replaces the list, issue 1720) are excluded and listed in the receipt; a
+hidden session of any other role refuses and names it. Q37b-jobs-plans (`scripts/release/jobs-query-plans.ts`, stage only) runs `EXPLAIN
 (ANALYZE, BUFFERS)` of the jobs-table reads on production's dump as `rm_readonly` and exits non-zero unless the reaper,
 the enqueue live guard, livePayloadField and the backlog sweep use `jobs_live_kind_locked_idx` with no Seq Scan on
 `jobs` and run under 10 ms, and the admin job counts run under 50 ms with no heap scan of `jobs` executed. Sessions are deferred in the

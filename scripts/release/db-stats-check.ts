@@ -19,7 +19,15 @@
 //   * pg_stat_statements answers, holds rows of other roles, and hides none
 //     of their query text;
 //   * pg_stat_activity holds client sessions of other roles, and hides none
-//     of their query text.
+//     of their query text, apart from sessions of a managed-provider role.
+//
+// MANAGED-PROVIDER ROLES (issue 1720). DigitalOcean's managed Postgres keeps a
+// `postgres` superuser session (application_name management-agent) whose query
+// text no customer role may read, pg_read_all_stats included. Sessions of a role
+// on the allowlist are excluded from the hidden count and listed in the receipt.
+// The default is PROVIDER_ROLES; DB_STATS_PROVIDER_ROLES (comma-separated)
+// replaces it.
+//
 // It writes db-stats-check.json to --receipt-dir. Reads only.
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -30,14 +38,32 @@ export interface DbStatsFound {
   readonly readAllStats: boolean;
   readonly statements: { readonly otherRoles: number; readonly hidden: number } | null;
   readonly statementsError: string | null;
-  readonly activity: { readonly otherRoles: number; readonly hidden: number };
+  /** `hiddenRoles` holds the role of each other-role session whose query text is hidden. */
+  readonly activity: { readonly otherRoles: number; readonly hiddenRoles: readonly string[] };
+}
+
+/** Managed-provider roles whose sessions no customer role may see (issue 1720). */
+export const PROVIDER_ROLES: readonly string[] = Object.freeze(["postgres"]);
+
+/** The allowlist: DB_STATS_PROVIDER_ROLES (comma-separated) when set, else {@link PROVIDER_ROLES}. */
+export function providerRoles(env: Record<string, string | undefined> = process.env): readonly string[] {
+  const raw = env.DB_STATS_PROVIDER_ROLES;
+  if (raw === undefined) return PROVIDER_ROLES;
+  return raw.split(",").map((r) => r.trim()).filter((r) => r.length > 0);
+}
+
+/** PURE. Split hidden sessions into allowlisted (excluded) and counted ones. */
+export function splitHidden(hiddenRoles: readonly string[], allow: readonly string[]): { excluded: string[]; counted: string[] } {
+  const excluded = hiddenRoles.filter((r) => allow.includes(r));
+  const counted = hiddenRoles.filter((r) => !allow.includes(r));
+  return { excluded, counted };
 }
 
 /** What Postgres prints in place of a query a role may not see. */
 const HIDDEN = "<insufficient privilege>";
 
 /** PURE. Why the statistics are not in place; empty when they are. */
-export function dbStatsProblems(found: DbStatsFound): string[] {
+export function dbStatsProblems(found: DbStatsFound, allow: readonly string[] = PROVIDER_ROLES): string[] {
   const out: string[] = [];
   if (!found.extension) out.push("pg_extension does not list pg_stat_statements (run role-passwords as doadmin, D61)");
   if (!found.readAllStats) out.push("rm_readonly does not hold pg_read_all_stats (run role-passwords as doadmin, D61)");
@@ -48,7 +74,10 @@ export function dbStatsProblems(found: DbStatsFound): string[] {
     if (found.statements.hidden > 0) out.push(`pg_stat_statements hides ${found.statements.hidden} other-role row(s) from rm_readonly`);
   }
   if (found.activity.otherRoles === 0) out.push("pg_stat_activity holds no client session of another role");
-  if (found.activity.hidden > 0) out.push(`pg_stat_activity hides ${found.activity.hidden} other-role session(s) from rm_readonly`);
+  const { counted } = splitHidden(found.activity.hiddenRoles, allow);
+  if (counted.length > 0) {
+    out.push(`pg_stat_activity hides ${counted.length} other-role session(s) from rm_readonly: ${[...new Set(counted)].sort().join(", ")}`);
+  }
   return out;
 }
 
@@ -75,8 +104,9 @@ export async function readDbStats(query: Query): Promise<DbStatsFound> {
       statementsError = error instanceof Error ? error.message : String(error);
     }
   }
-  const [activity] = await query<{ other: number | string; hidden: number | string }>(
-    `SELECT count(*) AS other, count(*) FILTER (WHERE query IS NULL OR query = '${HIDDEN}') AS hidden
+  const [activity] = await query<{ other: number | string; hidden_roles: string[] | null }>(
+    `SELECT count(*) AS other,
+            coalesce(array_agg(usename::text ORDER BY usename) FILTER (WHERE query IS NULL OR query = '${HIDDEN}'), '{}') AS hidden_roles
        FROM pg_stat_activity
       WHERE usename IS NOT NULL AND usename <> current_user
         -- A session the reader may not see shows a NULL backend_type, so it counts too.
@@ -87,7 +117,7 @@ export async function readDbStats(query: Query): Promise<DbStatsFound> {
     readAllStats: state?.read_all_stats === true,
     statements,
     statementsError,
-    activity: { otherRoles: Number(activity?.other ?? 0), hidden: Number(activity?.hidden ?? 0) },
+    activity: { otherRoles: Number(activity?.other ?? 0), hiddenRoles: activity?.hidden_roles ?? [] },
   };
 }
 
@@ -102,14 +132,17 @@ async function main(): Promise<number> {
   } finally {
     await db.close();
   }
-  const problems = dbStatsProblems(found);
+  const allow = providerRoles();
+  const problems = dbStatsProblems(found, allow);
+  const { excluded } = splitHidden(found.activity.hiddenRoles, allow);
+  for (const role of excluded) console.log(`[db-stats-check] excluded hidden session of managed-provider role ${role}`);
   console.log(`[db-stats-check] ${db.target}: ${JSON.stringify(found)}`);
   for (const p of problems) console.error(`[db-stats-check] REFUSE: ${p}`);
   if (receiptDir) {
     mkdirSync(receiptDir, { recursive: true, mode: 0o700 });
     writeFileSync(
       join(receiptDir, "db-stats-check.json"),
-      `${JSON.stringify({ step: "db-stats-check", target: db.target, at: new Date().toISOString(), found, problems }, null, 2)}\n`,
+      `${JSON.stringify({ step: "db-stats-check", target: db.target, at: new Date().toISOString(), found, providerRoles: allow, excluded: excluded.map((role) => ({ role })), problems }, null, 2)}\n`,
       { mode: 0o600 },
     );
   }
