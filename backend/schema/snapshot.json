@@ -134,7 +134,8 @@
     "0130_jobs_live_index_brief_allocation_stats.sql",
     "0131_swarm_briefs_allocation_backfill.sql",
     "0132_flow_index.sql",
-    "0133_buybacks_refresh_disabled.sql"
+    "0133_buybacks_refresh_disabled.sql",
+    "0134_read_path_indexes.sql"
   ],
   "exclusions": {
     "roles": [
@@ -147,7 +148,7 @@
       "plpgsql"
     ]
   },
-  "contentHash": "b15601ea003bfcc3428c0cf364e6fc37a81a64bb525221e9d32da2ad30e732aa",
+  "contentHash": "4ca77ee323dc8e05c8925a7751149193b765ae72e4afc2bc580eced87a79c95f",
   "fingerprint": {
     "column public.admin_credential.claimed_at": {
       "type": "timestamp with time zone",
@@ -5265,6 +5266,9 @@
     "index public.analytics_output_snapshots_run_idx": {
       "definition": "CREATE INDEX analytics_output_snapshots_run_idx ON public.analytics_output_snapshots USING btree (run_id)"
     },
+    "index public.analytics_overwrite_events_id_time_idx": {
+      "definition": "CREATE INDEX analytics_overwrite_events_id_time_idx ON public.analytics_overwrite_events USING btree (id) INCLUDE (recorded_at)"
+    },
     "index public.analytics_overwrite_events_lookup_idx": {
       "definition": "CREATE INDEX analytics_overwrite_events_lookup_idx ON public.analytics_overwrite_events USING btree (table_name, natural_key, recorded_at DESC)"
     },
@@ -5318,6 +5322,9 @@
     },
     "index public.analytics_vintage_members_pkey": {
       "definition": "CREATE UNIQUE INDEX analytics_vintage_members_pkey ON public.analytics_vintage_members USING btree (id)"
+    },
+    "index public.analytics_vintage_members_vintage_id_idx": {
+      "definition": "CREATE INDEX analytics_vintage_members_vintage_id_idx ON public.analytics_vintage_members USING btree (vintage_id, id)"
     },
     "index public.analytics_vintage_members_vintage_id_source_value_version_i_key": {
       "definition": "CREATE UNIQUE INDEX analytics_vintage_members_vintage_id_source_value_version_i_key ON public.analytics_vintage_members USING btree (vintage_id, source_value_version_id)"
@@ -5445,6 +5452,9 @@
     "index public.job_runs_job_idx": {
       "definition": "CREATE INDEX job_runs_job_idx ON public.job_runs USING btree (job_id)"
     },
+    "index public.job_runs_kind_started_idx": {
+      "definition": "CREATE INDEX job_runs_kind_started_idx ON public.job_runs USING btree (kind, started_at DESC)"
+    },
     "index public.job_runs_pkey": {
       "definition": "CREATE UNIQUE INDEX job_runs_pkey ON public.job_runs USING btree (id)"
     },
@@ -5459,6 +5469,9 @@
     },
     "index public.jobs_dedupe_key_idx": {
       "definition": "CREATE UNIQUE INDEX jobs_dedupe_key_idx ON public.jobs USING btree (dedupe_key) WHERE (dedupe_key IS NOT NULL)"
+    },
+    "index public.jobs_kind_id_idx": {
+      "definition": "CREATE INDEX jobs_kind_id_idx ON public.jobs USING btree (kind, id DESC)"
     },
     "index public.jobs_live_kind_locked_idx": {
       "definition": "CREATE INDEX jobs_live_kind_locked_idx ON public.jobs USING btree (kind, locked_at) WHERE (status = ANY (ARRAY['pending'::text, 'running'::text]))"
@@ -5603,6 +5616,12 @@
     },
     "index public.source_value_versions_acquisition_key_idx": {
       "definition": "CREATE UNIQUE INDEX source_value_versions_acquisition_key_idx ON public.source_value_versions USING btree (acquisition_id, source_key, market_date, market_instant) NULLS NOT DISTINCT"
+    },
+    "index public.source_value_versions_heads_idx": {
+      "definition": "CREATE INDEX source_value_versions_heads_idx ON public.source_value_versions USING btree (source_key, market_date, market_instant, knowledge_time DESC, id DESC) INCLUDE (value)"
+    },
+    "index public.source_value_versions_id_time_idx": {
+      "definition": "CREATE INDEX source_value_versions_id_time_idx ON public.source_value_versions USING btree (id) INCLUDE (knowledge_time)"
     },
     "index public.source_value_versions_legacy_baseline_idx": {
       "definition": "CREATE UNIQUE INDEX source_value_versions_legacy_baseline_idx ON public.source_value_versions USING btree (source_key, market_date) WHERE (revision_kind = 'legacy_baseline'::text)"

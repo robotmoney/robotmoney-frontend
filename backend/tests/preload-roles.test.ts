@@ -192,6 +192,7 @@ describe("the cluster superuser is reached only by a pinned list of files", () =
     "pre-revoke-boot-refusal.test.ts",
     "prod-baseline.test.ts",
     "prune-command.test.ts",
+    "public-archive-step-plans.test.ts",
     "rm-worker-retired.test.ts", // sets rm_worker's password to log in as it (issue 1034)
     "role-passwords.test.ts",
     "runtime-delete-revoked.test.ts",

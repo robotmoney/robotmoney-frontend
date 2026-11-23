@@ -67,6 +67,8 @@ export interface LoggedRequest {
   readonly limiterMs: number | null;
   readonly poolMs: number | null;
   readonly handlerMs: number | null;
+  /** The handler's own phases (`heads_ms=…` on the vintages freeze, issue 1690), by name without `_ms`; empty when none. */
+  readonly phases: Readonly<Record<string, number>>;
 }
 
 /** One request the api refused with 503 db_saturated. */
@@ -83,7 +85,8 @@ export interface ParsedApiLog {
 }
 
 const TS = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z)\s/;
-const SLOW = /\[api\] (?:slow request|request ran past the \d+s limit, so the client was cut off): (GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS) (\S+) took (\d+(?:\.\d+)?)s status=(\S+)(?: limiter_wait_ms=(\d+) pool_wait_ms=(\d+) handler_ms=(\d+))?/;
+const SLOW = /\[api\] (?:slow request|request ran past the \d+s limit, so the client was cut off): (GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS) (\S+) took (\d+(?:\.\d+)?)s status=(\S+)(?: limiter_wait_ms=(\d+) pool_wait_ms=(\d+) handler_ms=(\d+)((?: [a-z][a-z0-9_]*_ms=\d+)*))?/;
+const PHASE = / ([a-z][a-z0-9_]*)_ms=(\d+)/g;
 const ERROR_503 = /api error \(503 (\S+?)\)(?: db_saturated gate=(\S+):(?=\s|$))?/;
 const SATURATED_MESSAGE = /database pool "([^"]+)" is saturated/;
 /** How far below an old-format `api error (503 …)` line its error's message may sit (Bun prints a code frame first). */
@@ -103,6 +106,7 @@ export function parseApiLog(text: string): ParsedApiLog {
       requests.push({
         at, method: slow[1]!, path: slow[2]!, ms: Math.round(Number(slow[3]) * 1000), status: slow[4]!,
         limiterMs: n(slow[5]), poolMs: n(slow[6]), handlerMs: n(slow[7]),
+        phases: Object.fromEntries([...(slow[8] ?? "").matchAll(PHASE)].map((p) => [p[1]!, Number(p[2])])),
       });
       continue;
     }

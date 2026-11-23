@@ -4891,6 +4891,13 @@ CREATE INDEX analytics_output_snapshots_run_idx ON public.analytics_output_snaps
 
 
 --
+-- Name: analytics_overwrite_events_id_time_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX analytics_overwrite_events_id_time_idx ON public.analytics_overwrite_events USING btree (id) INCLUDE (recorded_at);
+
+
+--
 -- Name: analytics_overwrite_events_lookup_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -4944,6 +4951,13 @@ CREATE INDEX analytics_submissions_status_created_idx ON public.analytics_submis
 --
 
 CREATE INDEX analytics_vintage_members_last_version_idx ON public.analytics_vintage_members USING btree (last_source_value_version_id) WHERE (last_source_value_version_id IS NOT NULL);
+
+
+--
+-- Name: analytics_vintage_members_vintage_id_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX analytics_vintage_members_vintage_id_idx ON public.analytics_vintage_members USING btree (vintage_id, id);
 
 
 --
@@ -5038,6 +5052,13 @@ CREATE INDEX job_runs_job_idx ON public.job_runs USING btree (job_id);
 
 
 --
+-- Name: job_runs_kind_started_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX job_runs_kind_started_idx ON public.job_runs USING btree (kind, started_at DESC);
+
+
+--
 -- Name: job_runs_started_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -5056,6 +5077,13 @@ CREATE UNIQUE INDEX job_schedules_kind_cron_idx ON public.job_schedules USING bt
 --
 
 CREATE UNIQUE INDEX jobs_dedupe_key_idx ON public.jobs USING btree (dedupe_key) WHERE (dedupe_key IS NOT NULL);
+
+
+--
+-- Name: jobs_kind_id_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX jobs_kind_id_idx ON public.jobs USING btree (kind, id DESC);
 
 
 --
@@ -5203,6 +5231,20 @@ CREATE INDEX research_pipeline_warnings_run_idx ON public.research_pipeline_warn
 --
 
 CREATE UNIQUE INDEX source_value_versions_acquisition_key_idx ON public.source_value_versions USING btree (acquisition_id, source_key, market_date, market_instant) NULLS NOT DISTINCT;
+
+
+--
+-- Name: source_value_versions_heads_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX source_value_versions_heads_idx ON public.source_value_versions USING btree (source_key, market_date, market_instant, knowledge_time DESC, id DESC) INCLUDE (value);
+
+
+--
+-- Name: source_value_versions_id_time_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX source_value_versions_id_time_idx ON public.source_value_versions USING btree (id) INCLUDE (knowledge_time);
 
 
 --

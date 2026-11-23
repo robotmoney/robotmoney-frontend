@@ -958,6 +958,7 @@ describe("object-less statements (D55 (13)) — a closed list of shapes, pinned 
     advisoryLockByText: "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
     snapshotReadOnly: "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY",
     publicReadSession: "SELECT set_config('statement_timeout', '5000', true), set_config('TimeZone', 'UTC', true)",
+    customPlanSession: "SELECT set_config('plan_cache_mode', 'force_custom_plan', true)",
   };
 
   test("the shape list equals the pinned list exactly", () => {
