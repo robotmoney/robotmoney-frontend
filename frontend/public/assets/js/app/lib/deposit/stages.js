@@ -26,11 +26,13 @@ import { DEFAULT_FLOW } from "./manifest.js";
 import { settleableAt, requestLockAt, requestExpiresAt, fmtDuration } from "./schedule.js";
 
 export const STAGE = Object.freeze({
-  WAITING: "Waiting for batch",
-  FILLING: "Filling",
-  ON_HOLD: "On hold",
+  // Four words for the path a request takes (David, 23 Nov 2026): Pending until
+  // a batch has filled all of it (a part-filled request is still pending: its
+  // rest joins the next batch), Filled while the hold runs, Ready to claim, Claimed.
+  PENDING: "Pending",
+  ON_HOLD: "Filled",
   READY: "Ready to claim",
-  DELIVERED: "Delivered",
+  CLAIMED: "Claimed",
   CANCELLED: "Cancelled",
   EXPIRED: "Expired",
   NOTICE: "Notice given",
@@ -40,7 +42,7 @@ export const STAGE = Object.freeze({
 });
 
 /** Stages that still have a time ahead of them. */
-export const IN_FLIGHT = Object.freeze([STAGE.WAITING, STAGE.FILLING, STAGE.ON_HOLD, STAGE.NOTICE]);
+export const IN_FLIGHT = Object.freeze([STAGE.PENDING, STAGE.ON_HOLD, STAGE.NOTICE]);
 
 const EPS = 1e-9;
 /** @param {any} r */
@@ -71,20 +73,20 @@ export function stageOf(r, now, f = DEFAULT_FLOW) {
   const dep = r.kind === "deposit";
   const live = liveRemaining(r) > EPS;
   const filled = r.fills.length > 0;
-  if (r.released && !r.closed && r.remaining > EPS) return { stage: STAGE.RELEASED, at: null, note: "The vault is winding down, so this request was released. Withdraw it under Your requests." };
+  if (r.released && !r.closed && r.remaining > EPS) return { stage: STAGE.RELEASED, at: null, note: "The vault is winding down, so this request was released. Withdraw it under Your position." };
   if (r.noticeAt && live) return { stage: STAGE.NOTICE, at: r.noticeAt, note: "It takes part in one more batch. Any shares still unfilled then come back." };
   if (r.noticeDone && !r.closed && r.remaining > EPS) return { stage: STAGE.TAKE_BACK, at: null, note: "No batch filled the rest. The unfilled shares are ready to take back." };
   if (!filled) {
     if (r.cancelled) return { stage: STAGE.CANCELLED, at: null, note: "Cancelled before it locked for a batch." };
     if (r.expired) return { stage: STAGE.EXPIRED, at: null, note: `No batch filled it within ${fmtDuration(f.maxRoll * f.epochLength)}.` };
     if (r.noticeDone || r.released) return { stage: STAGE.RETURNED, at: null, note: "No batch filled it, and the shares came back." };
-    return { stage: STAGE.WAITING, at: nextBatchFor(r.epoch, now, f), note: "Joins the next batch, at the price that batch sets." };
+    return { stage: STAGE.PENDING, at: nextBatchFor(r.epoch, now, f), note: "Joins the next batch, at the price that batch sets." };
   }
-  if (live) return { stage: STAGE.FILLING, at: nextBatchFor(r.epoch, now, f), note: "Part has filled. The rest joins the next batch." };
+  if (live) return { stage: STAGE.PENDING, at: nextBatchFor(r.epoch, now, f), note: "Part has filled. The rest joins the next batch." };
   const held = r.fills.filter((x) => dep && !x.claimed && x.unlockAt > now);
-  if (held.length) return { stage: STAGE.ON_HOLD, at: Math.max(...held.map((x) => x.unlockAt)), note: "New shares are held before they are yours." };
+  if (held.length) return { stage: STAGE.ON_HOLD, at: Math.max(...held.map((x) => x.unlockAt)), note: "Filled. It is yours to claim once its hold ends." };
   if (r.fills.some((x) => !x.claimed)) return { stage: STAGE.READY, at: null, note: dep ? "Your shares are ready." : "Your USDC is ready." };
-  return { stage: STAGE.DELIVERED, at: null, note: dep ? "The shares are in your wallet." : "The USDC is in your wallet." };
+  return { stage: STAGE.CLAIMED, at: null, note: dep ? "The shares are in your wallet." : "The USDC is in your wallet." };
 }
 
 /**

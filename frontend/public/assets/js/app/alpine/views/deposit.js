@@ -173,7 +173,7 @@ export function registerDepositView(Alpine) {
     redeemReceiveTip() { return "At today's price, after the exit fee. The batch sets the price your rmFUND sells at."; },
     cancelTip(kind = "deposit") { return `Until then, cancelling returns your ${kind === "deposit" ? "USDC" : "rmFUND"}. After it, the request is locked for its batch.`; },
     batchTip() { return `A batch runs every ${this.epochLabel()}. It sets the price and fills the requests locked before it.`; },
-    arriveTip() { return `New rmFUND is held for ${this.holdLabel()} after its batch, then arrives in your wallet.`; },
+    arriveTip() { return `Your rmFUND is ready to claim ${this.holdLabel()} after its batch. One signature moves it into your wallet.`; },
     usdcReadyTip() { return "Once its batch fills your request, the USDC is yours to claim."; },
     priceTip() { return "The price comes from the vault's holdings at market prices, after requests lock. Only the difference between deposits and redemptions trades in the market."; },
     landTip() { return `A large deposit can fill over several batches. Anything unfilled after ${this.expiryLabel()} is yours to take back.`; },
@@ -437,8 +437,8 @@ export function registerDepositView(Alpine) {
       if (this.dlg.kind === "deposit") return [
         { key: "r", label: "Requested", when: nowWhen, done: true },
         { key: "b", label: "Next batch", when: fmtWhenShort(q.settlesAt), done: false },
-        { key: "h", label: "Held", when: this.holdLabel(), done: false },
-        { key: "a", label: "Shares arrive", when: fmtWhenShort(q.readyAt), done: false, money: true },
+        { key: "h", label: "Wait", when: this.holdLabel(), done: false },
+        { key: "a", label: "Ready to claim", when: fmtWhenShort(q.readyAt), done: false, money: true },
       ];
       return [
         { key: "r", label: "Requested", when: nowWhen, done: true },

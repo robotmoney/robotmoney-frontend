@@ -14,7 +14,7 @@ import { session } from "../../lib/deposit/session.js";
 import { MANIFEST } from "../../lib/deposit/manifest.js";
 import { buildCancel, buildWithdrawCredit, buildWithdrawExpired, buildGiveNotice, buildTakeBackNotice } from "../../lib/deposit/builder.js";
 import { stageOf, filledOf, outOf, canCancel, canWithdrawExpired, canGiveNotice, canTakeBack, liveRemaining, lockOf, STAGE, IN_FLIGHT } from "../../lib/deposit/stages.js";
-import { timelineOf, summaryOf, inUnit, outUnit, kindLabel, toneOf, cancelledOf } from "../../lib/deposit/describe.js";
+import { timelineOf, summaryOf, inUnit, outUnit, kindLabel, toneOf, cancelledOf, stageHelp } from "../../lib/deposit/describe.js";
 import { requestExpiresAt, fmtWhenIn } from "../../lib/deposit/schedule.js";
 import { fmtWhen, fmtFee, shortAddr, shortHash } from "../../lib/deposit/format.js";
 import { DEPOSIT_REQUEST_RE } from "../../routes.js";
@@ -78,16 +78,16 @@ export function registerDepositRequestView(Alpine) {
       const r = this.r, st = this.st();
       if (!r || !st) return "";
       const left = liveRemaining(r);
-      if (left > 0 && (st.stage === STAGE.FILLING || st.stage === STAGE.WAITING)) return `${inUnit(r, left)} in the next batch`;
+      if (left > 0 && st.stage === STAGE.PENDING) return `${inUnit(r, left)} in the next batch`;
       if (cancelledOf(r) > 1e-9) return `${inUnit(r, cancelledOf(r))} cancelled`;
       return "";
     },
-    /** The bar replaces the sentence where it says the same thing (filling, ready, delivered); a stage with a time keeps its sentence. */
-    barSays() { const s = this.st()?.stage; return s === STAGE.FILLING || s === STAGE.READY || s === STAGE.DELIVERED; },
+    /** The bar replaces the sentence where it says the same thing (part filled, ready, claimed); a stage with a time keeps its sentence. */
+    barSays() { const s = this.st()?.stage; return (s === STAGE.PENDING && filledOf(this.r) > 1e-9) || s === STAGE.READY || s === STAGE.CLAIMED; },
     facts() {
       const r = this.r, st = this.st(), f = this.flow();
       if (!r) return [];
-      const out = [{ key: "stage", label: "Stage", value: st.stage, stage: true }];
+      const out = [{ key: "stage", label: "Stage", value: st.stage, stage: true, tip: stageHelp(st.stage, r.kind, f) }];
       if (st.at && IN_FLIGHT.includes(st.stage)) out.push({ key: "next", label: "Next", value: fmtWhenIn(st.at, this.now) });
       const filled = filledOf(r), got = outOf(r);
       out.push({ key: "filled", label: "Filled", value: got > 0 ? `${inUnit(r, filled).replace(/ USDC$/, "")} → ${outUnit(r, got)}` : inUnit(r, filled) });

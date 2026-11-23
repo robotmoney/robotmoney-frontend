@@ -136,6 +136,12 @@ export function fmtWhenIn(ms, now) {
   return `${fmtAt(ms, now)} · ${ms >= now ? fmtCountdown(ms - now) : fmtAgo(now - ms)}`;
 }
 
+/** The same inside a sentence: "16:24, in 24 min". @param {number|null|undefined} ms @param {number} now */
+export function fmtSay(ms, now) {
+  if (ms == null || !Number.isFinite(ms)) return "—";
+  return `${fmtAt(ms, now)}, ${ms >= now ? fmtCountdown(ms - now) : fmtAgo(now - ms)}`;
+}
+
 /** The time alone when it is today ("15:12"), the weekday within a week ("Sat 00:12"), else the date. @param {number} ms @param {number} now */
 export function fmtAt(ms, now) {
   if (ms == null || !Number.isFinite(ms)) return "—";

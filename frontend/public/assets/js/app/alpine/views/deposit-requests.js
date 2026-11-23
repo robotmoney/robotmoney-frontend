@@ -13,7 +13,7 @@
 import { session } from "../../lib/deposit/session.js";
 import { MANIFEST } from "../../lib/deposit/manifest.js";
 import { buildCancel, buildWithdrawCredit, buildWithdrawExpired, buildClaimShares, buildClaimUsdc, buildGiveNotice, buildTakeBackNotice, buildReleaseWindDown } from "../../lib/deposit/builder.js";
-import { rowOf, stopOf } from "../../lib/deposit/describe.js";
+import { rowOf, stopOf, stageHelp, LIFECYCLE } from "../../lib/deposit/describe.js";
 import { claimableFills, liveRemaining, nextBatchFor } from "../../lib/deposit/stages.js";
 import { fmtDuration, fmtClock } from "../../lib/deposit/schedule.js";
 import { fmtUsdc, fmtShares, fmtRm, fmtWhen, shortAddr, shortHash } from "../../lib/deposit/format.js";
@@ -95,7 +95,7 @@ export function registerDepositRequestsView(Alpine) {
       ];
       // The (i) explains each holding that is not in the wallet yet (David, 17 Nov).
       const hold = fmtDuration(this.flow().minHold);
-      if (this.onHoldShares() > EPS) out.push({ key: "hold", label: "On hold", value: fmtRm(this.onHoldShares()), tip: `Filled, and held for ${hold} after its batch. Then it is yours to claim.` });
+      if (this.onHoldShares() > EPS) out.push({ key: "hold", label: "Claimable soon", value: fmtRm(this.onHoldShares()), tip: `Filled. Each batch's rmFUND is yours to claim ${hold} after that batch.` });
       if (this.queuedUsdc() > EPS) out.push({ key: "qd", label: "In the queue", value: fmtUsdc(this.queuedUsdc()), tip: "USDC waiting for a batch to fill it. You can cancel it until it locks." });
       if (this.queuedShares() > EPS) out.push({ key: "qr", label: "Queued to redeem", value: fmtRm(this.queuedShares()), tip: "rmFUND waiting for a batch to sell it. You can cancel it until it locks." });
       return out;
@@ -132,6 +132,22 @@ export function registerDepositRequestsView(Alpine) {
     },
     pending() { this.rev; return session.pending(); },
     pendingUrl() { const p = this.pending(); return p?.hash && /^0x[0-9a-f]{64}$/i.test(p.hash) ? `${MANIFEST.explorer}/tx/${p.hash}` : null; },
+
+    /**
+     * The stage guide, read as a stepper: a step is done once every request on
+     * this path is past it (the last one, Claimed, the moment one reaches it),
+     * "here" where a request stands now, and not reached otherwise. Requests off
+     * the path (cancelled, expired, returned) do not move it.
+     */
+    lifecycle() {
+      const at = this.rows().map((r) => LIFECYCLE.findIndex((s) => s.stage === r.stage)).filter((i) => i >= 0);
+      const first = Math.min(...at), last = LIFECYCLE.length - 1;
+      return LIFECYCLE.map((s, i) => {
+        const count = at.filter((k) => k === i).length;
+        const state = !at.length ? "todo" : i < first || (i === last && count) ? "done" : count ? "here" : "todo";
+        return { ...s, help: stageHelp(s.stage, "deposit", this.flow()), count, state };
+      });
+    },
 
     // Requests (board 6)
     rows() { this.now; return this.reqs.map((r) => rowOf(r, this.now, this.flow(), { depositsStopped: !!this.vault?.depositsStopped })); },

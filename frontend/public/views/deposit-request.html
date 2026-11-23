@@ -8,7 +8,7 @@
 
 <section class="dp" x-data="depositRequestView()">
   <div class="dp__wrap dp__wrap--narrow">
-    <nav class="dp__lbl dp__crumbs" aria-label="Breadcrumb"><a href="/deposit">Deposit</a><span aria-hidden="true">/</span><a href="/deposit/requests">Your requests</a><span aria-hidden="true">/</span><span aria-current="page" x-text="`Request ${id}`"></span></nav>
+    <nav class="dp__lbl dp__crumbs" aria-label="Breadcrumb"><a href="/deposit">Deposit</a><span aria-hidden="true">/</span><a href="/deposit/requests">Your position</a><span aria-hidden="true">/</span><span aria-current="page" x-text="`Request ${id}`"></span></nav>
 
     <p class="dp__err" x-show="loadError" x-text="loadError" x-cloak></p>
 
@@ -20,7 +20,7 @@
       <div class="dp__stack">
         <h1 class="dp__title dp__title--page">Request not found</h1>
         <p class="dp__soft" x-show="simulated()">Simulated requests live in the browser that made them. Open this link there, or make a request on the <a href="/deposit">deposit page</a>.</p>
-        <p class="dp__soft" x-show="!simulated()">No request on the Robot Money queue has this number. Check the link, or find it under <a href="/deposit/requests">Your requests</a>.</p>
+        <p class="dp__soft" x-show="!simulated()">No request on the Robot Money queue has this number. Check the link, or find it under <a href="/deposit/requests">Your position</a>.</p>
       </div>
     </template>
 
@@ -44,7 +44,7 @@
         <div class="dp__facts dp__facts--grid">
           <template x-for="f in facts()" :key="f.key">
             <div class="dp__fact"><span class="dp__lbl" x-text="f.label"></span>
-              <template x-if="f.stage"><b class="dp__stage dp__stage--big" :class="`is-${tone()}`"><i aria-hidden="true"></i><span x-text="f.value"></span></b></template>
+              <template x-if="f.stage"><b class="dp__stage dp__stage--big" :class="`is-${tone()}`"><i aria-hidden="true"></i><span x-text="f.value"></span><span class="rm-tip"><button class="rm-tip__btn" type="button" :aria-label="`About ${f.value}`">i</button><span class="rm-tip__bub" role="tooltip" x-text="f.tip"></span></span></b></template>
               <template x-if="!f.stage"><b x-text="f.value"></b></template>
             </div>
           </template>

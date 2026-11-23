@@ -86,7 +86,7 @@
 .dp__ring { display: block; flex: none; width: 11rem; height: 11rem; }
 .dp__ring svg { width: 100%; height: 100%; }
 /* Positioned, so the visually hidden header label scrolls with the table instead of widening the page. */
-.dp__tablewrap { position: relative; flex: 1 1 26rem; min-width: 0; overflow-x: auto; }
+.dp__tablewrap { position: relative; min-width: 0; overflow-x: auto; }
 .dp__tbl { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
 .dp__tbl th { font-family: var(--font-mono); font-size: 0.6875rem; font-weight: 400; letter-spacing: 0.08em; text-transform: uppercase; color: var(--color-text-muted); text-align: left; padding: 0.625rem 0.5rem; border-bottom: 1px solid var(--color-border); white-space: nowrap; }
 .dp__tbl td { padding: 0.875rem 0.5rem; border-bottom: 1px solid var(--color-border); }
@@ -112,6 +112,27 @@
 .dp__reqrow-l { text-decoration: underline; text-decoration-color: var(--color-link-line); text-underline-offset: 3px; transition: text-decoration-color 100ms var(--ease-out-expo); }
 .dp__reqrow:hover .dp__reqrow-l, .dp__reqrow:focus-visible .dp__reqrow-l { text-decoration-color: var(--color-text); }
 .dp__reqrow-r { font-family: var(--font-mono); font-size: 0.75rem; color: var(--color-text-soft); white-space: nowrap; }
+/* The wallet button's place, held while the kit reconnects, so nothing below moves when it lands. */
+.dp__chip--wait { width: 11.5rem; cursor: default; }
+/* The stage guide on Your position: the stages in order, what each means, and where this wallet's requests are. */
+.dp__life { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border-top: 1px solid var(--color-border); }
+.dp__life li { display: flex; flex-direction: column; gap: 0.5rem; padding: 1rem 1.25rem 0 0; }
+.dp__life li + li { padding-left: 1.25rem; border-left: 1px solid var(--color-border); }
+/* Done: a check. Here: the stage's own mark (the same one its row carries). Not reached: a dim dot, a different shape from the Pending ring. One 10px slot, so labels line up. */
+.dp__life .dp__stage { color: var(--color-text-muted); }
+.dp__life .dp__stage i { margin: 0 1.5px; }
+.dp__life li.is-todo .dp__stage i { background: var(--color-border-light); }
+.dp__life li.is-done .dp__stage { color: var(--color-text-soft); }
+.dp__tick { flex: none; display: block; color: var(--color-text); }
+.dp__life li.is-here .dp__stage:not(.is-ready) { color: var(--color-text); }
+.dp__life p { margin: 0; font-size: 0.8125rem; line-height: 1.55; color: var(--color-text-muted); }
+.dp__life li.is-here p { color: var(--color-text-soft); }
+.dp__life-n { font-family: var(--font-mono); font-size: 0.6875rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--color-text); }
+@media (max-width: 900px) {
+  .dp__life { grid-template-columns: minmax(0, 1fr); }
+  .dp__life li, .dp__life li + li { padding: 0.875rem 0; border-left: 0; }
+  .dp__life li + li { border-top: 1px solid var(--color-border); }
+}
 .dp__facts--plain { display: grid; grid-template-columns: repeat(2, minmax(0, max-content)); gap: 1.25rem 4rem; border: 0; padding: 0; }
 .dp__skelinline { display: inline-block; width: 4rem; height: 0.625rem; margin-left: 0.375rem; vertical-align: middle; background: var(--color-surface); animation: dp-breathe 1.8s ease-in-out infinite; }
 @media (prefers-reduced-motion: reduce) { .dp__skelinline { animation: none; } }
@@ -286,10 +307,9 @@
 .dp__bar i { display: block; height: 2px; background: var(--color-green); }
 .dp__stage { display: inline-flex; align-items: center; gap: 0.5rem; font-family: var(--font-mono); font-size: 0.75rem; color: var(--color-text); white-space: nowrap; }
 .dp__stage i { width: 7px; height: 7px; border-radius: 50%; flex: none; box-sizing: border-box; }
-.dp__stage.is-filling i { background: var(--color-text); }
 /* A stage in motion breathes, as the site's live status does (components.css rm-status-live); a settled one is still. */
-.dp__stage.is-waiting i, .dp__stage.is-filling i, .dp__stage.is-hold i { animation: rm-status-live 2.2s ease-in-out infinite; }
-@media (prefers-reduced-motion: reduce) { .dp__stage.is-waiting i, .dp__stage.is-filling i, .dp__stage.is-hold i { animation: none; } }
+.dp__stage.is-waiting i, .dp__stage.is-hold i { animation: rm-status-live 2.2s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .dp__stage.is-waiting i, .dp__stage.is-hold i { animation: none; } }
 .dp__stage.is-waiting i { border: 1px solid var(--color-text-soft); }
 .dp__stage.is-hold i { background: var(--color-text-muted); }
 .dp__stage.is-ready { color: var(--color-green); }

@@ -130,8 +130,8 @@
           <div class="dp__steps">
             <div><p class="dp__lbl">Request</p><p class="dp__when">Any time</p><p class="dp__desc">Cancel until it locks, <span x-text="lockLead()"></span> before its batch.</p></div>
             <div><p class="dp__lbl">Batch<span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="About the batch">i</button><span class="rm-tip__bub" role="tooltip" x-text="priceTip()"></span></span></p><p class="dp__when">Every <span x-text="epochLabel()"></span></p><p class="dp__desc">Sets the price and matches deposits with redemptions.</p></div>
-            <div><p class="dp__lbl">Hold</p><p class="dp__when" x-text="holdLabel()"></p><p class="dp__desc">Stops a pushed price from moving money.</p></div>
-            <div><p class="dp__lbl">Shares<span class="rm-tip rm-tip--end"><button class="rm-tip__btn" type="button" aria-label="About when shares arrive">i</button><span class="rm-tip__bub" role="tooltip" x-text="landTip()"></span></span></p><p class="dp__when"><span x-text="waitLabel()"></span> after</p><p class="dp__desc">In your wallet as rmFUND.</p></div>
+            <div><p class="dp__lbl">Hold</p><p class="dp__when" x-text="holdLabel()"></p><p class="dp__desc">Protects every holder from a manipulated price.</p></div>
+            <div><p class="dp__lbl">Claim<span class="rm-tip rm-tip--end"><button class="rm-tip__btn" type="button" aria-label="About when you can claim">i</button><span class="rm-tip__bub" role="tooltip" x-text="landTip()"></span></span></p><p class="dp__when"><span x-text="waitLabel()"></span> after</p><p class="dp__desc">Your rmFUND is ready to claim.</p></div>
           </div>
         </section>
 
@@ -154,9 +154,10 @@
       <!-- The panel -->
       <aside class="dp__aside" aria-label="Deposit and redeem">
         <!-- The connected wallet sits above the panel, outside it: the panel holds the action only (David, 23 Nov). -->
-        <template x-if="connected()">
+        <template x-if="connected() || restoring()">
             <div class="dp__walletrow" @click.outside="menuOpen = false">
-              <button type="button" class="dp__chip" :aria-expanded="menuOpen ? 'true' : 'false'" aria-haspopup="menu" @click="menuOpen = !menuOpen">
+              <span class="dp__chip dp__chip--wait" x-show="!connected()" aria-hidden="true"><i class="dp__skelinline"></i></span>
+              <button type="button" class="dp__chip" x-show="connected()" :aria-expanded="menuOpen ? 'true' : 'false'" aria-haspopup="menu" @click="menuOpen = !menuOpen">
                 <i class="dp__dot" :class="onBase() ? 'is-ok' : 'is-off'" aria-hidden="true"></i><span x-text="short()"></span><span class="dp__muted" x-text="onBase() ? 'Base' : 'Wrong network'"></span>
                 <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M2 3.5l3 3 3-3"></path></svg>
               </button>
@@ -166,7 +167,7 @@
                   <span class="dp__addr" x-text="address()"></span>
                   <span class="dp__menulinks"><button type="button" class="dp__txt" @click="copyAddress()" x-text="copied ? 'Copied' : 'Copy'"></button><a class="dp__txt" :href="explorerAddress()" target="_blank" rel="noopener noreferrer">Basescan</a></span>
                 </div>
-                <a role="menuitem" class="dp__menuitem" href="/deposit/requests"><span>Your requests</span><span class="dp__muted" x-show="inQueue() > 0" x-text="`${fmtRm(inQueue())} queued`"></span></a>
+                <a role="menuitem" class="dp__menuitem" href="/deposit/requests"><span>Your position</span><span class="dp__muted" x-show="inQueue() > 0" x-text="`${fmtRm(inQueue())} queued`"></span></a>
                 <button role="menuitem" type="button" class="dp__menuitem" @click="menuOpen = false; connect()">Switch wallet</button>
                 <button role="menuitem" type="button" class="dp__menuitem" @click="disconnect()">Disconnect</button>
               </div>
@@ -204,12 +205,12 @@
               <div class="dp__kv"><span>You receive (estimate)<span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="About the estimate">i</button><span class="rm-tip__bub" role="tooltip" x-text="receiveTip()"></span></span></span><b x-text="estShares()"></b></div>
               <div class="dp__kv"><span>You can cancel until<span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="About the cancel deadline">i</button><span class="rm-tip__bub" role="tooltip" x-text="cancelTip('deposit')"></span></span></span><b x-text="when(lockAt())"></b></div>
               <div class="dp__kv"><span>Next batch<span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="About the next batch">i</button><span class="rm-tip__bub" role="tooltip" x-text="batchTip()"></span></span></span><b x-text="nextBatch()"></b></div>
-              <div class="dp__kv"><span>Shares arrive<span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="About when shares arrive">i</button><span class="rm-tip__bub" role="tooltip" x-text="arriveTip()"></span></span></span><b x-text="sharesArrive()"></b></div>
+              <div class="dp__kv"><span>Ready to claim<span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="About when you can claim">i</button><span class="rm-tip__bub" role="tooltip" x-text="arriveTip()"></span></span></span><b x-text="sharesArrive()"></b></div>
             </div>
 
-            <template x-if="!connected()">
+            <template x-if="!connected() && !restoring()">
               <div class="dp__stack">
-                <button type="button" class="btn-primary dp__btn" @click="connect()" :disabled="walletLoading() || restoring()" x-text="walletLoading() ? 'Opening…' : restoring() ? 'Reconnecting…' : 'Connect wallet'"></button>
+                <button type="button" class="btn-primary dp__btn" @click="connect()" :disabled="walletLoading()" x-text="walletLoading() ? 'Opening…' : 'Connect wallet'"></button>
                 <p class="dp__fine">Any wallet on Base, a Safe included.<template x-if="simulated()"><span> <button type="button" class="dp__txt" @click="useTestAddress()">Use a test address</button></span></template></p>
                 <p class="dp__err dp__err--tight" x-show="walletError()" x-text="walletError()" x-cloak></p>
                 <p class="dp__legal">By connecting a wallet you agree to the <a href="/terms">Terms</a> and <a href="/privacy">Privacy Policy</a>.</p>
@@ -222,8 +223,9 @@
                 <p class="dp__err dp__err--tight" x-show="walletError()" x-text="walletError()" x-cloak></p>
               </div>
             </template>
-            <template x-if="connected() && onBase()">
-              <button type="button" class="btn-primary dp__btn" :disabled="!canReview()" @click="openReview('deposit')">Review deposit</button>
+            <!-- While the kit reconnects, the connected layout already holds its place (no taller "Connect" block that then collapses). -->
+            <template x-if="(connected() && onBase()) || restoring()">
+              <button type="button" class="btn-primary dp__btn" :disabled="restoring() || !canReview()" @click="openReview('deposit')" x-text="restoring() ? 'Reconnecting…' : 'Review deposit'"></button>
             </template>
           </div>
 
@@ -261,16 +263,16 @@
               </div>
             </template>
 
-            <template x-if="!connected()"><button type="button" class="btn-primary dp__btn" @click="connect()" :disabled="walletLoading() || restoring()" x-text="walletLoading() ? 'Opening…' : restoring() ? 'Reconnecting…' : 'Connect wallet'"></button></template>
+            <template x-if="!connected() && !restoring()"><button type="button" class="btn-primary dp__btn" @click="connect()" :disabled="walletLoading()" x-text="walletLoading() ? 'Opening…' : 'Connect wallet'"></button></template>
             <template x-if="connected() && !onBase()"><button type="button" class="btn-primary dp__btn" @click="switchToBase()">Switch to Base</button></template>
-            <template x-if="connected() && onBase()">
-              <button type="button" class="btn-primary dp__btn" :disabled="!canRedeem()" @click="openReview(exitMode === 'queue' ? 'redeem' : 'inkind')" x-text="exitMode === 'queue' ? 'Review redemption' : 'Review exit in kind'"></button>
+            <template x-if="(connected() && onBase()) || restoring()">
+              <button type="button" class="btn-primary dp__btn" :disabled="restoring() || !canRedeem()" @click="openReview(exitMode === 'queue' ? 'redeem' : 'inkind')" x-text="restoring() ? 'Reconnecting…' : exitMode === 'queue' ? 'Review redemption' : 'Review exit in kind'"></button>
             </template>
           </div>
 
           <!-- The way back to this wallet's requests: its own row at the foot of the panel, with where they stand. -->
-          <template x-if="connected() && onBase()">
-            <a class="dp__reqrow" href="/deposit/requests"><span class="dp__reqrow-l">Your requests</span><span class="dp__reqrow-r" x-text="requestsSummary()"></span></a>
+          <template x-if="(connected() && onBase()) || restoring()">
+            <a class="dp__reqrow" href="/deposit/requests"><span class="dp__reqrow-l">Your position</span><span class="dp__reqrow-r" x-text="connected() ? requestsSummary() : ''"></span></a>
           </template>
         </div>
       </aside>
@@ -322,7 +324,7 @@
               <template x-if="dlg.quote"><li class="is-act"><span>Locks, and cancelling closes</span><span class="dp__mono" x-text="when(dlg.quote.lockAt)"></span></li></template>
               <template x-if="dlg.quote"><li><span>Next batch sets the price and fills it</span><span class="dp__mono" x-text="when(dlg.quote.settlesAt)"></span></li></template>
               <template x-if="dlg.quote && dlg.kind === 'deposit'"><li><span>Shares held</span><span class="dp__mono" x-text="holdLabel()"></span></li></template>
-              <template x-if="dlg.quote"><li class="is-money"><span x-text="dlg.kind === 'deposit' ? 'Shares arrive in your wallet' : 'USDC ready to claim'"></span><span class="dp__mono" x-text="when(dlg.quote.readyAt)"></span></li></template>
+              <template x-if="dlg.quote"><li class="is-money"><span x-text="dlg.kind === 'deposit' ? 'rmFUND ready to claim' : 'USDC ready to claim'"></span><span class="dp__mono" x-text="when(dlg.quote.readyAt)"></span></li></template>
               <template x-if="dlg.quote"><li><span x-text="dlg.kind === 'deposit' ? 'Unfilled USDC can be taken back' : 'You can ask for unfilled rmFUND back'"></span><span class="dp__mono" x-text="when(expiresAt())"></span></li></template>
             </ol>
           </div>
@@ -410,7 +412,7 @@
           </template>
           <div class="dp__btnrow">
             <button type="button" class="dp__btn2" @click="closeDialog()">Done</button>
-            <a class="btn-primary dp__btn dp__grow" href="/deposit/requests">View all requests</a>
+            <a class="btn-primary dp__btn dp__grow" href="/deposit/requests">View your position</a>
           </div>
         </div>
       </template>
