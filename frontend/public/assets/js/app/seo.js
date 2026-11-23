@@ -55,11 +55,11 @@ const RESEARCH_REVISED = "2026-09-24";
 const REGIME_DATA_URL = ORIGIN + "/api/dashboards/regime-snapshots?range=3650";
 const REGIME_VARIABLES = [
   { "@type": "PropertyValue", name: "Regime", description: "The composite's reading: risk-on, neutral or risk-off." },
-  { "@type": "PropertyValue", name: "Composite", minValue: 0, maxValue: 1, description: "The mean of the macro and on-chain panel indices; below 0.33 reads risk-off, above 0.67 risk-on." },
+  { "@type": "PropertyValue", name: "Composite", minValue: 0, maxValue: 1, description: "The mean of the macro, on-chain and equity factor panel indices; below 0.33 reads risk-off, above 0.67 risk-on." },
   { "@type": "PropertyValue", name: "Composite percentile, 3 years", minValue: 0, maxValue: 1, description: "Where the composite ranks in its last 3 years." },
   { "@type": "PropertyValue", name: "Macro index", minValue: 0, maxValue: 1, description: "A weighted mean of 8 macro indicators, 0 risk-off to 1 risk-on." },
   { "@type": "PropertyValue", name: "On-chain index", minValue: 0, maxValue: 1, description: "A weighted mean of 10 on-chain indicators, 0 risk-off to 1 risk-on." },
-  { "@type": "PropertyValue", name: "Equity factor index", minValue: 0, maxValue: 1, description: "A weighted mean of 8 equity factor indicators, tracked for context and left out of the composite." },
+  { "@type": "PropertyValue", name: "Equity factor index", minValue: 0, maxValue: 1, description: "A weighted mean of 8 equity factor indicators, 0 risk-off to 1 risk-on." },
 ];
 
 // What each record in the smart contract risks download gives, for its
@@ -344,7 +344,7 @@ const META = {
   "/regime/indicators": {
     title: "The 26 Regime Indicators, Explained | Robot Money",
     name: "The 26 Regime Indicators",
-    description: "Every regime indicator in plain language: what it is, how it is derived and how to read it. 18 macro and on-chain indicators feed the composite; 8 add context.",
+    description: "Every regime indicator in plain language: what it is, how it is derived and how to read it. All 26 feed the composite, in three panels.",
     type: "TechArticle",
     modified: RESEARCH_REVISED,
   },
@@ -941,7 +941,7 @@ export function routeStructuredData(pathname) {
       ...(m.modified ? { dateModified: m.modified } : {}),
       isAccessibleForFree: true,
       keywords: ["market regime", "risk-on", "risk-off", "cross-asset", "macro indicators", "on-chain indicators", "equity factors", "crypto"],
-      measurementTechnique: "Rolling 3-year percentile ranks of 26 open-data indicators in three panels (macro, on-chain, equity factor), sign-aligned so high reads risk-on and weighted within each panel by point-in-time inverse correlation. The composite is the mean of the macro and on-chain panels, bucketed at its 33rd and 67th percentiles, with a 5-day or 2-sigma confirmation before the label switches.",
+      measurementTechnique: "Rolling 3-year percentile ranks of 26 open-data indicators in three panels (macro, on-chain, equity factor), sign-aligned so high reads risk-on and weighted within each panel by point-in-time inverse correlation. The composite is the mean of the three panels, bucketed at 0.33 and 0.67 on its own 0 to 1 scale, with a 5-day or 2-sigma confirmation before the label switches.",
       // The figures a snapshot carries. The prerender adds each one's value on
       // the day it ran (scripts/lib/regime-snapshot.ts).
       variableMeasured: REGIME_VARIABLES,

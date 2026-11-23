@@ -109,7 +109,7 @@ export function registerHomeRegime(Alpine) {
       },
       regimeSentence() {
         const since = this.regimeSince();
-        return `${since ? `Since ${since}. ` : ""}The composite averages macro and on-chain conditions, on a scale of 0 to 1.`;
+        return `${since ? `Since ${since}. ` : ""}The composite averages macro, on-chain and equity factor conditions, on a scale of 0 to 1.`;
       },
 
       // ── The last year ──

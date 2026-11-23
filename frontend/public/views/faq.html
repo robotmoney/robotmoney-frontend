@@ -118,11 +118,11 @@
         <h2 class="faq__q">What is the Robot Money regime classifier?</h2>
         <div class="faq__a">
           The Robot Money regime classifier is a daily cross-asset risk-on /
-          risk-off signal. The composite is the arithmetic mean of two panels: a
+          risk-off signal. The composite is the arithmetic mean of three panels: a
           macro panel (yield curve, credit spreads, the dollar, jobless claims,
-          VIX, and others) and an on-chain panel (TVL, stablecoin float, active
-          addresses, and others). A third, equity-factor panel is computed and
-          shown alongside them for context but is not part of the composite.
+          VIX, and others), an on-chain panel (TVL, stablecoin float, active
+          addresses, and others) and an equity-factor panel (momentum, growth
+          against value, the S&amp;P 500 trend, and others).
           Everything recomputes every 24 hours. The signal reaches the vault
           through the swarm, not through the contract: it goes into the
           brief every member reads before filing a take. The
@@ -418,8 +418,9 @@
           admin multisig. The composite itself is the arithmetic mean of the macro
           panel (yield curve slope, credit spreads, DXY, initial jobless claims,
           VIX, and others) and the on-chain panel (total value locked, stablecoin
-          float, active addresses, and others); an equity-factor panel is computed
-          and displayed but excluded from the composite. The methodology is
+          float, active addresses, and others) and the equity-factor panel
+          (momentum, growth against value, the S&amp;P 500 trend, and others),
+          a third each. The methodology is
           documented and the live signal is published on the
           <a class="faq__link" href="/regime">regime page</a>.
         </div>

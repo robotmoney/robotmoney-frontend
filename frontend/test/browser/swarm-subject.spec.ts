@@ -841,7 +841,7 @@ test("the latest recommendation carries its session's reading and vote, and its 
   await expect(signal.locator(".sig__row").first().locator(".sig__dot")).toHaveAttribute("style", /left:\s*59\.8%/);
   // On the published method factor is context, not an input, and is drawn so.
   await expect(signal.locator(".sig__row").nth(3)).toHaveClass(/is-context/);
-  await expect(signal.locator(".sig__row").nth(3).locator(".rr-meta__i")).toHaveAttribute("title", /Not in the composite/);
+  await expect(signal.locator(".sig__row").nth(3).locator(".rr-meta__i")).toHaveAttribute("title", /left out of this reading's composite/);
   // This reading carries no cuts, and none are hard-coded in their place.
   await expect(signal.locator(".sig__zone")).toHaveCount(0);
 

@@ -475,7 +475,7 @@ test("the market regime reads under the portfolio, and is fetched only as the se
   await expect(block.locator(".hm-reg__now")).toHaveText("Risk-off");
   // The label is cut on the composite and holds after five readings below 0.33.
   await expect(block.locator(".hm-reg__since")).toHaveText(
-    /^Since [A-Z][a-z]{2} \d{1,2}, 2026\. The composite averages macro and on-chain conditions, on a scale of 0 to 1\.$/);
+    /^Since [A-Z][a-z]{2} \d{1,2}, 2026\. The composite averages macro, on-chain and equity factor conditions, on a scale of 0 to 1\.$/);
   await expect(block.getByRole("link", { name: "See the market regime" })).toHaveAttribute("href", "/regime");
 
   await expect(block.locator(".hm-reg__cap .hm-k")).toHaveText("Composite, last 12 months");
