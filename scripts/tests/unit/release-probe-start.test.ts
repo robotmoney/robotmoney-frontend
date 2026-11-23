@@ -6,7 +6,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ProbeReceipt } from "../../lib/rollout-probe.ts";
 import type { ImageReceipt } from "../../lib/website-release.ts";
-import { gradeRun, moveStaleProbeAside, probeDir, probeStatus, readSwapJournal, swapGaps } from "../../release/probe.ts";
+import { gradeRun, moveStaleProbeAside, probeDir, probeLoop, probeStatus, readSwapJournal, swapGaps } from "../../release/probe.ts";
+import { parseProbeReceipts } from "../../lib/rollout-probe.ts";
+import { cutoverSummary } from "../../release/run.ts";
+import type { RunJournal } from "../../release/journal.ts";
 
 const PROBE = join(import.meta.dir, "..", "..", "release", "probe.ts");
 const RUN = "20261112T003753Z";
@@ -198,4 +201,71 @@ describe("probe.ts grade, as a subprocess, around a swap gap (issue 1630)", () =
       server.stop(true);
     }
   }, 40_000);
+});
+
+// Issue 1703: ticks start on the 2 s schedule and ask the paths concurrently, so a slow answer delays nothing.
+describe("the probe loop keeps its schedule (issue 1703)", () => {
+  test("with '/' stalled 5 s, ticks still start every 2 s and /version.json keeps a 2 s start spacing", async () => {
+    let t = 1_000;
+    const timers: Array<{ at: number; fire: () => void }> = [];
+    const later = (ms: number) => new Promise<void>((fire) => { timers.push({ at: t + ms, fire }); });
+    const fetchImpl = (async (url: string) => {
+      if (new URL(url).pathname === "/") await later(5_000);
+      return new Response("{}", { status: 200 });
+    }) as unknown as typeof fetch;
+    const lines: Array<{ at: number; latencyMs: number; path: string }> = [];
+    let finished = false;
+    void probeLoop("http://x", (l) => lines.push(JSON.parse(l)), { fetchImpl, now: () => t, sleep: later }, 2_000, 6).then(() => { finished = true; });
+    for (let guard = 0; !finished && guard < 10_000; guard++) {
+      for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r));
+      timers.sort((a, b) => a.at - b.at);
+      const next = timers.shift();
+      if (next === undefined) continue;
+      t = Math.max(t, next.at);
+      next.fire();
+    }
+    expect(finished).toBe(true);
+    const starts = (path: string) => lines.filter((l) => l.path === path).map((l) => l.at).sort((a, b) => a - b);
+    expect(starts("/version.json")).toEqual([1_000, 3_000, 5_000, 7_000, 9_000, 11_000]);
+    expect(starts("/")).toEqual([1_000, 3_000, 5_000, 7_000, 9_000, 11_000]);
+    expect(starts("/api/status/maintenance")).toHaveLength(6);
+    expect(lines.filter((l) => l.path === "/").every((l) => l.latencyMs === 5_000)).toBe(true);
+  });
+});
+
+// The receipts of stage QA run 20261119T221608Z (Q25-probe-grade), replayed onto the concurrent 2 s schedule with the
+// latencies that run recorded (each sequential ask lasted until the next one started) and its two maintenance-route 503s.
+describe("replay of the 20261119T221608Z probe (issue 1703)", () => {
+  test("no gap, a latency finding, and a failure only on the two maintenance-route answers", () => {
+    const receipts = parseProbeReceipts(readFileSync(join(import.meta.dir, "..", "fixtures", "probe-1703", "20261119T221608Z.probe.jsonl"), "utf8"));
+    const g = gradeRun(receipts, { start: 1795134938394, end: 1795135148707 }, {}, "stage", 2_000, 3_000);
+    expect(g.gaps).toEqual([]);
+    expect(g.nonOk).toEqual([]);
+    expect(g.maintenanceFailures.map((r) => r.status)).toEqual([503, 503]);
+    expect(g.ok).toBe(false);
+    expect(g.problems).toEqual(["2 answer(s) of the maintenance status route were not 200 outside a declared maintenance window"]);
+    expect(g.latency.map((f) => f.path)).toEqual(["/", "/api/status/maintenance", "/version.json"]);
+    expect(Math.max(...g.latency.map((f) => f.latencyMs))).toBeGreaterThan(3_000);
+  });
+
+  test("a latency finding names the step running then", () => {
+    const iso = (ms: number) => new Date(ms).toISOString();
+    const steps = { "Q23-ready": { id: "Q23-ready", status: "ok", startedAt: iso(T0), endedAt: iso(T0 + 10_000) } } as unknown as RunJournal["steps"];
+    const receipts: ProbeReceipt[] = Array.from({ length: 10 }, (_, i) => ({ at: T0 + i * 2_000, status: 200, endedAt: T0 + i * 2_000 + (i === 2 ? 4_000 : 100), latencyMs: i === 2 ? 4_000 : 100, path: "/" }));
+    expect(gradeRun(receipts, WINDOW, steps, "stage", 2_000, 3_000).latency).toEqual([{ path: "/", latencyMs: 4_000, at: T0 + 4_000, step: "Q23-ready" }]);
+  });
+});
+
+describe("the cutover summary reads the probe grade (issue 1703)", () => {
+  const steps = (status: string) => ({ "Q25-probe-grade": { id: "Q25-probe-grade", status } }) as unknown as RunJournal["steps"];
+  test("it says the website stayed up only when the probe grade step passed", () => {
+    expect(cutoverSummary({ steps: steps("ok"), cutoverSeconds: 42 }, "stage")).toContain("the website stayed up (Q25-probe-grade)");
+    for (const status of ["failed", "accepted", "skipped"]) {
+      const line = cutoverSummary({ steps: steps(status), cutoverSeconds: 42 }, "stage")!;
+      expect(line).not.toContain("the website stayed up (");
+      expect(line).toContain(`did not pass (${status})`);
+    }
+    expect(cutoverSummary({ steps: {}, cutoverSeconds: 42 }, "stage")).toContain("did not pass (not run)");
+    expect(cutoverSummary({ steps: steps("ok") }, "stage")).toBeUndefined();
+  });
 });

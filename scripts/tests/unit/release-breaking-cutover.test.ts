@@ -154,15 +154,15 @@ describe("the probe's maintenance receipt (issue 1501)", () => {
 
   test("probeMaintenance reads the body, and a failed fetch records false", async () => {
     const answering = (status: number, body: string) => (async () => new Response(body, { status })) as unknown as typeof fetch;
-    expect(await probeMaintenance("http://x/api/status/maintenance", answering(200, JSON.stringify(ACTIVE)), () => 5)).toEqual({ at: 5, status: 200, maintenance: true });
-    expect(await probeMaintenance("http://x/api/status/maintenance", answering(503, JSON.stringify({ error: "maintenance" })), () => 5)).toEqual({ at: 5, status: 503, maintenance: false });
+    expect(await probeMaintenance("http://x/api/status/maintenance", answering(200, JSON.stringify(ACTIVE)), () => 5)).toEqual({ at: 5, status: 200, maintenance: true, endedAt: 5, latencyMs: 0 });
+    expect(await probeMaintenance("http://x/api/status/maintenance", answering(503, JSON.stringify({ error: "maintenance" })), () => 5)).toEqual({ at: 5, status: 503, maintenance: false, endedAt: 5, latencyMs: 0 });
     const failing = (async () => { throw new Error("down"); }) as unknown as typeof fetch;
-    expect(await probeMaintenance("http://x/api/status/maintenance", failing, () => 5)).toEqual({ at: 5, status: 0, maintenance: false });
+    expect(await probeMaintenance("http://x/api/status/maintenance", failing, () => 5)).toEqual({ at: 5, status: 0, maintenance: false, endedAt: 5, latencyMs: 0 });
   });
 
   test("the receipt line keeps the maintenance field, and a site line carries none", () => {
     const lines = [JSON.stringify({ at: 1, status: 200, path: "/" }), JSON.stringify({ at: 2, status: 200, maintenance: true, path: MAINTENANCE_STATUS_PATH })].join("\n");
-    expect(parseProbeReceipts(lines)).toEqual([{ at: 1, status: 200 }, { at: 2, status: 200, maintenance: true }]);
+    expect(parseProbeReceipts(lines)).toEqual([{ at: 1, status: 200, path: "/" }, { at: 2, status: 200, maintenance: true, path: MAINTENANCE_STATUS_PATH }]);
   });
 });
 
@@ -265,11 +265,20 @@ describe("the declared window in the probe grade", () => {
   test("passes where the site answered 200 throughout and the maintenance receipts inside the window are true", () => {
     const receipts = [...probes(WINDOW.start, WINDOW.end), ...maint(WINDOW.start, WINDOW.end)];
     expect(gradeRun(receipts, WINDOW, steps, "prod", 2_000, 3_000)).toMatchObject({ ok: true, problems: [] });
-    // the maintenance receipts are not site answers: a 503 from the status route outside the window fails nothing
-    const statusDown = [...receipts, { at: T0 + 30_001, status: 503, maintenance: false }];
-    expect(gradeRun(statusDown, WINDOW, steps, "prod", 2_000, 3_000).ok).toBe(true);
-    // and a rolling run (no window) grades only the site, as before
-    expect(gradeRun(statusDown, WINDOW, journalSteps([]), "prod", 2_000, 3_000).ok).toBe(true);
+  });
+
+  // Issue 1703: a maintenance status route failure is graded outside a declared window, and only there.
+  test("red control: a maintenance-route 503 outside the declared window lands in maintenanceFailures and fails; inside it does not", () => {
+    const receipts = [...probes(WINDOW.start, WINDOW.end), ...maint(WINDOW.start, WINDOW.end)];
+    const outside = { at: T0 + 30_001, status: 503, maintenance: false };
+    const g = gradeRun([...receipts, outside], WINDOW, steps, "prod", 2_000, 3_000);
+    expect(g.ok).toBe(false);
+    expect(g.maintenanceFailures).toEqual([outside]);
+    expect(g.problems.join()).toContain("maintenance status route were not 200");
+    // a rolling run (no window) grades it too
+    expect(gradeRun([...receipts, outside], WINDOW, journalSteps([]), "prod", 2_000, 3_000).maintenanceFailures).toEqual([outside]);
+    const inside = gradeRun([...receipts, { at: DECL.start + 10_001, status: 503, maintenance: false }], WINDOW, steps, "prod", 2_000, 3_000);
+    expect(inside).toMatchObject({ ok: true, maintenanceFailures: [] });
   });
 
   test("a gap inside the declared window still passes", () => {
