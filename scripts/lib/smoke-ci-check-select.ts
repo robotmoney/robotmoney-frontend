@@ -14,6 +14,8 @@
 // An unknown name throws; it never selects nothing.
 
 /** Every check, in the order a full run executes them. */
+import { DEFAULT_FAMILY } from "./model-registry.ts";
+
 export const CHECK_NAMES = [
   "swarm-session",
   "starter-agent",
@@ -49,4 +51,14 @@ export function selectChecks(argv: readonly string[], env: Readonly<Record<strin
   const unknown = requested.filter((name) => !known.has(name));
   if (unknown.length > 0) throw new Error(`unknown check${unknown.length > 1 ? "s" : ""}: ${unknown.join(", ")} (known: ${CHECK_NAMES.join(", ")})`);
   return requested as CheckName[];
+}
+
+// The onboarding sweep's model list (issue #1731). Each entry becomes
+// AGENT_MODEL for one admission, so it is the registry SELECTOR, never the
+// resolved raw id: an acceptance path refuses a raw id (D22 rule 1).
+export function onboardingSweepModels(env: Readonly<Record<string, string | undefined>>): string[] {
+  return (env.ONBOARDING_SWEEP_MODELS?.trim() || env.AGENT_MODEL || DEFAULT_FAMILY)
+    .split(":")
+    .map((m) => m.trim())
+    .filter(Boolean);
 }
