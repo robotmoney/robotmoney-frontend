@@ -72,6 +72,9 @@ export function stageHelp(stage, kind = "deposit", f = null) {
   }[stage] || "";
 }
 
+/** The Stage header's (i): the path every request takes, said once for the column. */
+export const STAGES_TIP = "A deposit goes Pending, Filled, Ready to claim, Claimed. A redemption has no wait, so it goes from Pending straight to Ready to claim.";
+
 /** The stages a deposit moves through, in order, for the stage guide on Your position. */
 export const LIFECYCLE = Object.freeze([
   { stage: STAGE.PENDING, tone: "waiting" },
@@ -134,6 +137,7 @@ export function rowOf(r, now, f, ctx = {}) {
     pct: r.amount > 0 ? Math.min(100, (filled / r.amount) * 100) : 0,
     stage: st.stage,
     tone,
+    claimed: st.stage === STAGE.CLAIMED,
     sub,
     tip,
     help: stageHelp(st.stage, r.kind, f),
