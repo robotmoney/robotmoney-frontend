@@ -12,6 +12,14 @@ export const PROJECTS_VIEW = `${VIEW_DIR}/projects.html`;
 export const ADMIN_VIEW = `${VIEW_DIR}/admin.html`;
 export const NOT_FOUND_VIEW = `${VIEW_DIR}/not-found.html`;
 export const EARLY_ACCESS_VIEW = `${VIEW_DIR}/early-access.html`;
+// Deposit into the one vault from any wallet (RM-146, under RM-205).
+export const DEPOSIT_VIEW = `${VIEW_DIR}/deposit.html`;
+// One request's public status page, /deposit/requests/:id: the link a person
+// bookmarks and an agent returns to its owner.
+export const DEPOSIT_REQUEST_VIEW = `${VIEW_DIR}/deposit-request.html`;
+// The connected wallet's position and requests, /deposit/requests.
+export const DEPOSIT_REQUESTS_VIEW = `${VIEW_DIR}/deposit-requests.html`;
+export const DEPOSIT_REQUEST_RE = /^\/deposit\/requests\/([A-Za-z0-9-]+)\/?$/;
 // The deposit skill's four docs pages, which early access replaces (RM-190).
 export const RETIRED_SKILL_DOCS = /^\/docs\/skill(\/(installation|commands|agent-basket))?\/?$/;
 
@@ -172,10 +180,10 @@ const ROUTES = {
   // viewFor() would otherwise look for views/vault.html, which is now the
   // per-vault page.
   "/vault": ALLOCATION_VIEW,
-  // Deposits wait for the vaults to open (RM-190): the deposit page and the
-  // deposit skill's docs resolve to early access, and router.js moves the
-  // address bar there. The skill docs are RETIRED_SKILL_DOCS, in viewFor().
-  "/deposit": EARLY_ACCESS_VIEW, // legacy redirect
+  // Deposit into the one vault (RM-146, under RM-205). The retired deposit
+  // skill's docs still resolve to early access: RETIRED_SKILL_DOCS, in viewFor().
+  "/deposit": DEPOSIT_VIEW,
+  "/deposit/requests": DEPOSIT_REQUESTS_VIEW,
   "/projects": PROJECTS_VIEW,
   // Legacy article URL, still live on robotmoney.network and still linked from the
   // synthesis prose of twenty archived swarm sessions (they cite
@@ -224,6 +232,7 @@ export function viewFor(pathname) {
   // /model-portfolio#vaults, as it does bare /vault.
   if (pathname === "/vault/" || /^\/vault\/rmagent\/?$/.test(pathname)) return ALLOCATION_VIEW;
   if (RETIRED_SKILL_DOCS.test(pathname)) return EARLY_ACCESS_VIEW;
+  if (DEPOSIT_REQUEST_RE.test(pathname)) return DEPOSIT_REQUEST_VIEW;
   if (pathname.startsWith("/vault/")) return NOT_FOUND_VIEW;
   if (ROUTES[pathname]) return ROUTES[pathname];
   // Dashboard routes (issue #380) checked next: DASH_ROUTES/DASH_PARAM_ROUTES

@@ -1,0 +1,219 @@
+<!-- Your requests, /deposit/requests (RM-146, under RM-205): the connected
+     wallet's position, anything ready to claim or withdraw, and every request
+     with the one action it needs. Canvas boards 6, 17 and 25. Behind the early
+     access gate (depositGate, lib/deposit/access.js). Styles:
+     assets/css/sections/deposit.css. Factory: depositRequestsView()
+     (alpine/views/deposit-requests.js). Never indexed (seo.js). -->
+
+<section class="dp" x-data="depositGate()">
+
+  <!-- Early access gate: the same block as deposit.html's; change both together. -->
+  <template x-if="!open">
+    <div class="dpg-wrap">
+      <header class="dpg">
+        <div class="dpg__viz" x-data="litPlateHero(0.74, 0.3)" aria-hidden="true">
+          <img class="dpg__still" src="/assets/img/early-access/stairs.jpg" alt="" width="1672" height="941" fetchpriority="high" decoding="async" />
+          <canvas class="dpg__canvas"></canvas>
+        </div>
+        <div class="dpg__inner">
+          <div class="dpg__col">
+            <h1 class="dpg__title">Early access to the vault</h1>
+            <p class="dpg__lede">The Robot Money vault on Base opens to the early access list first, a few depositors at a time.</p>
+            <label class="dpg__label" for="dp-code">Have an invite code? Enter it below.</label>
+            <div class="dpg__code" :class="'is-' + state">
+              <span class="dpg__rm" aria-hidden="true">RM</span>
+              <template x-for="i in [0, 1, 2, 3, 4]" :key="i"><span class="dpg__box" :class="boxClass(i)" x-text="box(i)" aria-hidden="true"></span></template>
+              <span class="dpg__dash" aria-hidden="true"></span>
+              <template x-for="i in [5, 6, 7, 8, 9]" :key="i"><span class="dpg__box" :class="boxClass(i)" x-text="box(i)" aria-hidden="true"></span></template>
+              <input id="dp-code" class="dpg__input" type="text" inputmode="text" autocomplete="one-time-code" autocapitalize="characters" autocorrect="off" spellcheck="false" maxlength="24" x-init="focusFirst($el)" @input="onInput($event)" @focus="focused = true" @blur="focused = false" :aria-invalid="state === 'wrong' ? 'true' : 'false'" aria-describedby="dp-code-msg" />
+            </div>
+            <p class="dpg__msg" id="dp-code-msg" role="status" :class="'is-' + state" x-text="msg()"></p>
+            <p class="dpg__fine">Not on the list yet? <a href="/early-access">Request early access</a></p>
+          </div>
+        </div>
+      </header>
+      <footer class="dp__foot dpg__foot">
+        <span>Robot Money is software that builds transactions your wallet signs. Nothing here is investment advice.</span>
+        <nav aria-label="Legal"><a href="/terms">Terms</a><a href="/privacy">Privacy</a><a href="/disclaimer">Disclaimer</a><a href="/smart-contract-risks">Smart contract risks</a></nav>
+      </footer>
+    </div>
+  </template>
+
+  <template x-if="open">
+  <div x-data="depositRequestsView()">
+  <div class="dp__wrap dp__wrap--page">
+
+    <div class="dp__pagehead">
+      <div class="dp__stack">
+        <p class="dp__eyebrow"><a class="dp__lbl dp__lbl--link" href="/deposit">Deposit</a><template x-if="sample()"><span class="dp__tag">Sample data</span></template></p>
+        <h1 class="dp__title dp__title--page">Your position</h1>
+      </div>
+      <template x-if="(connected() && onBase()) || restoring()"><a class="btn-primary dp__btn dp__btn--auto" href="/deposit">Deposit more</a></template>
+    </div>
+
+    <p class="dp__err" x-show="loadError" x-text="loadError" x-cloak></p>
+
+    <!-- Not connected (board 9) -->
+    <template x-if="!connected() && !restoring()">
+      <div class="dp__gate">
+        <p class="dp__soft">Connect the wallet that made the requests. Each request's own link works without one.</p>
+        <div class="dp__btnrow dp__btnrow--wrap">
+          <button type="button" class="btn-primary dp__btn dp__btn--auto" @click="connect()" :disabled="walletLoading()" x-text="walletLoading() ? 'Opening…' : 'Connect wallet'"></button>
+          <template x-if="simulated()"><button type="button" class="dp__txt" @click="useTestAddress()">Use a test address</button></template>
+        </div>
+        <p class="dp__legal">By connecting a wallet you agree to the <a href="/terms">Terms</a> and <a href="/privacy">Privacy Policy</a>.</p>
+      </div>
+    </template>
+    <template x-if="connected() && !onBase()">
+      <div class="dp__gate">
+        <p class="dp__soft">The vault is on Base. Your wallet is on another network.</p>
+        <button type="button" class="btn-primary dp__btn dp__btn--auto" @click="switchToBase()">Switch to Base</button>
+      </div>
+    </template>
+
+    <!-- While the kit reconnects a wallet, or the chain is read, a placeholder holds the place (.impeccable.md). -->
+    <template x-if="(connected() && onBase()) || restoring()">
+      <div class="dp__load" :class="dataReady() ? 'is-ready' : ''">
+      <div class="dp__skel dp__skel--page" aria-hidden="true"><span class="dp__skelfacts"><i></i><i></i><i></i></span><span class="dp__skelrows"><i></i><i></i><i></i><i></i></span></div>
+      <div class="dp__stack dp__stack--loose dp__live">
+        <div class="dp__facts">
+          <template x-for="f in facts()" :key="f.key"><div class="dp__fact"><span class="dp__lbl"><span x-text="f.label"></span><template x-if="f.tip"><span class="rm-tip"><button class="rm-tip__btn" type="button" :aria-label="`About ${f.label}`">i</button><span class="rm-tip__bub" role="tooltip" x-text="f.tip"></span></span></template></span><b x-text="f.value"></b></div></template>
+          <template x-if="!facts().length"><div class="dp__fact"><span class="dp__lbl">Shares</span><b>—</b></div></template>
+        </div>
+
+        <template x-if="stop()">
+          <div class="dp__note" role="status"><b x-text="stop().title"></b><p x-text="stop().body"></p></div>
+        </template>
+
+        <!-- A sent transaction not yet on Base, kept across a reload (board 25) -->
+        <template x-if="pending()">
+          <div class="dp__banner">
+            <div class="dp__bannerl"><svg class="dp__spin" width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="#f2f4f9" stroke-width="1.6" aria-hidden="true"><circle cx="10" cy="10" r="7" stroke="#2e3a4e"></circle><path d="M10 3a7 7 0 0 1 7 7"></path></svg><p><span x-text="pending().label"></span> is sent and waiting for Base.</p></div>
+            <template x-if="pendingUrl()"><a class="dp__ext" :href="pendingUrl()" target="_blank" rel="noopener noreferrer">Basescan</a></template>
+          </div>
+        </template>
+
+        <!-- Ready to claim (board 6) -->
+        <div class="dp__banner" x-show="readyDeposits().any" x-transition.opacity.duration.300ms>
+            <div class="dp__bannerl"><i class="dp__dot is-ok" aria-hidden="true"></i><p><span class="dp__mono" x-text="fmtRm(readyDeposits().shares)"></span> from <span x-text="fmtUsdc(readyDeposits().paid)"></span> of deposits is ready.</p></div>
+            <div class="dp__bannerr">
+              <button type="button" class="btn-primary dp__btn dp__btn--auto" :disabled="!!busy" @click="claimShares()" x-text="busy === 'claim-shares' ? busyText : 'Claim into wallet'"></button>
+              <p class="dp__err" x-show="errKey === 'claim-shares'" x-text="errText"></p>
+            </div>
+        </div>
+        <div class="dp__banner" x-show="readyRedemptions().any" x-transition.opacity.duration.300ms>
+            <div class="dp__bannerl"><i class="dp__dot is-ok" aria-hidden="true"></i><p><span class="dp__mono" x-text="fmtUsdc(readyRedemptions().usdc)"></span> from <span x-text="fmtRm(readyRedemptions().shares)"></span> redeemed is ready.</p></div>
+            <div class="dp__bannerr">
+              <button type="button" class="btn-primary dp__btn dp__btn--auto" :disabled="!!busy" @click="claimUsdc()" x-text="busy === 'claim-usdc' ? busyText : 'Claim into wallet'"></button>
+              <p class="dp__err" x-show="errKey === 'claim-usdc'" x-text="errText"></p>
+            </div>
+        </div>
+        <div class="dp__banner" x-show="released().any" x-transition.opacity.duration.300ms>
+            <div class="dp__bannerl"><i class="dp__dot is-ok" aria-hidden="true"></i><p><span class="dp__mono" x-text="released().words"></span> from your queued requests is released in the wind-down, yours to withdraw.</p></div>
+            <div class="dp__bannerr">
+              <button type="button" class="btn-primary dp__btn dp__btn--auto" :disabled="!!busy" @click="releaseWindDown()" x-text="busy === 'release' ? busyText : 'Withdraw to wallet'"></button>
+              <p class="dp__err" x-show="errKey === 'release'" x-text="errText"></p>
+            </div>
+        </div>
+        <div class="dp__banner" x-show="credit().any" x-transition.opacity.duration.300ms>
+            <div class="dp__bannerl"><i class="dp__dot is-ok" aria-hidden="true"></i><p><span class="dp__mono" x-text="creditWords()"></span> is waiting in the queue, yours to withdraw.</p></div>
+            <div class="dp__bannerr">
+              <button type="button" class="btn-primary dp__btn dp__btn--auto" :disabled="!!busy" @click="withdrawCredit()" x-text="busy === 'credit' ? busyText : 'Withdraw to wallet'"></button>
+              <p class="dp__err" x-show="errKey === 'credit'" x-text="errText"></p>
+            </div>
+        </div>
+
+        <section class="dp__stack" aria-labelledby="rq-h">
+          <div class="dp__sechead">
+            <h2 class="dp__h2 dp__h2--flush" id="rq-h">Your requests</h2>
+            <p class="dp__countdown" :title="nextBatchTitle()"><span class="dp__lbl">Next batch in</span> <b x-text="nextBatchClock()"></b></p>
+          </div>
+          <div class="dp__tablewrap">
+            <table class="dp__tbl dp__reqs">
+              <thead><tr><th scope="col">Request</th><th scope="col" class="n">Amount</th><th scope="col" class="n">Filled</th><th scope="col">Stage<span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="About stages">i</button><span class="rm-tip__bub" role="tooltip" x-text="stagesTip()"></span></span></th><th scope="col" class="n">Next</th><th scope="col"><span class="dp__sr">Actions</span></th></tr></thead>
+              <tbody>
+                <!-- Holds one row's height while the list loads, so the stage guide and the footer do not jump when it arrives. -->
+                <template x-if="!dataReady()">
+                  <tr aria-hidden="true"><td colspan="6"><span>&#8203;</span><span class="dp__sub">&#8203;</span></td></tr>
+                </template>
+                <template x-if="dataReady() && !rows().length">
+                  <tr><td colspan="6" class="dp__empty">No requests from this wallet yet. A deposit or redemption you request shows here until it is delivered.</td></tr>
+                </template>
+                <template x-for="r in rows()" :key="r.id">
+                  <tr :class="asking === r.id ? 'is-asking' : ''">
+                    <td><a :href="r.href" x-text="r.kind"></a><span class="dp__sub" x-text="r.created"></span></td>
+                    <td class="n" x-text="r.amount"></td>
+                    <td class="n" data-k="Filled"><span :class="r.tone === 'off' && r.pct === 0 ? 'dp__muted' : ''" x-text="r.filled"></span><template x-if="r.out"><span class="dp__sub" x-text="`→ ${r.out}`"></span></template><template x-if="r.tone === 'filling'"><span class="dp__bar" aria-hidden="true"><i :style="`width:${r.pct}%`"></i></span></template></td>
+                    <td><span class="rm-tip rm-tip--label"><button type="button" class="rm-tip__btn dp__stage dp__pill" :class="`is-${r.tone}`"><svg class="dp__tick" x-show="r.claimed" width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M1.5 5.25 4 7.75 8.75 2.5" fill="none" stroke="currentColor" stroke-width="1.5"></path></svg><i x-show="!r.claimed" aria-hidden="true"></i><span x-text="r.stage"></span></button><span class="rm-tip__bub" role="tooltip" x-text="r.help"></span></span><template x-if="r.sub"><span class="dp__sub"><span x-text="r.sub"></span><template x-if="r.tip"><span class="rm-tip"><button class="rm-tip__btn" type="button" :aria-label="`About ${r.stage}`">i</button><span class="rm-tip__bub" role="tooltip" x-text="r.tip"></span></span></template></span></template></td>
+                    <td class="n" data-k="Next"><span :class="r.next ? '' : 'dp__muted'" x-text="r.next || '—'"></span><template x-if="r.nextIn"><span class="dp__sub" x-text="r.nextIn"></span></template></td>
+                    <td class="dp__acts">
+                      <template x-if="r.canCancel && asking !== r.id"><button type="button" class="dp__txt" :disabled="!!busy" @click="asking = r.id" x-text="r.filledShort ? 'Cancel unfilled' : 'Cancel'"></button></template>
+                      <template x-if="r.claimable && r.kind === 'Deposit'"><button type="button" class="dp__btn2 dp__btn2--sm" :disabled="!!busy" @click="claimShares()">Claim</button></template>
+                      <template x-if="r.claimable && r.kind === 'Redemption'"><button type="button" class="dp__btn2 dp__btn2--sm" :disabled="!!busy" @click="claimUsdc()">Claim</button></template>
+                      <template x-if="r.canWithdrawExpired"><button type="button" class="dp__btn2 dp__btn2--sm" :disabled="!!busy" @click="withdrawExpired(r.id)" x-text="busy === `expired-${r.id}` ? busyText : 'Withdraw'"></button></template>
+                      <template x-if="r.canGiveNotice"><button type="button" class="dp__btn2 dp__btn2--sm" :disabled="!!busy" @click="giveNotice(r.id)" x-text="busy === `notice-${r.id}` ? busyText : 'Ask for shares back'"></button></template>
+                      <template x-if="r.canTakeBack"><button type="button" class="dp__btn2 dp__btn2--sm" :disabled="!!busy" @click="takeBack(r.id)" x-text="busy === `back-${r.id}` ? busyText : 'Take back'"></button></template>
+                      <p class="dp__err dp__err--cell" x-show="errKey === `expired-${r.id}` || errKey === `notice-${r.id}` || errKey === `back-${r.id}`" x-text="errText"></p>
+                    </td>
+                  </tr>
+                </template>
+              </tbody>
+            </table>
+          </div>
+
+          <!-- Cancel, confirmed in place (board 17) -->
+          <template x-for="r in rows().filter((x) => x.id === asking)" :key="`ask${r.id}`">
+            <div class="dp__confirm" role="group" aria-label="Confirm cancel">
+              <p>Cancel the unfilled <span class="dp__mono" x-text="r.cancelAmount"></span> of this <span x-text="r.kind.toLowerCase()"></span>? It comes back to your wallet.<template x-if="r.filledShort"><span> The filled <span x-text="r.filledShort"></span> stays.</span></template></p>
+              <span class="dp__confirmb">
+                <button type="button" class="dp__btn2 dp__btn2--sm" :disabled="!!busy" @click="cancel(r.id)" x-text="busy === `cancel-${r.id}` ? busyText : 'Cancel it'"></button>
+                <button type="button" class="dp__txt" :disabled="!!busy" @click="asking = null">Keep</button>
+              </span>
+              <p class="dp__err dp__confirmerr" x-show="errKey === `cancel-${r.id}`" x-text="errText"></p>
+            </div>
+          </template>
+        </section>
+
+        <!-- What each stage means, in the order a deposit moves through them, read as a stepper: a check on the steps this wallet's requests have passed, the stage's own mark where they stand now. -->
+        <section class="dp__stack" aria-labelledby="stages-h">
+          <h2 class="dp__h2 dp__h2--flush" id="stages-h">Stages</h2>
+          <ol class="dp__life">
+            <template x-for="s in lifecycle()" :key="s.stage">
+              <li :class="`is-${s.state}`" :aria-current="s.state === 'here' ? 'step' : null">
+                <span class="dp__stage" :class="s.state === 'here' ? `is-${s.tone}` : ''">
+                  <svg class="dp__tick" x-show="s.state === 'done'" width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M1.5 5.25 4 7.75 8.75 2.5" fill="none" stroke="currentColor" stroke-width="1.5"></path></svg>
+                  <i x-show="s.state !== 'done'" aria-hidden="true"></i><span x-text="s.stage"></span><span class="rm-visually-hidden" x-text="s.state === 'done' ? ', done' : ''"></span>
+                </span>
+                <p x-text="s.help"></p>
+                <span class="dp__life-n" x-show="s.count" x-text="s.count === 1 ? '1 of yours' : `${s.count} of yours`"></span>
+              </li>
+            </template>
+          </ol>
+        </section>
+      </div>
+      </div>
+    </template>
+
+    <footer class="dp__foot">
+      <span>Robot Money is software that builds transactions your wallet signs. Nothing here is investment advice.</span>
+      <nav aria-label="Legal"><a href="/terms">Terms</a><a href="/privacy">Privacy</a><a href="/disclaimer">Disclaimer</a><a href="/smart-contract-risks">Smart contract risks</a></nav>
+    </footer>
+  </div>
+
+  <template x-if="simulated()">
+    <aside class="dp__sim" aria-label="Simulation controls">
+      <p><b>Simulated vault</b> Nothing is sent to any chain.</p>
+      <div class="dp__simb">
+        <button type="button" class="dp__btn2 dp__btn2--sm" @click="simNext()">Run next batch</button>
+        <button type="button" class="dp__btn2 dp__btn2--sm" @click="simAdvance(1)">+1 h</button>
+        <button type="button" class="dp__txt" @click="simToggleDeposits()" x-text="simState().deposits ? 'Resume deposits' : 'Stop deposits'"></button>
+        <button type="button" class="dp__txt" @click="simToggleBlocked()" x-text="simState().blocked ? 'Unblock batches' : 'Block batches'"></button>
+        <button type="button" class="dp__txt" @click="simToggleWindDown()" x-text="simState().windDown ? 'Restore' : 'Wind down'"></button>
+        <template x-if="!resetAsk"><button type="button" class="dp__txt" @click="resetAsk = true">Reset</button></template>
+        <template x-if="resetAsk"><span>Clear every simulated request? <button type="button" class="dp__txt" @click="simReset()">Yes</button> <button type="button" class="dp__txt" @click="resetAsk = false">No</button></span></template>
+      </div>
+    </aside>
+  </template>
+  </div>
+  </template>
+</section>
