@@ -30,6 +30,7 @@ import { hashKey } from "../lib/keys.ts";
 export * from "./epoch.ts";
 import {
   eventsAbove,
+  guardSessionModelCutoff,
   isUuid,
   readPresent,
   resyncReasonFor,
@@ -3779,6 +3780,45 @@ export async function appendBriefRevision(
 }
 
 /**
+ * Every field of a brief body and of a judge input, with its source and its
+ * as-of rule (issue 1742, finding R5). docs/technical/regime-engine.md carries
+ * the same table, and backend/tests/swarm-brief-input-fields.test.ts fails when
+ * a body, an input, this registry or that table disagree. `cutAtSessionDate`
+ * false means the value is not cut at the session's date: each such field is a
+ * recorded finding, not a fix.
+ */
+export interface InputFieldSpec {
+  source: string;
+  asOf: string;
+  cutAtSessionDate: boolean;
+  /** Present only under a condition (the allocation of a framework subject). */
+  conditional?: boolean;
+}
+export const BRIEF_BODY_FIELDS: Readonly<Record<string, InputFieldSpec>> = Object.freeze({
+  allocation: { source: "allocation_framework row 1 (framework subjects only), kept once written", asOf: "Newest row, no date cut", cutAtSessionDate: false, conditional: true },
+  regime: { source: "regime_snapshots", asOf: "Newest row dated on or before the database's today, not the session date", cutAtSessionDate: false },
+  subject: { source: "swarm_subjects", asOf: "Current row at build time", cutAtSessionDate: true },
+  recentSessions: { source: "swarm_sessions of the subject", asOf: "Newest five published sessions, no date cut", cutAtSessionDate: false },
+  previousSession: { source: "The caller's previous outcome text", asOf: "Supplied by the caller", cutAtSessionDate: true },
+  researchSignals: { source: "research_signals", asOf: "Rows dated exactly the session date", cutAtSessionDate: false },
+  prompt: { source: "briefTaskText over the subject, session date and sleeves", asOf: "Session date", cutAtSessionDate: true },
+  takeSchema: { source: "Contract buckets and the subject's recommendation type", asOf: "Static", cutAtSessionDate: true },
+  windowClosesAt: { source: "The session's window close", asOf: "Session window", cutAtSessionDate: true },
+});
+export const JUDGE_INPUT_FIELDS: Readonly<Record<string, InputFieldSpec>> = Object.freeze({
+  sessionId: { source: "swarm_sessions.id", asOf: "Session", cutAtSessionDate: true },
+  date: { source: "swarm_sessions.date", asOf: "Session date", cutAtSessionDate: true },
+  subjectId: { source: "swarm_sessions.subject_id", asOf: "Session", cutAtSessionDate: true },
+  subjectLabel: { source: "swarm_sessions.subject_name", asOf: "Session", cutAtSessionDate: true },
+  brief: { source: "swarm_briefs.body, every brief body field above", asOf: "As stored; carries the brief's uncut fields", cutAtSessionDate: false },
+  takes: { source: "Frozen final take per member", asOf: "Taken within the session window", cutAtSessionDate: true },
+  minTakes: { source: "swarm_judge_config.min_takes", asOf: "Passed by the caller", cutAtSessionDate: true },
+  byStance: { source: "swarm_sessions.swarm_recommendation", asOf: "Aggregated at close", cutAtSessionDate: true },
+  meanConfidence: { source: "swarm_sessions.swarm_recommendation", asOf: "Aggregated at close", cutAtSessionDate: true },
+  regimeSummary: { source: "swarm_sessions.regime_summary", asOf: "Stored when the session aggregated", cutAtSessionDate: true },
+});
+
+/**
  * Build a session's brief BODY — everything the brief says, with no write of
  * any kind.
  *
@@ -4098,6 +4138,7 @@ export async function publishBrief(sessionId: string, windowMinutes = 60, prevOu
                          FROM swarm_sessions WHERE id = ${sessionId}`)[0];
   const closes = new Date(s.closes);
   const windowClosesAt = closes.toISOString();
+  await guardSessionModelCutoff(sql, s.date);
   const { body, reportSnapshotId } = await buildBriefBody(s, windowClosesAt, prevOutcome, sql);
   // Keyed on the SESSION (migration 0028), not the day. The old
   // `ON CONFLICT (date, subject_id)` made every session after the first of a

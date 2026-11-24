@@ -2166,6 +2166,43 @@ directly against PD10's "published figures do not change under readers"
 guarantee: the figures still do not change, but the *page* around them does.
 
 
+## 12. Swarm brief and judge input fields (issue 1742)
+
+Every field the swarm brief body and the judge input carry, with its source and its as-of rule. The registry is `BRIEF_BODY_FIELDS` and `JUDGE_INPUT_FIELDS` in `backend/src/swarm/domain.ts`. `backend/tests/swarm-brief-input-fields.test.ts` fails when a built body, a built input, the registry and this table disagree. A live brief carries no correlations. Forward statistics are display only (see `docs/decisions.md`).
+
+| Surface | Field | Source | As-of rule | Cut at session date |
+| --- | --- | --- | --- | --- |
+| brief | `allocation` | allocation_framework row 1 (framework subjects only), kept once written | Newest row, no date cut | no |
+| brief | `regime` | regime_snapshots | Newest row dated on or before the database's today, not the session date | no |
+| brief | `subject` | swarm_subjects | Current row at build time | yes |
+| brief | `recentSessions` | swarm_sessions of the subject | Newest five published sessions, no date cut | no |
+| brief | `previousSession` | The caller's previous outcome text | Supplied by the caller | yes |
+| brief | `researchSignals` | research_signals | Rows dated exactly the session date | no |
+| brief | `prompt` | briefTaskText over the subject, session date and sleeves | Session date | yes |
+| brief | `takeSchema` | Contract buckets and the subject's recommendation type | Static | yes |
+| brief | `windowClosesAt` | The session's window close | Session window | yes |
+| judge | `sessionId` | swarm_sessions.id | Session | yes |
+| judge | `date` | swarm_sessions.date | Session date | yes |
+| judge | `subjectId` | swarm_sessions.subject_id | Session | yes |
+| judge | `subjectLabel` | swarm_sessions.subject_name | Session | yes |
+| judge | `brief` | swarm_briefs.body, every brief body field above | As stored; carries the brief's uncut fields | no |
+| judge | `takes` | Frozen final take per member | Taken within the session window | yes |
+| judge | `minTakes` | swarm_judge_config.min_takes | Passed by the caller | yes |
+| judge | `byStance` | swarm_sessions.swarm_recommendation | Aggregated at close | yes |
+| judge | `meanConfidence` | swarm_sessions.swarm_recommendation | Aggregated at close | yes |
+| judge | `regimeSummary` | swarm_sessions.regime_summary | Stored when the session aggregated | yes |
+
+### 12.1 Findings: fields not cut at the session date
+
+Each finding is recorded here and is not fixed by this change. Each becomes its own follow-up issue.
+
+- `brief.allocation`: Newest row, no date cut.
+- `brief.regime`: Newest row dated on or before the database's today, not the session date.
+- `brief.recentSessions`: Newest five published sessions, no date cut.
+- `brief.researchSignals`: Rows dated exactly the session date.
+- `judge.brief`: As stored; carries the brief's uncut fields.
+- The v0 archive briefs under `frontend/public/data/swarm/briefs` carried `regime.correlations.forward`. The live brief carries none.
+
 ## See also
 
 - [`architecture.md` §7.1](../architecture/task-queue-and-workers.md#71-analytics-suite-six-stage-pipeline) — the six-stage plumbing this document deliberately does not restate.

@@ -22,6 +22,11 @@ export const CORR_ASSETS = ["spx", "eth"] as const;
 export interface CorrelationCell {
   rho: number | null;
   n: number;
+  /**
+   * Forward cells only: floor(n / horizon days). The forward windows overlap, so
+   * the independent sample is about n divided by the horizon, not n (issue 1742).
+   */
+  n_eff?: number;
 }
 export interface CorrelationsPayload {
   // forward[indexName][`${asset}_${h}d`] and concurrent[indexName][asset]
@@ -70,6 +75,7 @@ export function computeCorrelations(
         out.forward[idxName][`${asset}_${h}d`] = {
           rho: nullIfNaN(spearman(pairs)),
           n: pairs.length,
+          n_eff: Math.floor(pairs.length / h),
         };
       }
       // Concurrent (today's index vs today's log-price).

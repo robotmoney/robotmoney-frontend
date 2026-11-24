@@ -153,7 +153,8 @@ function assertDeepClose(got: any, exp: any, path: string, tol: number, counter:
     return;
   }
   const keys = Object.keys(exp);
-  const gotKeys = got == null ? [] : Object.keys(got);
+  // Issue 1742: the vendored reference predates n_eff on forward correlation cells.
+  const gotKeys = got == null ? [] : Object.keys(got).filter((k) => !(k === "n_eff" && !("n_eff" in exp)));
   expect(new Set(gotKeys), `${path} keys`).toEqual(new Set(keys));
   for (const k of keys) assertDeepClose(got[k], exp[k], `${path}.${k}`, tol, counter);
 }

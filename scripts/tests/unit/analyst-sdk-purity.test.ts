@@ -415,3 +415,52 @@ describe("issue 1421: no downstream acquisition", () => {
     });
   });
 });
+
+// ── issue 1742 (R2): forward statistics are display only ────────────────────
+// Forward correlations look forward by design. No decision module (the SDK's
+// allocate/ and the backend's swarm/) may import analyze/correlations.ts,
+// either the SDK file or the backend shim, or read RunResult.correlations.
+const CORRELATIONS_IMPORT = /(^|\/)analyze\/correlations(\.ts)?$/;
+
+/** Violations of the decision-module rule in one file. */
+export function correlationReadViolations(file: string, text: string): string[] {
+  const code = codeOnly(text);
+  const found: string[] = [];
+  for (const spec of specifiers(code)) {
+    if (CORRELATIONS_IMPORT.test(spec)) found.push(`${file}: imports ${spec} (forward statistics are display only)`);
+  }
+  if (/\.\s*correlations\b/.test(code)) found.push(`${file}: reads a .correlations value (forward statistics are display only)`);
+  return found;
+}
+
+describe("issue 1742: no decision module reads forward correlations", () => {
+  const ALLOCATE = join(root, "packages/analyst-sdk/src/allocate");
+  const SWARM = join(root, "backend/src/swarm");
+  const allocateFiles = tsFiles(ALLOCATE);
+  const swarmFiles = tsFiles(SWARM);
+
+  test("the scan is non-vacuous", () => {
+    expect(allocateFiles.length).toBeGreaterThanOrEqual(9);
+    expect(swarmFiles.length).toBeGreaterThanOrEqual(18);
+  });
+
+  test("the real tree: no allocate/ or backend/src/swarm/ file imports analyze/correlations.ts or reads .correlations", () => {
+    const violations = [...allocateFiles, ...swarmFiles].flatMap((f) => correlationReadViolations(relative(root, f), readFileSync(f, "utf8")));
+    expect(violations).toEqual([]);
+  });
+
+  describe("red control: planted files", () => {
+    test("flags an allocate/ file importing the SDK correlations module", () => {
+      expect(correlationReadViolations("packages/analyst-sdk/src/allocate/x.ts", 'import { computeCorrelations } from "../analyze/correlations.ts";')).not.toEqual([]);
+    });
+    test("flags a swarm/ file importing it through the backend shim path", () => {
+      expect(correlationReadViolations("backend/src/swarm/x.ts", 'import { CorrelationCell } from "../analytics/analyze/correlations.ts";')).not.toEqual([]);
+    });
+    test("flags a file reading RunResult.correlations", () => {
+      expect(correlationReadViolations("packages/analyst-sdk/src/allocate/y.ts", "const c = run.correlations.forward;")).not.toEqual([]);
+    });
+    test("passes a clean file and a comment that names the module", () => {
+      expect(correlationReadViolations("backend/src/swarm/ok.ts", '// never import analyze/correlations.ts here\nimport { x } from "./domain.ts";')).toEqual([]);
+    });
+  });
+});

@@ -64,8 +64,11 @@ function walk(a: unknown, b: unknown, path: string, out: NumericDiff): void {
     return;
   }
   if (a && b && typeof a === "object" && typeof b === "object" && !Array.isArray(a) && !Array.isArray(b)) {
-    const ka = Object.keys(a);
-    const kb = Object.keys(b);
+    // Issue 1742: a forward correlation cell gained n_eff after the originals were
+    // captured. It is an addition beside rho and n, which stay compared.
+    const dropNEff = /\.forward\.[^.]+\.[^.]+$/.test(path);
+    const ka = Object.keys(a).filter((k) => !(dropNEff && k === "n_eff"));
+    const kb = Object.keys(b).filter((k) => !(dropNEff && k === "n_eff"));
     if (ka.join("\u0000") !== kb.join("\u0000")) out.differences.push({ path: `${path}{keys}`, kind: "structural", before: ka, after: kb });
     for (const k of ka) if (Object.hasOwn(b, k)) walk((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k], `${path}.${k}`, out);
     return;

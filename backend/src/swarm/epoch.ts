@@ -33,6 +33,7 @@ import {
   IN_HOUSE_SEAT_HANDLES,
   recordAbsencesTx,
 } from "./domain.ts";
+import { assertSessionNotBeforeModelCutoff } from "./model-cutoff.ts";
 import { DRAW_RULE, drawIndex, type JudgeDraw } from "./judge-draw.ts";
 
 /** The entry modules that reach this file's statements (QueryDeclaration.callers). */
@@ -466,6 +467,7 @@ async function insertEpoch(
     INSERT INTO swarm_sessions (subject_id, subject_name, state, window_closes_at)
     VALUES (${subject.id}, ${subject.name ?? subject.id}, 'collecting', ${closesAt}::text::timestamptz)
     RETURNING *`;
+  await guardSessionModelCutoff(tx, session.date);
   const windowClosesAt = new Date(session.window_closes_at).toISOString();
   // THE EPOCH'S SEATED ROSTER, frozen at open (scheduler spec §4.3). Turnover
   // records "an `absent` event for each seated member with no take received
@@ -1266,6 +1268,29 @@ async function currentCollecting(
  * the operator did not ask for — so a row written before D53 cannot reach a
  * session as a third mode.
  */
+const readJudgeModel = registerQuery({
+  role: "rm_app",
+  object: "swarm_judge_config",
+  privileges: ["SELECT"],
+  site: "src/swarm/epoch:guardSessionModelCutoff",
+  purpose: "Read the configured judge model and the database's UTC date, for the model-cutoff guard (issue 1742).",
+  callers: [ADMIN_ROUTE],
+  probe: { statement: "SELECT model, (clock_timestamp() AT TIME ZONE 'UTC')::date::text AS today FROM swarm_judge_config WHERE id = 1" },
+});
+
+/**
+ * Refuse a session dated before the configured judge model's training cutoff
+ * (issue 1742). Called where a session is opened and where its brief is
+ * published, with the session's own date.
+ */
+export async function guardSessionModelCutoff(h: DbHandle, sessionDate: string | Date): Promise<void> {
+  const [cfg] = await on(h, readJudgeModel)<{ model: string | null; today: string }>`
+    SELECT model, (clock_timestamp() AT TIME ZONE 'UTC')::date::text AS today FROM swarm_judge_config WHERE id = 1`;
+  const today = cfg?.today ?? new Date().toISOString().slice(0, 10);
+  const date = sessionDate instanceof Date ? sessionDate.toISOString().slice(0, 10) : String(sessionDate).slice(0, 10);
+  assertSessionNotBeforeModelCutoff(cfg?.model ?? null, date, today);
+}
+
 async function currentJudgeMode(h: DbHandle): Promise<JudgeMode> {
   const [cfg] = await on(h, readJudgeMode)<{ mode: string }>`SELECT mode FROM swarm_judge_config WHERE id = 1`;
   return cfg?.mode === "enforce" ? "enforce" : "off";

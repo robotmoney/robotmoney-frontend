@@ -109,16 +109,16 @@ test("publishBrief()'s recentSessions only contains published sessions matching 
 
   // Seed sessions for subjA: 6 published sessions on different dates, 1 collecting session
   for (let i = 1; i <= 6; i++) {
-    const timeStr = `2026-01-0${i}T12:00:00Z`;
+    const timeStr = `2026-08-0${i}T12:00:00Z`;
     await sql`INSERT INTO swarm_sessions (subject_id, subject_name, convened_at, state)
               VALUES (${subjA}, 'Subject A', ${timeStr}::timestamptz, 'published')`;
   }
   await sql`INSERT INTO swarm_sessions (subject_id, subject_name, convened_at, state)
-            VALUES (${subjA}, 'Subject A', '2026-01-07T12:00:00Z'::timestamptz, 'collecting')`;
+            VALUES (${subjA}, 'Subject A', '2026-08-07T12:00:00Z'::timestamptz, 'collecting')`;
 
   // Seed sessions for subjB: 3 published sessions
   for (let i = 1; i <= 3; i++) {
-    const timeStr = `2026-01-0${i}T12:00:00Z`;
+    const timeStr = `2026-08-0${i}T12:00:00Z`;
     await sql`INSERT INTO swarm_sessions (subject_id, subject_name, convened_at, state)
               VALUES (${subjB}, 'Subject B', ${timeStr}::timestamptz, 'published')`;
   }
@@ -141,9 +141,9 @@ test("publishBrief()'s recentSessions only contains published sessions matching 
     expect(item.state).toBe("published");
   }
 
-  // Ordered by date DESC (2026-01-06 down to 2026-01-02)
+  // Ordered by date DESC (2026-08-06 down to 2026-08-02)
   const dates = recent.map((r) => (typeof r.date === "string" ? r.date.slice(0, 10) : new Date(r.date).toISOString().slice(0, 10)));
-  expect(dates).toEqual(["2026-01-06", "2026-01-05", "2026-01-04", "2026-01-03", "2026-01-02"]);
+  expect(dates).toEqual(["2026-08-06", "2026-08-05", "2026-08-04", "2026-08-03", "2026-08-02"]);
 });
 
 test("the brief lists the session's own bucket list: four new sleeves on or after the framework asOf, the old list before it (issue 1496)", async () => {
