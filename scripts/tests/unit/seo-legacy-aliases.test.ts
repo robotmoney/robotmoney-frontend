@@ -72,9 +72,8 @@ test("an aliased path inherits the renamed page's metadata rather than 404 metad
     ["/performance", "/treasury"],
     ["/allocation", "/model-portfolio"],
     ["/articles/treasury-allocation", "/blog/treasury-allocation"],
-    // RM-190: deposits wait for the vaults; the deposit page and the deposit
-    // skill's docs render early access.
-    ["/deposit", "/early-access"],
+    // RM-190: the deposit skill's docs render early access. /deposit was one of
+    // these until RM-146 gave it back its own page (see the test below).
     ["/docs/skill", "/early-access"],
     ["/docs/skill/installation", "/early-access"],
     ["/docs/skill/commands", "/early-access"],
@@ -129,11 +128,22 @@ test("/vault is an exact alias: the bare path is /model-portfolio, each vault pa
   expect(canonicalUrlFor("/vault/nope")).toBe("https://robotmoney.network/vault/nope");
 });
 
-test("/deposit and the deposit skill's docs name /early-access canonical, each by an exact entry", () => {
-  for (const path of ["/deposit", "/docs/skill", "/docs/skill/installation", "/docs/skill/commands", "/docs/skill/agent-basket"]) {
+test("the deposit skill's docs name /early-access canonical, each by an exact entry", () => {
+  for (const path of ["/docs/skill", "/docs/skill/installation", "/docs/skill/commands", "/docs/skill/agent-basket"]) {
     expect({ path, canonical: canonicalUrlFor(path) }).toEqual({ path, canonical: "https://robotmoney.network/early-access" });
   }
   // Not a prefix rewrite: an address the docs never had stays not found.
   expect(canonicalUrlFor("/docs/skill/nope")).toBe("https://robotmoney.network/docs/skill/nope");
   expect(viewFor("/docs/skill/nope")).not.toBe(viewFor("/early-access"));
+});
+
+// RM-146: the one-vault deposit page is live behind early access. It is its own
+// page again, not an alias of /early-access, and stays out of the index while
+// the gate is on, as do the request pages under it.
+test("/deposit is its own page, out of the index while early access gates it", () => {
+  for (const path of ["/deposit", "/deposit/requests", "/deposit/requests/9"]) {
+    expect({ path, canonical: canonicalUrlFor(path) }).toEqual({ path, canonical: `https://robotmoney.network${path}` });
+    expect({ path, robots: metaFor(path).robots }).toEqual({ path, robots: "noindex, nofollow" });
+    expect(viewFor(path)).not.toBe(viewFor("/early-access"));
+  }
 });

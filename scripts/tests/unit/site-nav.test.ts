@@ -185,14 +185,16 @@ describe("the nav markup", () => {
   });
 });
 
-// RM-190: deposits wait for the vaults to open. The deposit page and the
-// deposit skill's docs are gone, their addresses move to /early-access, and
-// /skills lists the swarm skill alone.
+// RM-190: the deposit skill's docs are gone, their addresses move to
+// /early-access, and /skills lists the swarm skill alone. RM-146 brought the
+// deposit page back behind early access: no static page links to it, because
+// only a visitor with a code is sent there (lib/access-cta.js).
 describe("deposits wait for the vaults", () => {
   const skills = readFileSync(join(pub, "views/skills.html"), "utf8");
 
-  test("the deposit page and the deposit skill's docs are gone", () => {
-    for (const v of ["deposit", "docs/skill", "docs/skill/installation", "docs/skill/commands", "docs/skill/agent-basket"]) {
+  test("the deposit skill's docs are gone, and the deposit page is back", () => {
+    expect(existsSync(join(pub, "views/deposit.html"))).toBe(true);
+    for (const v of ["docs/skill", "docs/skill/installation", "docs/skill/commands", "docs/skill/agent-basket"]) {
       expect(existsSync(join(pub, `views/${v}.html`)), v).toBe(false);
     }
   });
