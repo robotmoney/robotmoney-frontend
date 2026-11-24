@@ -41,9 +41,19 @@ export interface ModelFamily {
   models: Record<string, string>;
   /** True when every member is served by Zen's no-credential free tier. */
   keyless?: boolean;
+  /**
+   * Training cutoff (YYYY-MM-DD) every member of the family is treated as having.
+   * A session dated before it is refused (issue 1742). No provider's published
+   * cutoff is recorded here, so it is the date the family was first verified
+   * (2026-07-28), a safe upper bound. Kept in lockstep with MODEL_CUTOFF_DATES in
+   * backend/src/swarm/judge-model-policy.ts by judge-model-policy-matches-registry.test.ts.
+   */
+  cutoff: string;
   /** Why this family's default is what it is. */
   note: string;
 }
+
+const VERIFIED_ON = "2026-07-28";
 
 // Verified live against Zen on 2026-07-28 with a funded key: every id below
 // returned a real completion through the opencode CLI.
@@ -51,30 +61,35 @@ export const MODEL_FAMILIES: Record<string, ModelFamily> = {
   deepseek: {
     default: "v4-flash",
     models: { "v4-flash": "deepseek-v4.1-flash", "v4-pro": "deepseek-v4-pro" },
+    cutoff: VERIFIED_ON,
     note: "Repo default. Fast, cheap ($0.95/$4 per 1M), and — unlike the Claude family on Zen — it does NOT refuse the swarm-take persona.",
   },
   kimi: {
     default: "k2.7-code",
     models: { "k2.7-code": "kimi-k2.7-code", "k2.6": "kimi-k2.6", "k2.5": "kimi-k2.5", k3: "kimi-k3" },
+    cutoff: VERIFIED_ON,
     note: "Strongest verified agentic tool-use in the member-agent container; recovered unaided from a missing-binary exit 127.",
   },
   claude: {
     default: "sonnet-5",
     models: { "sonnet-5": "claude-sonnet-5", "haiku-4-5": "claude-haiku-4-5", "opus-5": "claude-opus-5", "fable-5": "claude-fable-5" },
+    cutoff: VERIFIED_ON,
     note: "CAUTION: Zen's Claude models carry an OpenCode coding-assistant framing that fights persona prompts — haiku-4-5 refused the swarm take outright, sonnet-5 went off-format. Fine for agentic/coding work, unreliable for persona authoring.",
   },
   gpt: {
     default: "5.4",
     models: { "5.4": "gpt-5.4", "5.4-mini": "gpt-5.4-mini", "5.4-nano": "gpt-5.4-nano", "5.5": "gpt-5.5", "5-codex": "gpt-5-codex", "5.3-codex": "gpt-5.3-codex" },
+    cutoff: VERIFIED_ON,
     note: "Authored a well-formed swarm take. Codex members need the CLI (the raw OpenAI-compatible REST shape 400s for them).",
   },
-  glm: { default: "5.2", models: { "5.2": "glm-5.2", "5.1": "glm-5.1", "5": "glm-5" }, note: "Verified working." },
-  minimax: { default: "m3", models: { m3: "minimax-m3", "m2.7": "minimax-m2.7", "m2.5": "minimax-m2.5" }, note: "Verified working; verbose." },
-  qwen: { default: "3.6-plus", models: { "3.6-plus": "qwen3.6-plus", "3.5-plus": "qwen3.5-plus" }, note: "Verified working; verbose." },
-  grok: { default: "4.5", models: { "4.5": "grok-4.5", "build-0.1": "grok-build-0.1" }, note: "Verified working; verbose." },
+  glm: { default: "5.2", models: { "5.2": "glm-5.2", "5.1": "glm-5.1", "5": "glm-5" }, cutoff: VERIFIED_ON, note: "Verified working." },
+  minimax: { default: "m3", models: { m3: "minimax-m3", "m2.7": "minimax-m2.7", "m2.5": "minimax-m2.5" }, cutoff: VERIFIED_ON, note: "Verified working; verbose." },
+  qwen: { default: "3.6-plus", models: { "3.6-plus": "qwen3.6-plus", "3.5-plus": "qwen3.5-plus" }, cutoff: VERIFIED_ON, note: "Verified working; verbose." },
+  grok: { default: "4.5", models: { "4.5": "grok-4.5", "build-0.1": "grok-build-0.1" }, cutoff: VERIFIED_ON, note: "Verified working; verbose." },
   gemini: {
     default: "3-flash",
     models: { "3-flash": "gemini-3-flash", "3.6-flash": "gemini-3.6-flash", "3.1-pro": "gemini-3.1-pro" },
+    cutoff: VERIFIED_ON,
     note: "Works through the opencode CLI only — Zen's OpenAI-compatible REST endpoint wants native Gemini `contents` and 400s otherwise.",
   },
   // Cross-vendor by construction: this family groups by BILLING, not by maker —
@@ -89,6 +104,7 @@ export const MODEL_FAMILIES: Record<string, ModelFamily> = {
       "big-pickle": "big-pickle",
     },
     keyless: true,
+    cutoff: VERIFIED_ON,
     note: "No credential, no credit. AVOID big-pickle: it is saturated upstream (429 on 5/5 and 3/3 probes from this host while sibling free models returned 200 at the same instant) and has no paid tier to escape to — its cost is 0 across every field with no paid sibling in Zen's catalogue.",
   },
 };

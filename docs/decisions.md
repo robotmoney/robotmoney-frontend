@@ -6694,3 +6694,18 @@ The stage load check (`Q34a-analytics-load`, `scripts/release/analytics-load-che
 **Why.** On 2026-11-20 the two-panel composite fell below 0.33 (risk-off) while the three-panel composite stayed neutral at 0.39. Factor was fetched, stored and shown, yet had no say in the label.
 
 **Rejected.** Per-panel weights other than 1/n. A new methodology tag.
+
+## D90 — Forward statistics are display only, and no model acts before its training cutoff (issue 1742; code review lucky-weight-invariant R1, R2, R4, R5)
+
+**Status:** Accepted for implementation 2026-11-24. `packages/analyst-sdk/src/analyze/correlations.ts`, `scripts/tests/unit/analyst-sdk-purity.test.ts`, `backend/src/swarm/model-cutoff.ts`, `backend/src/swarm/judge-model-policy.ts`.
+
+**Decision.**
+
+1. **Forward statistics are display only.** Every forward correlation cell carries `n_eff = floor(n / horizon days)` beside `n`, because the forward windows overlap. No module under `packages/analyst-sdk/src/allocate` or `backend/src/swarm` imports `analyze/correlations.ts` or its backend shim. A unit test enforces it.
+2. **No model acts before its cutoff.** Opening a session or publishing a brief whose date is before the configured judge model's training cutoff fails with `SessionBeforeModelCutoffError`. A model with no declared cutoff is refused for any date before today. A session dated today passes.
+3. **Cutoff values.** Where a provider's cutoff is not recorded, the value is the date the registry first verified the model (2026-07-28), a safe upper bound.
+4. **Findings.** The brief and judge input fields are listed in `docs/technical/regime-engine.md` section 12. The fields not cut at the session date are findings, each fixed by its own issue.
+
+**Why.** A model asked to act as of a date before its cutoff already knows what happened next. Overlapping windows overstate the independent sample.
+
+**Rejected.** A historical committee replay. An as-of parameter on the session entry points. Backfilling `n_eff` into stored rows.

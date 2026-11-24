@@ -26,6 +26,7 @@ import {
   assertJudgeModelAllowed,
   FREE_FAMILY_JUDGE_MODELS,
   isKeylessJudgeModel,
+  MODEL_CUTOFF_DATES,
   PINNED_JUDGE_MODEL,
 } from "../../../backend/src/swarm/judge-model-policy.ts";
 
@@ -117,5 +118,16 @@ describe("the retired Zen model id is gone from the runtime", () => {
 
   test("the judge pin names no retired id", () => {
     expect({ message, pinned: (PINNED_JUDGE_MODEL as string) === RETIRED }).toEqual({ message, pinned: false });
+  });
+});
+
+// Issue 1742: the cutoff table and the registry's `cutoff` field agree.
+describe("the judge's cutoff table agrees with the registry", () => {
+  test("every registry model id has the same cutoff in both, and the backend has no extra id", () => {
+    const registry: Record<string, string> = {};
+    for (const f of Object.values(MODEL_FAMILIES)) for (const id of Object.values(f.models)) registry[id] = f.cutoff;
+    expect(Object.keys(registry).length).toBeGreaterThan(20);
+    expect(MODEL_CUTOFF_DATES).toEqual(registry);
+    expect(MODEL_CUTOFF_DATES[PINNED_JUDGE_MODEL]).toMatch(/^\d{4}-\d{2}-\d{2}$/);
   });
 });

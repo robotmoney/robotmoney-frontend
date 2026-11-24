@@ -41,6 +41,51 @@ import { isAcceptancePath, resolveInferencePath, type InferencePathOptions } fro
 /** The wire id AC-MODEL-01 pins, without the `opencode/` prefix Zen's REST endpoint rejects. */
 export const PINNED_JUDGE_MODEL = "deepseek-v4.1-flash";
 
+// MODEL CUTOFF DATES (issue 1742). A model asked to act as of a date before its
+// training cutoff already knows what happened next, so a session dated before the
+// configured judge model's cutoff is refused (model-cutoff.ts). No provider's
+// published cutoff is recorded here: each value is the date the registry first
+// verified the model (2026-07-28), a safe upper bound. A model absent from this
+// table has no declared cutoff and is refused for any date before today. Kept in
+// lockstep with `cutoff` in scripts/lib/model-registry.ts by
+// scripts/tests/unit/judge-model-policy-matches-registry.test.ts.
+const VERIFIED_ON = "2026-07-28";
+export const MODEL_CUTOFF_DATES: Readonly<Record<string, string>> = Object.freeze({
+  "deepseek-v4.1-flash": VERIFIED_ON,
+  "deepseek-v4-pro": VERIFIED_ON,
+  "kimi-k2.7-code": VERIFIED_ON,
+  "kimi-k2.6": VERIFIED_ON,
+  "kimi-k2.5": VERIFIED_ON,
+  "kimi-k3": VERIFIED_ON,
+  "claude-sonnet-5": VERIFIED_ON,
+  "claude-haiku-4-5": VERIFIED_ON,
+  "claude-opus-5": VERIFIED_ON,
+  "claude-fable-5": VERIFIED_ON,
+  "gpt-5.4": VERIFIED_ON,
+  "gpt-5.4-mini": VERIFIED_ON,
+  "gpt-5.4-nano": VERIFIED_ON,
+  "gpt-5.5": VERIFIED_ON,
+  "gpt-5-codex": VERIFIED_ON,
+  "gpt-5.3-codex": VERIFIED_ON,
+  "glm-5.2": VERIFIED_ON,
+  "glm-5.1": VERIFIED_ON,
+  "glm-5": VERIFIED_ON,
+  "minimax-m3": VERIFIED_ON,
+  "minimax-m2.7": VERIFIED_ON,
+  "minimax-m2.5": VERIFIED_ON,
+  "qwen3.6-plus": VERIFIED_ON,
+  "qwen3.5-plus": VERIFIED_ON,
+  "grok-4.5": VERIFIED_ON,
+  "grok-build-0.1": VERIFIED_ON,
+  "gemini-3-flash": VERIFIED_ON,
+  "gemini-3.6-flash": VERIFIED_ON,
+  "gemini-3.1-pro": VERIFIED_ON,
+  "nemotron-3-ultra-free": VERIFIED_ON,
+  "ling-3.0-flash-free": VERIFIED_ON,
+  "north-mini-code-free": VERIFIED_ON,
+  "big-pickle": VERIFIED_ON,
+});
+
 /**
  * Zen's keyless family, mirrored from scripts/lib/model-registry.ts's `free`
  * family. Note `big-pickle`: the registry's own comment records that it is the

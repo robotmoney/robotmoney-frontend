@@ -265,6 +265,9 @@ export type BacktestPayload = Record<string, Record<string, BacktestStrategyMetr
 export interface CorrelationCell {
   rho: number | null;
   n: number;
+  // Forward cells only: floor(n / horizon days). Overlapping windows make the
+  // independent sample about n / h, not n.
+  n_eff?: number;
 }
 
 // Predictive-power correlations. forward[index][`${asset}_${h}d`] = rank-corr of

@@ -126,7 +126,8 @@ function diff(got: any, exp: any, path: string, out: string[], counter: { n: num
     return;
   }
   const ek = Object.keys(exp).sort();
-  const gk = Object.keys(got).sort();
+  // Issue 1742: the vendored reference predates n_eff on forward correlation cells.
+  const gk = Object.keys(got).filter((k) => !(k === "n_eff" && !("n_eff" in exp))).sort();
   if (JSON.stringify(ek) !== JSON.stringify(gk)) {
     out.push(`${path}: keys ${gk.join("|")} vs ${ek.join("|")}`);
     return;
@@ -226,7 +227,8 @@ describe("issue 1652: the v4 golden keeps the reference's numbers and cuts its l
 describe("analyst-sdk report bytes are unchanged by the D74 storage mapping", () => {
   // And by decision D88 (methodology renamed v5 to v4; was 9466c9d14933291155d370d6256abf862585a8c2add554fb9134c157d74884ed).
   // And by issue 1708 (D89, factor joins the 1/n composite; was c661b2e44fac9f1d1800160546a1b3a3f20e14efaef2b3321b6e8519f7e121ee).
-  const GOLDEN_SHA256 = "fd512236f0b9baf9eafa35fc0b23ce88ad6030ec6ef877b0652ab126fd50de6f";
+  // And by issue 1742 (forward correlation cells gain n_eff; was fd512236f0b9baf9eafa35fc0b23ce88ad6030ec6ef877b0652ab126fd50de6f).
+  const GOLDEN_SHA256 = "229b2ed6f96ec96c4e15b5122b8256297b18c2e72745b3910b7b42b2e96a5322";
 
   test("with fetch throwing, the full serialized report equals the pre-change golden bytes", async () => {
     const { createHash } = await import("node:crypto");
