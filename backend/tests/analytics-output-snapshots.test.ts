@@ -163,15 +163,15 @@ test("a same-date REPLACEMENT run appends its own independently addressable outp
 // that ordering made every schema-2.0 take sign a binding to a report holding
 // none of the numbers the brief showed.
 test("publishBrief binds to the REGIME run's report snapshot, not the later research run's, for the same asof", async () => {
-  const asof = "2026-07-04";
+  const asof = "2026-08-04";
   const regimeRunId = await beginRun(crypto.randomUUID(), asof, "regime");
-  const regimeResult = await submitTerminalRunPackage(packageFor(regimeRunId, asof, "the regime report for 2026-07-04"));
+  const regimeResult = await submitTerminalRunPackage(packageFor(regimeRunId, asof, "the regime report for 2026-08-04"));
 
   // The 23:00 research run: a REAL terminal package for the same date whose
   // regime artifact is the empty array (analytics/index.ts's `want("regime")`
   // is false for RESEARCH_TOOL_GROUP), and whose id is therefore higher.
   const researchRunId = await beginRun(crypto.randomUUID(), asof, "research");
-  const researchPkg: TerminalRunPackageInput = { ...packageFor(researchRunId, asof, "the research report for 2026-07-04"), regimeSnapshots: [] };
+  const researchPkg: TerminalRunPackageInput = { ...packageFor(researchRunId, asof, "the research report for 2026-08-04"), regimeSnapshots: [] };
   const researchResult = await submitTerminalRunPackage(researchPkg);
   expect(Number(researchResult.reportSnapshotId)).toBeGreaterThan(Number(regimeResult.reportSnapshotId));
 
@@ -189,7 +189,7 @@ test("publishBrief binds to the REGIME run's report snapshot, not the later rese
 
   // And the bytes it points at really are the regime run's — the whole point.
   const bound = await loadReportSnapshot(String(brief.report_snapshot_id));
-  expect(Buffer.from(bound!.bytes).toString("utf8")).toBe("the regime report for 2026-07-04");
+  expect(Buffer.from(bound!.bytes).toString("utf8")).toBe("the regime report for 2026-08-04");
 });
 
 // ── the committed cron offset: the brief publishes BEFORE its own day's run ─
@@ -214,8 +214,8 @@ test("publishBrief binds to the REGIME run's report snapshot, not the later rese
 // every schema-2.0 take. No date alignment is forced here: the session is
 // dated D and the report is dated D-1, exactly as the crons produce them.
 test("a brief published on day D at 07:00 binds to the previous night's regime report R(D-1), the run whose numbers its body shows", async () => {
-  const dMinus1 = "2026-07-10"; // the 22:30 regime run's asof
-  const d = "2026-07-11"; // the session's own date, one day later
+  const dMinus1 = "2026-08-10"; // the 22:30 regime run's asof
+  const d = "2026-08-11"; // the session's own date, one day later
 
   const regimeRunId = await beginRun(crypto.randomUUID(), dMinus1, "regime");
   const nightlyResult = await submitTerminalRunPackage(
