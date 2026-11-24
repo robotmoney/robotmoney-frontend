@@ -8,7 +8,7 @@
 //   1. Rolling percentile rank per indicator over the rank lookback
 //   2. Sign-align so +1 = risk-on (sign>=0 ? v : 1-v)
 //   3. Point-in-time inverse-correlation weights per panel (weight lookback
-//      ending that day; recomputed on a 21-day cadence + always the final day)
+//      ending that day; refit on the fixed refresh calendar of the version, REGIME_WEIGHT_REFRESH)
 //   4. Panel index = weighted mean of sign-aligned percentile-ranks
 //   5. Composite = arithmetic mean of all included panel indices
 //   6. Bucket the composite → risk-off / neutral / risk-on, with 5-day
@@ -44,6 +44,9 @@ import {
 import {
   CURRENT_REGIME_VERSION,
   REGIME_LOOKBACK,
+  REGIME_WEIGHT_REFRESH,
+  isRefreshDate,
+  refreshDateOn,
   isRegimeVersion,
   type LookbackWindow,
   type RegimeLookback,
@@ -62,6 +65,10 @@ export interface RegimeComputeResult {
   composite: number[];
   compositePercentile: number[];
   regime: (string | null)[];
+  /** The fit date of `weightsByPanel` (issue 1739): the refresh date those weights came from. */
+  weightFitDate: string | null;
+  /** Every fit of the run, only when the caller passes `recordWeightFits`. */
+  weightFits?: { date: string; weights: Record<string, Record<string, number>> }[];
   // Legacy convenience fields, populated when the panel was computed.
   macroIndex?: number[];
   macroPercentile?: number[];
@@ -72,6 +79,17 @@ export interface RegimeComputeResult {
   factorIndex?: number[];
   factorPercentile?: number[];
   factorRegime?: (string | null)[];
+}
+
+/** The axis starts between refresh dates and the input does not reach the prior fit date (issue 1739). */
+export class WeightAnchorOutOfRangeError extends RangeError {
+  constructor(
+    readonly firstDay: string,
+    readonly fitDate: string,
+  ) {
+    super(`the axis starts ${firstDay}, after the refresh date ${fitDate}, so the weights in force on its first day cannot be fitted from this input`);
+    this.name = "WeightAnchorOutOfRangeError";
+  }
 }
 
 export function computeRegime(
@@ -101,6 +119,8 @@ export function computeRegime(
   // INDICATORS; a caller passes its own list to try scoring another series. Any
   // key of panelData outside the list is ignored.
   indicators: readonly Indicator[] = INDICATORS,
+  // Opt-in: list every weight fit of the run in `weightFits` (tests, research).
+  opts: { recordWeightFits?: boolean } = {},
 ): RegimeComputeResult {
   if (!isRegimeVersion(version)) throw new RangeError(`unknown regime version ${JSON.stringify(version)}`);
   const rankWindow = lookbackDays(lookback, "rank");
@@ -120,7 +140,7 @@ export function computeRegime(
     signed[ind.id] = r.map((v) => (Number.isFinite(v) ? (ind.sign >= 0 ? v : 1 - v) : NaN));
   }
 
-  const WEIGHT_REFRESH_DAYS = 21;
+  const refresh = REGIME_WEIGHT_REFRESH[version];
   const indsByPanel: Record<string, Indicator[]> = {};
   for (const p of panels) indsByPanel[p] = indicators.filter((x) => x.panel === p);
 
@@ -130,16 +150,36 @@ export function computeRegime(
   const curWeights: Record<string, Record<string, number>> = {};
   for (const p of panels) curWeights[p] = {};
 
-  for (let i = 0; i < dateAxis.length; i++) {
-    if (i % WEIGHT_REFRESH_DAYS === 0 || i === dateAxis.length - 1) {
-      for (const p of panels) {
-        const start = weightWindow === Infinity ? 0 : Math.max(0, i - weightWindow + 1);
-        const window: Record<string, number[]> = {};
-        for (const ind of indsByPanel[p]) {
-          window[ind.id] = signed[ind.id].slice(start, i + 1);
-        }
-        curWeights[p] = inverseCorrelationWeights(window);
+  // Weights follow a fixed calendar (issue 1739): the fit from the latest refresh
+  // date on or before the day, never a fit tied to the run's last day (v3 only).
+  const weightFits: { date: string; weights: Record<string, Record<string, number>> }[] = [];
+  let weightFitDate = null as string | null;
+  const refit = (i: number, fitDate: string) => {
+    for (const p of panels) {
+      const start = weightWindow === Infinity ? 0 : Math.max(0, i - weightWindow + 1);
+      const window: Record<string, number[]> = {};
+      for (const ind of indsByPanel[p]) {
+        window[ind.id] = signed[ind.id].slice(start, i + 1);
       }
+      curWeights[p] = inverseCorrelationWeights(window);
+    }
+    weightFitDate = fitDate;
+    if (opts.recordWeightFits) {
+      weightFits.push({ date: fitDate, weights: Object.fromEntries(panels.map((p) => [p, { ...curWeights[p] }])) });
+    }
+  };
+
+  for (let i = 0; i < dateAxis.length; i++) {
+    const day = dateAxis[i];
+    if (isRefreshDate(day, refresh) || (refresh.refitOnLastDay && i === dateAxis.length - 1)) {
+      refit(i, day);
+    } else if (i === 0) {
+      // An axis starting between refresh dates needs the fit of the prior refresh
+      // date, which lies before the axis: this input cannot reach it (before the
+      // anchor there is no calendar yet, so day 0 is fitted as it always was).
+      const prior = refreshDateOn(day, refresh);
+      if (prior != null) throw new WeightAnchorOutOfRangeError(day, prior);
+      refit(0, day);
     }
     for (const p of panels) {
       panelIndices[p][i] = weightedMeanOnDay(signed, curWeights[p], indsByPanel[p], i);
@@ -178,7 +218,9 @@ export function computeRegime(
     composite,
     compositePercentile: compRank,
     regime: regimeLabels(composite, compRank, version),
+    weightFitDate,
   };
+  if (opts.recordWeightFits) out.weightFits = weightFits;
   if (panels.includes("macro")) {
     out.macroIndex = panelIndices.macro;
     out.macroPercentile = panelPercentiles.macro;

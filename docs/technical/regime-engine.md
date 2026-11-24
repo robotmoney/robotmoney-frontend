@@ -160,8 +160,8 @@ a published number ships with a new methodology version.
    `transform/math.ts:287`) — computed **per panel, per day**, over the
    weight lookback window (declared: the trailing 1095 days; an inception
    window starts at day 0) of *sign-aligned* percentiles, but only recomputed
-   every **21 days** (`WEIGHT_REFRESH_DAYS`, `analyze/compute.ts:90`) plus
-   always on the final day. An indicator's weight is inversely proportional to
+   every **21 days** on a fixed calendar (`REGIME_WEIGHT_REFRESH`,
+   `analyze/regime-versions.ts`; v3 also refits on the run's last day). An indicator's weight is inversely proportional to
    its average absolute correlation with the rest of its panel (a lower
    `avgAbs`, floored at 0.05, gives more weight — an indicator that moves
    independently of its panel-mates earns more say), then capped at **0.25**
@@ -294,10 +294,12 @@ correlation matrix for a panel is the most expensive step in the pipeline;
 21 days (roughly monthly) is frequent enough that the weighting adapts to a
 real regime shift within about a month, without paying that cost — or
 introducing that much extra weight-series noise — every single day. The
-final day is always recomputed regardless of the 21-day cadence, so the
-published "as-of" weights are never more than one refresh cycle stale from
-the pipeline's own perspective, and never stale relative to the day being
-published.
+refit dates are a fixed calendar (day 0 is 2018-01-01, then every 21 days), so
+a day's weights are the fit from the latest refresh date on or before it and
+never depend on the run that computes it (run invariance, issue 1739). The
+latest snapshot row records that fit date as `panelWeights.weightFitDate`.
+Under v3 the last axis day is also refit (`refitOnLastDay`), kept so v3 runs
+replay byte for byte.
 
 **Why 0.25 as the correlation-weight cap?** It bounds how much any single
 indicator inside a panel can dominate a weighted mean — with a cap of 0.25,
@@ -465,10 +467,12 @@ revision, but it makes a label more sensitive than the composite to a small
 revision: the 2026-10-04 restatement moved the composite by at most 3.5e-4 and still
 flipped six historical labels (2024-07-04, 2024-07-05, 2026-08-20..23).
 
-**Final-day weight refresh.** Weights refresh on the 21-day schedule and on the
-last axis day, so the as-of day is revised by construction when D moves forward one
-day. The mechanism is described under "Why 21-day weight refresh, not daily?" in
-section 6 and is not restated here.
+**Weight refresh calendar.** Under v4 weights refit only on the fixed 21-day
+calendar, so a day computed on its own equals the same day in any later run and
+the as-of day is not revised when the as-of day moves forward. The mechanism is
+described under "Why 21-day weight refresh, not daily?" in section 6. v3 keeps
+the legacy refit on the last axis day, so its as-of day is revised by
+construction.
 
 **Persistence tolerance (D56) and the committed dataset.** A point within its
 source's D56 tolerance of the stored value is not rewritten (Yahoo ratios relative

@@ -40,7 +40,7 @@ export interface RegimeSnapshotRow {
   macroPercentile?: number | null;
   onchainPercentile?: number | null;
   factorPercentile?: number | null;
-  panelWeights?: Record<string, Record<string, number>> | null;
+  panelWeights?: Record<string, Record<string, number> | string | null> | null;
   version?: string | null;
   // Row-level provenance (issue #397): which data source wrote this row —
   // 'live' | 'hermetic' | 'fixture' | 'seed' going forward; `null`/undefined

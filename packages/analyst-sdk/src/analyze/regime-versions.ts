@@ -19,6 +19,8 @@ import { ROLLING_WINDOW_DAYS } from "./indicators.ts";
 // v4 (issue 1652, decisions D84 and D88; tagged v5 before D88): v3 with the regime label cut on the composite
 // itself and each panel label on its panel index. The rolling ranks of the
 // composite and the panel indices stay in the output as information only.
+// Issue 1739 corrected v4 in place: its panel weights refit on a fixed 21-day
+// calendar (REGIME_WEIGHT_REFRESH), never on the run's last day, which v3 keeps.
 //
 // Tags increase by one with no gaps (D88). The frozen, versioned publication
 // model (docs/technical/regime-engine.md section 11.8.3, PD10) takes the next
@@ -57,3 +59,40 @@ export const REGIME_LOOKBACK: Readonly<Record<RegimeVersion, RegimeLookback>> = 
   v3: Object.freeze({ rank: TRAILING_3Y, weight: TRAILING_3Y, percentile: TRAILING_3Y }),
   v4: Object.freeze({ rank: TRAILING_3Y, weight: TRAILING_3Y, percentile: TRAILING_3Y }),
 });
+
+/**
+ * The panel weight refresh rule of one methodology version (issue 1739): refit
+ * every `intervalDays` days on a fixed calendar that starts at `anchor`, so a
+ * day's weights never depend on the run that computes it. `refitOnLastDay`
+ * keeps the legacy refit on the run's last axis day: only v3 sets it.
+ */
+export interface WeightRefresh {
+  intervalDays: number;
+  /** Calendar date of day 0 of the refresh calendar (the regime backfill start). */
+  anchor: string;
+  refitOnLastDay: boolean;
+}
+
+export const WEIGHT_REFRESH_ANCHOR = "2018-01-01";
+
+export const REGIME_WEIGHT_REFRESH: Readonly<Record<RegimeVersion, WeightRefresh>> = Object.freeze({
+  v3: Object.freeze({ intervalDays: 21, anchor: WEIGHT_REFRESH_ANCHOR, refitOnLastDay: true }),
+  v4: Object.freeze({ intervalDays: 21, anchor: WEIGHT_REFRESH_ANCHOR, refitOnLastDay: false }),
+});
+
+const MS_PER_DAY = 86_400_000;
+const dayNumber = (day: string): number => Math.floor(Date.parse(`${day}T00:00:00Z`) / MS_PER_DAY);
+
+/** The latest refresh date on or before `day`; null before the anchor. */
+export function refreshDateOn(day: string, refresh: WeightRefresh): string | null {
+  const n = dayNumber(day) - dayNumber(refresh.anchor);
+  if (!Number.isFinite(n)) throw new RangeError(`bad day ${JSON.stringify(day)}`);
+  if (n < 0) return null;
+  const fit = dayNumber(refresh.anchor) + Math.floor(n / refresh.intervalDays) * refresh.intervalDays;
+  return new Date(fit * MS_PER_DAY).toISOString().slice(0, 10);
+}
+
+/** True when `day` is a refresh date of the calendar. */
+export function isRefreshDate(day: string, refresh: WeightRefresh): boolean {
+  return refreshDateOn(day, refresh) === day;
+}

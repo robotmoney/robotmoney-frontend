@@ -52,6 +52,7 @@ import type { AnalyticsDataSource, ResearchInputs } from "../src/analytics/acces
 import { TOP7 } from "../src/analytics/analyze/research-signals.ts";
 import { MAX_FORWARD_FILL_DAYS } from "../src/analytics/transform/math.ts";
 import { computeCorrelations } from "../src/analytics/analyze/correlations.ts";
+import { REGIME_WEIGHT_REFRESH, refreshDateOn } from "../../packages/analyst-sdk/src/analyze/regime-versions.ts";
 import { requireComplete, runRegime as runRegimeOutcome } from "../../packages/analyst-sdk/src/run.ts";
 // Every run here scores a complete day under the shipped day rule (issue 1655).
 const runRegime = (...a: Parameters<typeof runRegimeOutcome>) => requireComplete(runRegimeOutcome(...a));
@@ -220,6 +221,12 @@ test("BASE: fixture history at the ground-truth asof, SDK and backend agree on e
   assertEquivalent(asof, sdk, rows, raw);
   expect(results.regime.composite).toBe(nn(sdk.result.composite[sdk.dateAxis.length - 1]));
   expect(results.regime.rows).toBe(rows.length);
+  // Issue 1739: the latest row records the fit date of its weights (the fixed
+  // calendar's refresh date), and the SDK and backend weights agree.
+  const latest = rows[rows.length - 1];
+  expect(latest.panelWeights.weightFitDate).toBe(refreshDateOn(asof, REGIME_WEIGHT_REFRESH.v4));
+  expect(latest.panelWeights.weightFitDate).toBe(sdk.result.weightFitDate);
+  expect(latest.panelWeights.macro).toEqual(sdk.result.weightsByPanel.macro);
   const [{ count }] = await sql`SELECT COUNT(*)::int AS count FROM regime_snapshots`;
   expect(count).toBe(rows.length);
   composites.base = rows[rows.length - 1].composite;

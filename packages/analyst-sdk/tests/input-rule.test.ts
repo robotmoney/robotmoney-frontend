@@ -53,7 +53,7 @@ test("non-finite row: loader throws, mergeSeries drops, survivors equal", () => 
 });
 
 test("alignment and age are order-independent on deduped input", () => {
-  const axis = buildDateAxis("2024-01-01", "2024-01-08");
+  const axis = buildDateAxis("2024-01-01", "2024-01-15");
   const sorted = toHistory(rows).A!;
   const shuffled = [sorted[2]!, sorted[0]!, sorted[1]!];
   const a = alignDailyForwardFill(sorted, axis), b = alignDailyForwardFill(shuffled, axis);
@@ -306,10 +306,11 @@ describe("date axis, usable series and optional sections", () => {
     Array.from({ length: n }, (_, i) => `${new Date(Date.UTC(2024, 0, 1 + start + i)).toISOString().slice(0, 10)},${id},${10 + (i % 7)}`);
   const csv = (lines: string[]) => "date,series,value\n" + lines.join("\n") + "\n";
 
+  // The start is a refresh date of the weight calendar (2018-01-01 + 21k days, issue 1739).
   test("an unread future series does not extend the date axis or change the report", () => {
     const base = axisRows(60, "yahoo:^VIX").concat(axisRows(60, "fred:T10Y2Y"));
-    const a = buildReport(runRegime(parseInput(csv(base)).history, { start: "2024-01-01" }));
-    const b = buildReport(runRegime(parseInput(csv([...base, "2027-06-01,test:FOO,1"])).history, { start: "2024-01-01" }));
+    const a = buildReport(runRegime(parseInput(csv(base)).history, { start: "2024-01-15" }));
+    const b = buildReport(runRegime(parseInput(csv([...base, "2027-06-01,test:FOO,1"])).history, { start: "2024-01-15" }));
     expect(b.asof).toBe(a.asof);
     expect(JSON.stringify(b)).toBe(JSON.stringify(a));
   });
@@ -321,13 +322,13 @@ describe("date axis, usable series and optional sections", () => {
   });
 
   test("without the price series the correlations and backtest sections are null", () => {
-    const r = buildReport(runRegime(parseInput(csv(axisRows(40, "yahoo:^VIX"))).history, { start: "2024-01-01" }));
+    const r = buildReport(runRegime(parseInput(csv(axisRows(40, "yahoo:^VIX"))).history, { start: "2024-01-15" }));
     expect(r.correlations).toBeNull();
     expect(r.backtest).toBeNull();
     // SPX and ETH without TBILL3M: correlations only. yahoo:ETH-USD is also a
     // BTC_ETH leg, so the input carries the other leg too (analytics 4.3: one
     // leg alone is a missing input, MissingRatioLegError).
-    const r2 = buildReport(runRegime(parseInput(csv([...axisRows(40, "yahoo:^VIX"), ...axisRows(40, "yahoo:^GSPC"), ...axisRows(40, "yahoo:ETH-USD"), ...axisRows(40, "yahoo:BTC-USD")])).history, { start: "2024-01-01" }));
+    const r2 = buildReport(runRegime(parseInput(csv([...axisRows(40, "yahoo:^VIX"), ...axisRows(40, "yahoo:^GSPC"), ...axisRows(40, "yahoo:ETH-USD"), ...axisRows(40, "yahoo:BTC-USD")])).history, { start: "2024-01-15" }));
     expect(r2.correlations).not.toBeNull();
     expect(r2.backtest).toBeNull();
   });

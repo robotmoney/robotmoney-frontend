@@ -339,10 +339,12 @@ describe("v4: labels are cut on the composite and the panel indices (issue 1652)
   test("the regime label equals smoothRegimes(composite, bucketFn) on the fixture; v3 keeps the rank cut", () => {
     expect(run.result.regime).toEqual(smoothRegimes(run.result.composite, bucketFn));
     expect(v3.result.regime).toEqual(smoothRegimes(v3.result.compositePercentile, bucketFn));
-    // The numbers themselves do not depend on the version.
-    expect(v3.result.composite).toEqual(run.result.composite);
-    expect(v3.result.compositePercentile).toEqual(run.result.compositePercentile);
-    expect(v3.result.panelIndices).toEqual(run.result.panelIndices);
+    // The numbers do not depend on the version, except where v3's last-day refit
+    // changes the weights (issue 1739): the final day.
+    const last = run.dateAxis.length - 1;
+    expect(v3.result.composite.slice(0, last)).toEqual(run.result.composite.slice(0, last));
+    expect(v3.result.compositePercentile.slice(0, last)).toEqual(run.result.compositePercentile.slice(0, last));
+    expect(v3.result.panelIndices.macro!.slice(0, last)).toEqual(run.result.panelIndices.macro!.slice(0, last));
     expect(v3.result.regime).not.toEqual(run.result.regime);
   });
 
@@ -409,11 +411,15 @@ describe("lookback windows are methodology parameters (issue 1659)", async () =>
     expect(Object.keys(a).sort()).toEqual(Object.keys(b).sort());
     for (const k of Object.keys(a)) sameEach(a[k]!, b[k]!);
   };
-  const finalWeights = (signed: Record<string, number[]>, start: number) => {
+  // The weights in force on the last day: the fit of its refresh date (issue 1739),
+  // over the `days` days ending there (Infinity: from day 0).
+  const finalWeights = (r: ReturnType<typeof run>, days: number) => {
+    const end = dateAxis.indexOf(r.weightFitDate!) + 1;
+    const start = days === Infinity ? 0 : end - days;
     const out: Record<string, Record<string, number>> = {};
     for (const p of PANELS) {
       const w: Record<string, number[]> = {};
-      for (const ind of INDICATORS.filter((i) => i.panel === p)) w[ind.id] = signed[ind.id]!.slice(start, n);
+      for (const ind of INDICATORS.filter((i) => i.panel === p)) w[ind.id] = r.signed[ind.id]!.slice(start, end);
       out[p] = inverseCorrelationWeights(w);
     }
     return out;
@@ -453,14 +459,14 @@ describe("lookback windows are methodology parameters (issue 1659)", async () =>
       const xs = transformed[ind.id]!;
       sameEach(rankInc.ranks[ind.id]!, rollingPercentileRank(xs, xs.length));
     }
-    expect(rankInc.weightsByPanel).toEqual(finalWeights(rankInc.signed, n - 1095));
+    expect(rankInc.weightsByPanel).toEqual(finalWeights(rankInc, 1095));
     // Non-vacuity: the inception ranks differ from the 1095-day ranks.
     expect(rankInc.ranks).not.toEqual(base.ranks);
   });
 
   test("weight at inception: ranks equal the default run; weights read day 0 to the last day", () => {
     sameRecord(weightInc.ranks, base.ranks);
-    expect(weightInc.weightsByPanel).toEqual(finalWeights(weightInc.signed, 0));
+    expect(weightInc.weightsByPanel).toEqual(finalWeights(weightInc, Infinity));
     expect(weightInc.weightsByPanel).not.toEqual(base.weightsByPanel);
   });
 
@@ -506,7 +512,7 @@ describe("lookback windows are methodology parameters (issue 1659)", async () =>
     const rnd = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
     const N = 420;
     const k = 150;
-    const axis = Array.from({ length: N }, (_, i) => new Date(Date.UTC(2020, 0, 1 + i)).toISOString().slice(0, 10));
+    const axis = Array.from({ length: N }, (_, i) => new Date(Date.UTC(2018, 0, 1 + 21 * 35 + i)).toISOString().slice(0, 10));
     const data: Record<string, number[]> = {};
     for (const ind of INDICATORS) data[ind.id] = Array.from({ length: N }, () => rnd());
     const late = INDICATORS.find((i) => i.panel === "macro")!;

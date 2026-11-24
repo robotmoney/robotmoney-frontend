@@ -42,7 +42,7 @@ import {
   stripDailyFromSnapshot,
   type BacktestPayload,
 } from "./analyze/backtest.ts";
-import { CURRENT_REGIME_VERSION, type RegimeVersion } from "./analyze/regime-versions.ts";
+import { CURRENT_REGIME_VERSION, REGIME_WEIGHT_REFRESH, type RegimeVersion } from "./analyze/regime-versions.ts";
 import {
   liveDataSource,
   type AnalyticsDataSource,
@@ -909,7 +909,10 @@ function buildSnapshotRows(
     // original (regime-history.csv is per-date; regime-snapshot.json is asof-only).
     const indicators = isLatest ? buildRichIndicators(i, r2, r3, transformed, lastRaw, dateAxis, ages) : [];
     const panelWeights = isLatest
-      ? { macro: r2.weightsByPanel.macro, onchain: r2.weightsByPanel.onchain, factor: r3.weightsByPanel.factor }
+      ? { macro: r2.weightsByPanel.macro, onchain: r2.weightsByPanel.onchain, factor: r3.weightsByPanel.factor,
+          // The fit date of those weights (issue 1739). v3 keeps its stored payload byte for byte.
+          ...(REGIME_WEIGHT_REFRESH[version].refitOnLastDay ? {} : { weightFitDate: r2.weightFitDate }),
+        }
       : null;
 
     rows.push({

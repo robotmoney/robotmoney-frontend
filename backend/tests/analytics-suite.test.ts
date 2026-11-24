@@ -176,7 +176,7 @@ test(
         return { spx: [], eth: [], tbill3m: [] };
       },
     };
-    const secondResults = await runAnalytics(ASOF, "regime", emptySource, directAnalyticsPersistence, undefined, undefined, undefined, { panels: ["macro", "onchain"] });
+    const secondResults = await runAnalytics(ASOF, "regime", emptySource, directAnalyticsPersistence, undefined, undefined, "v3", { panels: ["macro", "onchain"] });
     const [{ n: t10After }] = await sql`SELECT COUNT(*)::int AS n FROM raw_indicator_history WHERE indicator = 'T10Y2Y'`;
     expect(t10After).toBe(t10Rows); // floor intact — nothing erased by an empty fetch
 
