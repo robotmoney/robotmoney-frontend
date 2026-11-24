@@ -317,7 +317,7 @@ const vinPage = registerQuery({
 //
 // The watermark reads only the members of the vintages this backup adds:
 // vintage_id above the previous backup's vintages watermark and at most this
-// one, through analytics_vintage_members_vintage_idx (issue 1514). Bounded by
+// one, through analytics_vintage_members_vintage_id_idx (issue 1514, 1690). Bounded by
 // `vintage_id <= watermark` alone, Postgres walked the primary key backward
 // from the newest member until it met an old vintage: for an early backup that
 // is almost every member, past the 5 s timeout on production. The OFFSET 0

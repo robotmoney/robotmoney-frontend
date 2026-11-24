@@ -4961,13 +4961,6 @@ CREATE INDEX analytics_vintage_members_vintage_id_idx ON public.analytics_vintag
 
 
 --
--- Name: analytics_vintage_members_vintage_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX analytics_vintage_members_vintage_idx ON public.analytics_vintage_members USING btree (vintage_id);
-
-
---
 -- Name: asset_prices_symbol_date_idx; Type: INDEX; Schema: public; Owner: -
 --
 

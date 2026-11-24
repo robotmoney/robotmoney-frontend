@@ -135,7 +135,8 @@
     "0131_swarm_briefs_allocation_backfill.sql",
     "0132_flow_index.sql",
     "0133_buybacks_refresh_disabled.sql",
-    "0134_read_path_indexes.sql"
+    "0134_read_path_indexes.sql",
+    "0135_drop_vintage_members_vintage_idx.sql"
   ],
   "exclusions": {
     "roles": [
@@ -148,7 +149,7 @@
       "plpgsql"
     ]
   },
-  "contentHash": "4ca77ee323dc8e05c8925a7751149193b765ae72e4afc2bc580eced87a79c95f",
+  "contentHash": "7c9482f6b539e6f787185eec495156cfca583d348abc24a3eb5c4728b5c36da3",
   "fingerprint": {
     "column public.admin_credential.claimed_at": {
       "type": "timestamp with time zone",
@@ -5328,9 +5329,6 @@
     },
     "index public.analytics_vintage_members_vintage_id_source_value_version_i_key": {
       "definition": "CREATE UNIQUE INDEX analytics_vintage_members_vintage_id_source_value_version_i_key ON public.analytics_vintage_members USING btree (vintage_id, source_value_version_id)"
-    },
-    "index public.analytics_vintage_members_vintage_idx": {
-      "definition": "CREATE INDEX analytics_vintage_members_vintage_idx ON public.analytics_vintage_members USING btree (vintage_id)"
     },
     "index public.asset_price_floors_pkey": {
       "definition": "CREATE UNIQUE INDEX asset_price_floors_pkey ON public.asset_price_floors USING btree (symbol)"
