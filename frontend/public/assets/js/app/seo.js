@@ -292,7 +292,7 @@ const META = {
   // until it opens to everyone: drop `robots` when GATE_ON goes false.
   "/deposit": {
     title: "Deposit into the Model Portfolio | Robot Money",
-    description: "Deposit USDC into Robot Money's model portfolio from any wallet on Base. Requests settle in hourly batches and shares arrive about two hours later. Limits, fees and how to get out.",
+    description: "Deposit USDC into Robot Money's model portfolio from any wallet on Base. Requests fill in hourly batches, and the shares are ready to claim about two hours later. Limits, fees and how to get out.",
     robots: "noindex, nofollow",
   },
   // A placeholder hub nothing links to since the footer became the site index
@@ -796,7 +796,7 @@ export function metaFor(pathname) {
   }
   // Your requests, and one request's status page: personal, so never indexed.
   if (p === "/deposit/requests" || p === "/deposit/requests/") {
-    return { title: "Your requests | Robot Money", description: "Your position in Robot Money's model portfolio and every deposit and redemption request from your wallet.", robots: "noindex, nofollow" };
+    return { title: "Your position | Robot Money", description: "Your position in Robot Money's model portfolio and every deposit and redemption request from your wallet.", robots: "noindex, nofollow" };
   }
   if (/^\/deposit\/requests\/[A-Za-z0-9-]+\/?$/.test(p)) {
     return { title: "Deposit request | Robot Money", description: "Where one deposit or redemption request into Robot Money's model portfolio stands, and what happens next.", robots: "noindex, nofollow" };
