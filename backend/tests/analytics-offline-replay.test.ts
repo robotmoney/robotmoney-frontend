@@ -34,8 +34,11 @@ import { computeCorrelations } from "../src/analytics/analyze/correlations.ts";
 import { computeBacktest, stripDailyFromSnapshot } from "../src/analytics/analyze/backtest.ts";
 import { TOP7, computeChannelDivergence, computeLateCycle } from "../src/analytics/analyze/research-signals.ts";
 import { prepareRegimeInputs } from "../src/analytics/prepare.ts";
+import { ratiosFromLegs } from "../../packages/analyst-sdk/src/transform/ratios.ts";
+import { resolveInputHistory } from "../../packages/analyst-sdk/src/series-ids.ts";
 import {
   ASOF as COMMITTED_ASOF,
+  liveOn,
   baseObservations,
   capturingTelemetry,
   committedAfterSecond,
@@ -282,7 +285,7 @@ test(
     await directAnalyticsPersistence.saveRawHistory({ MNA: base.mna }, "fixture");
     const first = poisonedSource(base, 3);
     try {
-      await runAnalytics(COMMITTED_ASOF, undefined, first, directAnalyticsPersistence, noopTelemetrySink);
+      await runAnalytics(COMMITTED_ASOF, undefined, first, directAnalyticsPersistence, noopTelemetrySink, undefined, undefined, liveOn(COMMITTED_ASOF));
     } finally {
       first.restore();
     }
@@ -301,7 +304,7 @@ test(
     };
     let results: Record<string, unknown>;
     try {
-      results = await runAnalytics(COMMITTED_ASOF, undefined, source, persistence, telemetry);
+      results = await runAnalytics(COMMITTED_ASOF, undefined, source, persistence, telemetry, undefined, undefined, liveOn(COMMITTED_ASOF));
     } finally {
       source.restore();
     }
@@ -328,7 +331,9 @@ test(
     // calculation over what was collected.
     // DEFI_GROWTH and STABLES_GROWTH read the DEFI_TVL and STABLES series (D74 amendment).
     const growth = Object.fromEntries(Object.entries(STORED_UNDER).map(([id, stored]) => [id, committed.registry[stored]!]));
-    const prepared = prepareRegimeInputs({ ...committed.registry, ...growth }, { start: "2018-01-01", asof: COMMITTED_ASOF });
+    // Each ratio under its declared parameters (issue 1733: the equity ratios from their raw legs).
+    const input = { ...committed.registry, ...growth };
+    const prepared = prepareRegimeInputs(ratiosFromLegs(input, resolveInputHistory(input)), { start: "2018-01-01", asof: COMMITTED_ASOF });
     const r2 = computeRegime(prepared.transformed, prepared.dateAxis, PANELS);
     expect(latest.composite).toBe(r2.composite[r2.composite.length - 1]!);
     // Issue 1708 (D89): the composite is the 1/n mean of macro, onchain and factor.
@@ -412,7 +417,7 @@ test(
             submitted.push(input);
             return directAnalyticsPersistence.submitTerminalRunPackage(input);
           },
-        }, noopTelemetrySink);
+        }, noopTelemetrySink, undefined, undefined, liveOn(COMMITTED_ASOF));
       } finally {
         source.restore();
       }

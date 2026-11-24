@@ -21,7 +21,7 @@ export const directAnalyticsPersistence: AnalyticsPersistence = {
   freezeVintage,
   submitTerminalRunPackage,
   saveSourceAcquisition,
-  loadCommittedInputs: (marketTimeCutoff) => loadCommittedInputs(REGIME_STORAGE_KEYS, marketTimeCutoff),
+  loadCommittedInputs: (marketTimeCutoff, knownBy) => loadCommittedInputs(REGIME_STORAGE_KEYS, marketTimeCutoff, undefined, knownBy),
   loadRawHistory: () => loadRawIndicatorHistory(),
   saveRawHistory: (byIndicator, source) => saveRawIndicatorHistory(byIndicator, undefined, source),
   // Gap-fill inside one transaction so a mid-seed failure never leaves a

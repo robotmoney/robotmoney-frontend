@@ -32,7 +32,7 @@ import type { AnalyticsPersistence, CommittedInputs } from "../src/analytics/per
 import type { TerminalRunPackageInput } from "../src/analytics/output-snapshots.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
 import { provisionAnalyticsToken } from "./support/automation-auth.ts";
-import { ASOF, baseObservations, poisonedSource, type Observations } from "./support/committed-inputs.ts";
+import { ASOF, baseObservations, liveOn, poisonedSource, type Observations } from "./support/committed-inputs.ts";
 
 useCleanDatabasePerTest(import.meta.file);
 
@@ -70,7 +70,7 @@ async function run(obs: Observations) {
   const { persistence, seen } = capturing();
   const source = poisonedSource(obs, 2);
   try {
-    const results = await runAnalytics(ASOF, "regime", source, persistence, noopTelemetrySink);
+    const results = await runAnalytics(ASOF, "regime", source, persistence, noopTelemetrySink, undefined, undefined, liveOn(ASOF));
     const vintageId = (results as { __runLedger?: { vintage: { vintageId: string } | null } }).__runLedger!.vintage!.vintageId;
     return { seen, vintageId };
   } finally {
@@ -247,7 +247,7 @@ async function racingRun(sendIds: boolean) {
   };
   const source = poisonedSource(base, 2);
   try {
-    const results = await runAnalytics(ASOF, "regime", source, persistence, noopTelemetrySink);
+    const results = await runAnalytics(ASOF, "regime", source, persistence, noopTelemetrySink, undefined, undefined, liveOn(ASOF));
     const vintageId = (results as { __runLedger?: { vintage: { vintageId: string } | null } }).__runLedger!.vintage!.vintageId;
     const vintage = (await loadFrozenVintage(vintageId))!;
     const [{ racing_known }] = await sql<{ racing_known: boolean }[]>`

@@ -6727,8 +6727,8 @@ Panel weights refit every 21 days on a fixed calendar anchored at 2018-01-01. A 
 
 1. **Publication rule required.** Every registry indicator and research input declares when its source publishes a period's value. The loader throws `PublicationRuleError` naming a series without one. Stored rows keep their period dates; the rule re-dates them at read time.
 2. **Versions.** A computation for day t reads, per series, the newest period known by t at its newest version known by t. A revision of an older period never reaches back. A value fetched before its UTC day ends is provisional; the full-day value is a revision known the next day.
-3. **Ledger read.** A run for a past as-of day reads the ledger version known by the end of that day, else the first-known version. A run for today reads the heads, unchanged.
-4. **Raw closes.** The six equity ratios read raw-close legs.
+3. **Ledger read.** A run for an as-of day before its own UTC date reads the ledger version known by the end of that day, else the first-known version. A run for its own date reads the heads, unchanged.
+4. **Raw closes.** The six equity ratios read raw-close legs. Ingestion still stores all eight ratios, which `v3` reads.
 5. **Tag.** `v4` is corrected in place (`REGIME_KNOWLEDGE_TIME`): it was never released (D88, D91). `v3` keeps period dates and adjusted stored ratios and replays byte for byte. No migration, no stored row rewritten, no frozen report or past label restated.
 
 **Why.** An audit found slow-release series stamped with the period they describe, then forward-filled, so history showed them up to five months before release; later revisions and dividend back-adjustment reached past days. Every replay, trailing window, backtest and as-of label was biased.

@@ -14,9 +14,20 @@
 // carried. Since issue 1655 it is the value every registry indicator declares in
 // its own fill policy below. Defined here, in the pure registry, so a reader of
 // the registry imports no calculation code; transform/math.ts re-exports it.
-import type { PublicationRule } from "../transform/knowledge-time.ts";
-
 export const MAX_FORWARD_FILL_DAYS = 120;
+
+/**
+ * When a source publishes the value for a period date.
+ *   same-day:      on the period date itself.
+ *   business-days: `days` business days (Monday to Friday) after it.
+ *   next-weekday:  on the first `weekday` (0 Sunday .. 6 Saturday) strictly after it.
+ *   months-later:  on the 1st of the month `months` after the period's month.
+ */
+export type PublicationRule =
+  | { kind: "same-day" }
+  | { kind: "business-days"; days: number }
+  | { kind: "next-weekday"; weekday: number }
+  | { kind: "months-later"; months: number };
 
 export type Panel = "macro" | "onchain" | "factor";
 export type RatioInput = "stored" | "legs";
@@ -38,8 +49,9 @@ export interface Indicator {
   // ratioInput "stored": read the stored ratio when the input carries one,
   // else compute it from the legs; ingestion keeps storing the ratio.
   // ratioInput "legs": always compute it from the legs and ignore a stored
-  // ratio; nothing stores it. ratioClose selects the legs: "adjusted" reads
-  // the .adjclose legs, "raw" the .close legs.
+  // ratio. ratioClose selects the legs: "adjusted" reads the .adjclose legs,
+  // "raw" the .close legs. Ingestion stores every ratio (STORED_RATIO_IDS):
+  // methodology v3 reads all eight stored and adjusted (issue 1733).
   ratioInput?: RatioInput;
   ratioClose?: RatioClose;
   sign: 1 | -1;

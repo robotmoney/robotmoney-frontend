@@ -629,19 +629,22 @@ provisional. The first fetch after the day ends is a revision, known that day. A
 replay as of the day reads the provisional value. Each extractor documents the
 instant that ends its day (00:00:00Z) and pins it with a midnight fixture test.
 
-**The ledger read.** A run for an as-of day before today reads, per dated
-coordinate, the version known by the end of that UTC day
-(`loadCommittedInputs`). A coordinate with no version known by then (history
+**The ledger read.** A run for an as-of day before its own UTC date is a replay. It
+reads, per dated coordinate, the version known by the end of that UTC day
+(`loadCommittedInputs` with `knownBy`, the `knownBy` query parameter of
+`GET committed-inputs`). A coordinate with no version known by then (history
 seeded or backfilled later) reads its first-known version, the closest the ledger
 holds to the first release; `extract/fred.ts` `fetchAlfredFirstRelease` supplies
-first-release values for a FRED backfill. A run for today reads the heads, as before.
+first-release values for a FRED backfill. A run for its own UTC date (the
+producer's daily run) reads the heads, as before.
 
 **Raw closes.** The six equity ratios (`IWM_SPY`, `SPHB_SPLV`, `MTUM_SPY`,
 `IWF_IWD`, `XLU_SPY`, `XLP_XLY`) declare `ratioInput: "legs"` and
 `ratioClose: "raw"`. A dividend paid later back-adjusts every earlier adjusted
 close; a raw close never changes. `COPPER_GOLD` and `BTC_ETH` (futures and crypto,
 no dividends) keep the stored adjusted ratio. `SPX_TREND` reads `^GSPC`, an index
-whose adjusted close equals its close.
+whose adjusted close equals its close. Ingestion still stores all eight ratios
+(`STORED_RATIO_IDS`), because `v3` reads them; `v4` ignores a stored equity ratio.
 
 **Cut at the as-of day.** `lastRaw` and every other field `prepareRegimeInputs`
 returns are cut at the as-of day (finding P1). `lastRaw` keeps the period date of

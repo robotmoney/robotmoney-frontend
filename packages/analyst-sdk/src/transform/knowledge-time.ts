@@ -20,19 +20,11 @@
 // older period never reaches back: the past keeps the value it had. So the
 // series up to day t depends only on versions known by t (prefix invariance).
 import type { Point } from "../types.ts";
+import type { PublicationRule } from "../analyze/indicators.ts";
 
-/**
- * When a source publishes the value for a period date.
- *   same-day:      on the period date itself.
- *   business-days: `days` business days (Monday to Friday) after it.
- *   next-weekday:  on the first `weekday` (0 Sunday .. 6 Saturday) strictly after it.
- *   months-later:  on the 1st of the month `months` after the period's month.
- */
-export type PublicationRule =
-  | { kind: "same-day" }
-  | { kind: "business-days"; days: number }
-  | { kind: "next-weekday"; weekday: number }
-  | { kind: "months-later"; months: number };
+// PublicationRule is declared with the registry (analyze/indicators.ts), so a
+// reader of the registry imports no calculation code.
+export type { PublicationRule };
 
 /** A source row, optionally with the instant (or day) this version was first known. */
 export interface VersionedPoint extends Point {

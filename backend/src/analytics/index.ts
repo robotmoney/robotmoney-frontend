@@ -386,14 +386,16 @@ export async function runAnalytics(
     // reported in the input evidence below.
     t0 = new Date();
     await persistence.saveRawHistory({ ...merged, ...collectedOnly }, sourceLabel);
-    collectedRegistry = merged;
+    // Collected and committed are compared under the same ratio declarations
+    // (issue 1733: a v4 equity ratio is its raw legs' ratio, not the stored one).
+    collectedRegistry = withRatios(fetched, merged, regimeVersion);
     const committedFloor = await persistence.loadRawHistory();
     registry = {};
     for (const ind of INDICATORS) registry[ind.id] = committedFloor[storedIndicatorId(ind.id)] ?? [];
     // Issue 1644: each ratio under its declared parameters, from the legs this
     // source served when the ratio is not read as stored.
     registry = withRatios(fetched, registry, regimeVersion);
-    inputEvidence.registry = registryEvidence(merged, registry);
+    inputEvidence.registry = registryEvidence(collectedRegistry, registry);
     mergedRaw = registry;
     collector.stage("store", "ok", "persisted merged raw indicator floor and read the committed floor back", t0);
 
@@ -463,7 +465,10 @@ export async function runAnalytics(
   let regimeVersionIds: string[] | undefined;
   if (want("regime") && registry && collectedRegistry && persistence.loadCommittedInputs && registryInLedger) {
     const t0 = new Date();
-    const committed = await persistence.loadCommittedInputs(asof);
+    // Issue 1733: a run for a day before its own UTC date is a replay: it
+    // reads each value known by the end of that day, never a later revision.
+    const today = (opts.now ?? new Date()).toISOString().slice(0, 10);
+    const committed = await persistence.loadCommittedInputs(asof, asof < today ? asof : undefined);
     knowledgeTimeCutoff = committed.knowledgeTimeCutoff;
     regimeVersionIds = committed.values.map((v) => v.versionId);
     // Issue 1644: each ratio under its declared parameters (transform/ratios.ts).

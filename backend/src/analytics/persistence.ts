@@ -108,7 +108,9 @@ export interface AnalyticsPersistence {
   // `marketTimeCutoff`; the run computes from them and passes the returned
   // cutoff to freezeVintage. Optional like saveSourceAcquisition: a
   // persistence without a source ledger has nothing to read.
-  loadCommittedInputs?(marketTimeCutoff: string): Promise<CommittedInputs>;
+  // Issue 1733: `knownBy`, for a replay of a past as-of day, reads each value
+  // known by the end of that day (store/run-ledger-store.ts).
+  loadCommittedInputs?(marketTimeCutoff: string, knownBy?: string): Promise<CommittedInputs>;
   // Read the whole persisted raw floor, grouped by indicator, sorted by date.
   loadRawHistory(): Promise<RawIndicatorHistory>;
   // Upsert merged raw history on (date, indicator); fetched wins on overlap

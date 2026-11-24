@@ -38,7 +38,7 @@ import { runAnalytics } from "../src/analytics/index.ts";
 import { directAnalyticsPersistence } from "../src/analytics/store/direct.ts";
 import { noopTelemetrySink } from "../src/analytics/telemetry.ts";
 import type { RegimeSnapshotRow } from "../src/analytics/report/regime-projection.ts";
-import { ASOF as COMMITTED_ASOF, baseObservations, poisonedSource, secondObservations } from "./support/committed-inputs.ts";
+import { ASOF as COMMITTED_ASOF, baseObservations, liveOn, poisonedSource, secondObservations } from "./support/committed-inputs.ts";
 import {
   admitReplayLabel,
   day,
@@ -184,7 +184,7 @@ describe("Part A: through the production pipeline", () => {
             published[asof] = input.regimeSnapshots ?? [];
             return directAnalyticsPersistence.submitTerminalRunPackage(input);
           },
-        }, noopTelemetrySink);
+        }, noopTelemetrySink, undefined, undefined, liveOn(asof));
       } finally {
         source.restore();
       }

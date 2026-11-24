@@ -284,7 +284,7 @@ describe("issue 1421: backend backtest and correlations against the original byt
   for (const v of VARIANTS) {
     test(`${v}: shared artifact and daily portfolio values equal the originals`, () => {
       const inputs = variantInputs(v);
-      const { dateAxis, transformed, ages } = prepareRegimeInputs(inputs.registry, { start: BACKFILL_START, asof: inputs.asof });
+      const { dateAxis, transformed, ages } = prepareRegimeInputs(inputs.registry, { start: BACKFILL_START, asof: inputs.asof, version: "v3" });
       // The originals were captured under methodology v3 (issue 1652).
       const r2 = computeRegime(transformed, dateAxis, ORIGINAL_PANELS, ages, undefined, "v3");
       const extras = { spx: cutAtAsof(inputs.extras.spx, inputs.asof), eth: cutAtAsof(inputs.extras.eth, inputs.asof), tbill3m: cutAtAsof(inputs.extras.tbill3m, inputs.asof) };

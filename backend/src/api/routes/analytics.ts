@@ -820,7 +820,10 @@ async function handleAnalyticsUnbounded(req: Request, url: URL): Promise<{ statu
   if (m === "GET" && p === A.committedInputs) {
     const asof = url.searchParams.get("asof");
     if (!asof || !isIsoDate(asof)) return { status: 400, body: { error: "asof must be a valid YYYY-MM-DD date" } };
-    return { status: 200, body: await loadCommittedInputs(REGIME_STORAGE_KEYS, asof) };
+    // Issue 1733: a replay of a past as-of day reads the values known by its end.
+    const knownBy = url.searchParams.get("knownBy");
+    if (knownBy !== null && !isIsoDate(knownBy)) return { status: 400, body: { error: "knownBy must be a valid YYYY-MM-DD date" } };
+    return { status: 200, body: await loadCommittedInputs(REGIME_STORAGE_KEYS, asof, undefined, knownBy ?? undefined) };
   }
 
 // ── issue #978: the immutable analytics output/report snapshot layer ─────

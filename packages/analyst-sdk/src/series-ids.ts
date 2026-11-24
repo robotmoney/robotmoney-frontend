@@ -190,8 +190,13 @@ export const RATIO_IDS: ReadonlySet<string> = new Set(SERIES_MAPPING.filter((m) 
 /** The 28 leg storage keys. */
 export const RATIO_LEG_KEYS: ReadonlySet<string> = new Set(RATIO_LEG_MAPPING.map((m) => m.storageKey));
 
-/** The ratio ids declared ratioInput "stored": ingestion stores them and the run reads them (issue 1644). */
-export const STORED_RATIO_IDS: ReadonlySet<string> = new Set(INDICATORS.filter((i) => RATIO_IDS.has(i.id) && i.ratioInput === "stored").map((i) => i.id));
+/**
+ * The ratio ids ingestion stores and the ledger read includes (issue 1644).
+ * Issue 1733: every ratio, since methodology v3 reads all eight as stored
+ * (ratioDeclarationsFor) and its runs must replay; v4 ignores a stored ratio
+ * declared ratioInput "legs" and computes it from the legs.
+ */
+export const STORED_RATIO_IDS: ReadonlySet<string> = new Set(INDICATORS.filter((i) => RATIO_IDS.has(i.id)).map((i) => i.id));
 
 // OLDER LEG NAMES (issue 1514). An input may still carry an adjusted leg under
 // the name it used before issue 1644: the source id `yahoo:<SYMBOL>`, or the

@@ -11,8 +11,8 @@
 //                                    ETH_TREND/ETH-USD)
 //   - yahoo [num, den]            → num/den ratio on shared dates (COPPER_GOLD=HG/GC,
 //                                    IWM_SPY, BTC_ETH=BTC-USD/ETH-USD, SPHB_SPLV,
-//                                    MTUM_SPY, IWF_IWD, XLU_SPY, XLP_XLY), for a ratio
-//                                    declared ratioInput "stored"; plus each symbol's
+//                                    MTUM_SPY, IWF_IWD, XLU_SPY, XLP_XLY), for a stored
+//                                    ratio (STORED_RATIO_IDS); plus each symbol's
 //                                    two closes as legs, yahoo:<SYMBOL>.close and
 //                                    yahoo:<SYMBOL>.adjclose (issue 1644)
 //   - defillama_tvl               → DEFI_TVL / DEFI_GROWTH (raw TVL level; the
@@ -33,7 +33,7 @@ import type { Point } from "../types.ts";
 import { INDICATORS, type Indicator } from "../analyze/indicators.ts";
 import { isoDay } from "../transform/math.ts";
 import { mergeRatioSeries } from "../transform/grid.ts";
-import { ratioLegSourceId, STORED_UNDER, type LegClose } from "../series-ids.ts";
+import { ratioLegSourceId, STORED_RATIO_IDS, STORED_UNDER, type LegClose } from "../series-ids.ts";
 import { COLLECTED_SERIES, collectionRegistry, type SourceSeries } from "./collected-series.ts";
 import { fetchFred } from "./fred.ts";
 import { fetchYahoo, fetchYahooChart, fetchYahooClose, parseYahoo, parseYahooClose } from "./yahoo.ts";
@@ -207,8 +207,9 @@ export async function fetchOne(ind: SourceSeries, logger: Logger = console, ext:
       return fetchFred(ind.series as string);
     case "yahoo": {
       if (Array.isArray(ind.series)) {
-        // Issue 1644: a ratio declared "legs" is never computed at ingestion.
-        if (ind.ratioInput === "legs") throw new Error(`${ind.id} is declared ratioInput "legs": it is calculated from its legs in the transform stage, never fetched`);
+        // Issue 1644: a ratio that is not stored is never computed at ingestion
+        // (issue 1733: every registry ratio is stored, for v3 replays).
+        if (!STORED_RATIO_IDS.has(ind.id)) throw new Error(`${ind.id} is not a stored ratio: it is calculated from its legs in the transform stage, never fetched`);
         return fetchYahooRatio(ind.series as [string, string], memo);
       }
       return yahoo(ind.series as string);
@@ -263,8 +264,8 @@ export async function fetchAll(
   const inds = (opts.indicators ?? collectionRegistry()).filter((ind) => !Object.hasOwn(STORED_UNDER, ind.id));
   const record = (meta: AcquisitionMeta, operation: () => Promise<Point[]>) => (opts.acquire ? opts.acquire(meta, operation) : operation());
   // Issue 1644: each ratio symbol's two closes are recorded once per run, from
-  // full history, as source data. A ratio declared ratioInput "stored" is
-  // still calculated and stored exactly as before; one declared "legs" is not.
+  // full history, as source data. A stored ratio (STORED_RATIO_IDS, every
+  // registry ratio since issue 1733) is still calculated and stored as before.
   const fetchLeg = async ({ id: legKey, symbol, close }: { id: string; symbol: string; close: LegClose }): Promise<[string, Point[]]> => {
     try {
       const points = await record({
@@ -287,7 +288,7 @@ export async function fetchAll(
     }
   };
   const results = await Promise.all([
-    ...inds.filter((ind) => ind.ratioInput !== "legs").map(async (ind): Promise<[string, Point[]]> => {
+    ...inds.filter((ind) => !(Array.isArray(ind.series) && ind.source === "yahoo") || STORED_RATIO_IDS.has(ind.id)).map(async (ind): Promise<[string, Point[]]> => {
       try {
         const points = await record({
           provider: ind.source,

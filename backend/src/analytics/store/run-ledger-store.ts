@@ -209,7 +209,7 @@ const selectCommittedInputsKnownAt = registerQuery({
   purpose: "Read the ledger versions of the regime's storage keys known by the end of a past as-of day, so a replay never sees a later revision (issue 1733).",
   callers: [ANALYTICS_ROUTE],
   probe: {
-    statement: `WITH c AS (SELECT clock_timestamp() AS t, (($2::date + 1)::timestamp AT TIME ZONE 'UTC') AS day_end)
+    statement: `WITH c AS (SELECT clock_timestamp() AS t, (($3::date + 1)::timestamp AT TIME ZONE 'UTC') AS day_end)
     SELECT to_char(c.t AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cutoff,
       h.id, h.source_key, h.market_date, h.value
     FROM c LEFT JOIN LATERAL (
@@ -223,7 +223,7 @@ const selectCommittedInputsKnownAt = registerQuery({
         CASE WHEN v.knowledge_time < c.day_end THEN v.knowledge_time END DESC NULLS LAST,
         v.knowledge_time ASC, v.id DESC
     ) h ON true`,
-    params: ["{}", "2000-01-01"],
+    params: ["{}", "2000-01-01", "2000-01-01"],
   },
 });
 
@@ -564,16 +564,17 @@ export interface CommittedInputs {
   values: { versionId: string; sourceKey: string; marketDate: string; value: number }[];
 }
 
-// Issue 1733: an as-of day before today (UTC) reads by knowledge time
-// (selectCommittedInputsKnownAt); today or later reads the heads, unchanged.
+// Issue 1733: with `knownBy` (a replay of a past as-of day) each coordinate
+// reads the version known by the end of that UTC day, else its first-known
+// version (selectCommittedInputsKnownAt); without it, the heads, unchanged.
 export async function loadCommittedInputs(
   sourceKeys: readonly string[],
   marketTimeCutoff: string,
   db: DbHandle = sql,
-  today: string = new Date().toISOString().slice(0, 10),
+  knownBy?: string,
 ): Promise<CommittedInputs> {
-  const rows = marketTimeCutoff < today ? await on(db, selectCommittedInputsKnownAt)<{ cutoff: string; id: string | number | null; source_key: string | null; market_date: string | null; value: number | null }>`
-    WITH c AS (SELECT clock_timestamp() AS t, ((${marketTimeCutoff}::date + 1)::timestamp AT TIME ZONE 'UTC') AS day_end)
+  const rows = knownBy !== undefined ? await on(db, selectCommittedInputsKnownAt)<{ cutoff: string; id: string | number | null; source_key: string | null; market_date: string | null; value: number | null }>`
+    WITH c AS (SELECT clock_timestamp() AS t, ((${knownBy}::date + 1)::timestamp AT TIME ZONE 'UTC') AS day_end)
     SELECT to_char(c.t AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cutoff,
       h.id, h.source_key, h.market_date, h.value
     FROM c LEFT JOIN LATERAL (

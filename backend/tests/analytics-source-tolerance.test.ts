@@ -26,7 +26,7 @@ import type { TerminalRunPackageInput } from "../src/analytics/output-snapshots.
 import { noopTelemetrySink } from "../src/analytics/telemetry.ts";
 import { mergeSeries } from "../src/analytics/transform/math.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
-import { ASOF, baseObservations, capturingTelemetry, poisonedSource, secondObservations } from "./support/committed-inputs.ts";
+import { ASOF, baseObservations, capturingTelemetry, liveOn, poisonedSource, secondObservations } from "./support/committed-inputs.ts";
 import { inventoryCollection, loadResearchSeriesInventory, collectedByInventory } from "../src/analytics/extract/model-portfolio.ts";
 import { registryRatioLegs } from "../../packages/analyst-sdk/src/extract/sources.ts";
 import { RATIO_LEG_MAPPING } from "../../packages/analyst-sdk/src/series-ids.ts";
@@ -274,7 +274,7 @@ describe("issue 1421: downstream consumes the committed value and version, never
     const first = poisonedSource(base, 3);
     let firstResults: Record<string, unknown>;
     try {
-      firstResults = await runAnalytics(ASOF, undefined, first, directAnalyticsPersistence, noopTelemetrySink);
+      firstResults = await runAnalytics(ASOF, undefined, first, directAnalyticsPersistence, noopTelemetrySink, undefined, undefined, liveOn(ASOF));
     } finally {
       first.restore();
     }
@@ -296,7 +296,7 @@ describe("issue 1421: downstream consumes the committed value and version, never
           submitted.push(input);
           return directAnalyticsPersistence.submitTerminalRunPackage(input);
         },
-      }, telemetry);
+      }, telemetry, undefined, undefined, liveOn(ASOF));
     } finally {
       source.restore();
     }
