@@ -17,10 +17,10 @@ export { computeCorrelations, type CorrelationsPayload } from "./analyze/correla
 export {
   computeBacktest, stripDailyFromSnapshot, simulatePortfolio, simulateDrift, periodStats, scheduleFromLabels, PORTFOLIO_SPECS,
   BACKTEST_COST_PER_REBALANCE, BACKTEST_IN_SAMPLE_END, YEAR_MS,
-  referenceStrategies, REFERENCE_FILL_POLICIES, DEFAULT_SIMULATOR_FILL, UNKNOWN_LABEL_RULE,
+  referenceStrategies, REFERENCE_FILL_POLICIES, REFERENCE_CALENDARS, discountToYield, SparseSeriesError, MAX_DAILY_MEDIAN_GAP_DAYS, splitSamples, DEFAULT_SIMULATOR_FILL, UNKNOWN_LABEL_RULE,
   type BacktestLabels, type DeclaredFill, type SimulatorFill, type UnknownLabelRule,
   type BacktestPayload, type BacktestMetrics, type Weights, type Schedule, type SimulateOptions, type SimulationResult,
-  type TradeEvidence, type PeriodStatsOptions, type DriftOptions, type RebalanceFrequency,
+  type TradeEvidence, type PeriodStatsOptions, type SampleBlock, type ReferenceBacktestOptions, type MarketCalendar, type CostBps, type DriftOptions, type RebalanceFrequency,
 } from "./analyze/backtest.ts";
 export * from "./input/manifest.ts";
 export {
@@ -39,6 +39,9 @@ export {
   isRefreshDate,
   isRegimeVersion,
   refreshDateOn,
+  adoptionDate,
+  AdoptionDateError,
+  REGIME_ADOPTION_DATE,
   type WeightRefresh,
   type LookbackWindow,
   type RegimeLookback,

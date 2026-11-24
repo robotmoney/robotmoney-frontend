@@ -9,7 +9,12 @@ import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseRawHistory, toHistory } from "../src/input/load.ts";
-import { periodStats, simulateDrift, simulatePortfolio, type DeclaredFill, type Schedule, type SimulatorFill, type Weights } from "../src/analyze/backtest.ts";
+import { periodStats, simulateDrift as simulateDriftWithDefaults, simulatePortfolio as simulatePortfolioWithDefaults, type DeclaredFill, type Schedule, type SimulatorFill, type Weights } from "../src/analyze/backtest.ts";
+
+// markowitzBacktest simulates a schedule dated by the day its weights take
+// effect, so it adds no second execution lag (issue 1734); these wrappers do the same.
+const simulatePortfolio: typeof simulatePortfolioWithDefaults = (a, s, p, c, o = {}) => simulatePortfolioWithDefaults(a, s, p, c, { lagSessions: 0, ...o });
+const simulateDrift: typeof simulateDriftWithDefaults = (a, s, p, c, o = {}) => simulateDriftWithDefaults(a, s, p, c, { lagSessions: 0, ...o });
 import { dot2, sum2 } from "../src/transform/exact.ts";
 import { correlationMatrix, type Mat } from "../src/transform/linalg.ts";
 import { shrunkCov } from "../src/allocate/covariance.ts";
@@ -456,7 +461,7 @@ describe("markowitzBacktest", () => {
     expect(bt.schedule).toEqual(markowitzSchedule(base()).schedule);
     const sim = simulatePortfolio(AXIS, bt.schedule, pricesOf(), cashRate);
     expect(bt.simulation).toEqual(sim);
-    expect(bt.stats).toEqual(periodStats(sim.values, sim.startDate, sim.endDate, { returns: sim.returns, trades: sim.trades }));
+    expect(bt.stats).toEqual(periodStats(sim.values, sim.startDate, sim.endDate, { returns: sim.returns, excess: sim.excess, trades: sim.trades }));
     expect(bt.simulation.trades.length).toBeGreaterThan(0);
     const cheap = markowitzBacktest({ ...base(), prices: pricesOf(), costBps: 0 });
     expect(cheap.simulation).toEqual(simulatePortfolio(AXIS, cheap.schedule, pricesOf(), cashRate, { costBps: 0 }));
@@ -465,7 +470,7 @@ describe("markowitzBacktest", () => {
     const bt = markowitzBacktest({ ...base(), prices: pricesOf(), simulate: { drift: { costBps: 10, freq: "monthly" } } });
     const sim = simulateDrift(AXIS, bt.schedule, pricesOf(), cashRate, { costBps: 10, freq: "monthly" });
     expect(bt.simulation).toEqual(sim);
-    expect(bt.stats).toEqual(periodStats(sim.values, sim.startDate, sim.endDate, { returns: sim.returns, trades: sim.trades }));
+    expect(bt.stats).toEqual(periodStats(sim.values, sim.startDate, sim.endDate, { returns: sim.returns, excess: sim.excess, trades: sim.trades }));
     expect(bt.simulation).not.toEqual(simulatePortfolio(AXIS, bt.schedule, pricesOf(), cashRate));
     const viaTop = markowitzBacktest({ ...base(), prices: pricesOf(), costBps: 10, simulate: { drift: { freq: "monthly" } } });
     expect(viaTop.simulation).toEqual(sim);
@@ -479,7 +484,7 @@ describe("markowitzBacktest", () => {
     expect(calls).toEqual([AXIS.length]);
     const sim = simulateDrift(AXIS, bt.schedule, pricesOf(), cashRate, { costBps: 5, freq: "quarterly", band: 0.1 });
     expect(bt.simulation).toEqual(sim);
-    expect(bt.stats).toEqual(periodStats(sim.values, sim.startDate, sim.endDate, { returns: sim.returns, trades: sim.trades, splitDate: "2024-06-30" }));
+    expect(bt.stats).toEqual(periodStats(sim.values, sim.startDate, sim.endDate, { returns: sim.returns, excess: sim.excess, trades: sim.trades, splitDate: "2024-06-30" }));
   });
   test("unknown keys and conflicting or invalid options throw RangeError naming the key", () => {
     expect(() => markowitzBacktest({ ...base(), prices: pricesOf(), freq: "monthly" } as never)).toThrow(/unknown option "freq"/);

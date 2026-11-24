@@ -43,10 +43,40 @@
 // (UNKNOWN_LABEL_RULE).
 import type { Point } from "../types.ts";
 import { FillPolicyError, PANELS, fillMaxAgeDays, fillPolicyOf, type FillPolicy } from "./indicators.ts";
+import { CURRENT_REGIME_VERSION, adoptionDate } from "./regime-versions.ts";
 import { annualizedGrowth, Compounder, ddDiv, ddMulD, ddValue, dotDD, meanAndSampleSd, periodicRate, sharpeDD, sumDD, twoSum } from "../transform/exact.ts";
 
 export const BACKTEST_COST_PER_REBALANCE = 0.001;
-export const BACKTEST_IN_SAMPLE_END = "2024-01-31";
+// The in-sample end: the adoption date of the current methodology version
+// (issue 1734). Statistics up to and including it are in-sample, after it
+// out-of-sample.
+export const BACKTEST_IN_SAMPLE_END = adoptionDate(CURRENT_REGIME_VERSION);
+
+/** Thrown by periodStats for a value series sparser than daily (issue 1734, finding B7). */
+export class SparseSeriesError extends RangeError {
+  constructor(message: string) {
+    super(message);
+    this.name = "SparseSeriesError";
+  }
+}
+
+/**
+ * The longest median gap, in days, between consecutive values that still counts
+ * as a daily series. A hole where no label applied is still a daily series; a
+ * weekly or monthly one is not.
+ */
+export const MAX_DAILY_MEDIAN_GAP_DAYS = 1;
+
+/**
+ * The bond-equivalent yield, in percent, of a 3-month T-bill discount quote in
+ * percent (finding B5). DTB3 is a discount rate d on a 360-day basis for 91
+ * days: price = 1 - d x 91 / 360, yield = 365 d / (360 - 91 d). Both simulators
+ * convert the cash rate with this helper before compounding.
+ */
+export function discountToYield(discountPercent: number): number {
+  const d = discountPercent / 100;
+  return (365 * d) / (360 - 91 * d) * 100;
+}
 
 interface PortfolioSpec {
   risky: string[];
@@ -84,6 +114,18 @@ export const PORTFOLIO_SPECS: Record<string, PortfolioSpec> = {
   },
 };
 
+/** One labelled block of statistics over a window (issue 1734). */
+export interface SampleBlock {
+  label: "in_sample" | "out_of_sample";
+  start_date: string | null;
+  end_date: string | null;
+  n_days: number;
+  cagr: number | null;
+  sharpe: number | null;
+  max_drawdown: number | null;
+  transitions: number;
+}
+
 export interface BacktestMetrics {
   final_value: number | null;
   cagr: number | null;
@@ -96,6 +138,11 @@ export interface BacktestMetrics {
   start_date: string;
   end_date: string;
   equity_curve: Point[];
+  // The statistics split at `sample_split_date` (the adoption date of the
+  // methodology version): up to and including it, and after it.
+  sample_split_date: string;
+  in_sample: SampleBlock;
+  out_of_sample: SampleBlock;
   _daily?: Point[];
 }
 
@@ -148,10 +195,31 @@ export function withDefaultSimulatorFill<T>(fill: DeclaredFill | null, fn: () =>
   }
 }
 
+/**
+ * Days an asset's market is open (issue 1734). `continuous` trades every axis
+ * date, `weekdays` Monday to Friday, `observed` only on dates the asset's own
+ * price series has a value (so a holiday is closed too).
+ */
+export type MarketCalendar = "continuous" | "weekdays" | "observed";
+
+const MARKET_CALENDARS: readonly MarketCalendar[] = ["continuous", "weekdays", "observed"];
+
+/** Cost per unit of one-sided turnover in basis points: one number, or a rate per asset id. */
+export type CostBps = number | Record<string, number>;
+
 export interface SimulateOptions {
-  // Cost per unit of one-sided turnover, in basis points. Default 10, the
-  // established BACKTEST_COST_PER_REBALANCE.
-  costBps?: number;
+  // Cost in basis points. A number is the rate on one-sided turnover (default
+  // 10, the established BACKTEST_COST_PER_REBALANCE). A map gives each risky
+  // asset its own rate on the notional of its leg of a trade (an asset with no
+  // entry pays 10); cash trades free.
+  costBps?: CostBps;
+  // Axis days between the day a target is known (its close) and the day it can
+  // trade (at that day's close). Default 1: a day's label trades no earlier
+  // than the next session. 0 reproduces same-close execution.
+  lagSessions?: number;
+  // Open days per asset. Default "observed" for every asset. A trade that
+  // changes an asset's weight waits for the next day that asset's market is open.
+  calendars?: Record<string, MarketCalendar>;
   // Fill policy per series (issue 1554). A series with no entry uses
   // DEFAULT_SIMULATOR_FILL.
   fill?: SimulatorFill;
@@ -170,6 +238,8 @@ export interface TradeEvidence {
 export interface SimulationResult {
   values: Point[];
   returns: Point[];
+  // Per day, the post-cost return minus that day's cash return: what Sharpe reads (issue 1734).
+  excess: Point[];
   trades: TradeEvidence[];
   startDate: string;
   endDate: string;
@@ -178,6 +248,8 @@ export interface SimulationResult {
 export interface PeriodStatsOptions {
   // The simulation's pre-cost daily return observations (SimulationResult.returns).
   returns: Point[];
+  // The simulation's post-cost, excess-of-cash daily returns (SimulationResult.excess).
+  excess: Point[];
   // Trade evidence; its count inside the window is `transitions`.
   trades?: TradeEvidence[];
   // In-sample end. Default BACKTEST_IN_SAMPLE_END.
@@ -241,15 +313,98 @@ export function simulatePortfolio(
   options: SimulateOptions = {},
 ): SimulationResult {
   for (const k of Object.keys(options)) {
-    if (k !== "costBps" && k !== "fill") throw new RangeError(`unknown option ${JSON.stringify(k)}; expected costBps, fill`);
+    if (!["costBps", "fill", "lagSessions", "calendars"].includes(k)) throw new RangeError(`unknown option ${JSON.stringify(k)}; expected costBps, fill, lagSessions, calendars`);
   }
-  const { costBps } = options;
-  if (costBps !== undefined && (typeof costBps !== "number" || !Number.isFinite(costBps) || costBps < 0)) {
-    throw new RangeError(`costBps must be a finite nonnegative number, got ${JSON.stringify(costBps)}`);
-  }
-  const costRate = costBps === undefined ? BACKTEST_COST_PER_REBALANCE : costBps / 10_000;
+  const costs = costSpec(options.costBps);
   const prepared = prepareSimulation(dateAxis, schedule, prices, cashRate, options.fill);
-  return simulate(dateAxis, schedule, prepared, costRate);
+  const executed = executionSchedule(dateAxis, schedule, prices, options);
+  return simulate(dateAxis, executed, prepared, costs);
+}
+
+type CostSpec = { kind: "rate"; rate: number } | { kind: "map"; rates: Record<string, number> };
+
+/** Validates costBps (a number or a per-asset map) into a CostSpec. */
+function costSpec(costBps: CostBps | undefined): CostSpec {
+  const bad = (v: unknown) => typeof v !== "number" || !Number.isFinite(v) || v < 0;
+  if (costBps === undefined) return { kind: "rate", rate: BACKTEST_COST_PER_REBALANCE };
+  if (costBps !== null && typeof costBps === "object" && !Array.isArray(costBps)) {
+    const rates: Record<string, number> = {};
+    for (const [k, v] of Object.entries(costBps)) {
+      if (bad(v)) throw new RangeError(`costBps for ${JSON.stringify(k)} must be a finite nonnegative number, got ${JSON.stringify(v)}`);
+      rates[k] = v / 10_000;
+    }
+    return { kind: "map", rates };
+  }
+  if (bad(costBps)) throw new RangeError(`costBps must be a finite nonnegative number or a map of them, got ${JSON.stringify(costBps)}`);
+  return { kind: "rate", rate: (costBps as number) / 10_000 };
+}
+
+/** The one-sided turnover of a rebalance and the cost rate that applies to it. */
+function tradeCost(a: Weights, b: Weights, spec: CostSpec): { turnover: number; rate: number } {
+  const turnover = turnoverBetween(a, b);
+  if (spec.kind === "rate") return { turnover, rate: spec.rate };
+  let cost = 0;
+  for (const k of new Set([...Object.keys(a), ...Object.keys(b)])) {
+    if (k === "cash") continue;
+    cost += Math.abs((a[k] || 0) - (b[k] || 0)) * (spec.rates[k] ?? BACKTEST_COST_PER_REBALANCE);
+  }
+  return { turnover, rate: turnover > 0 ? cost / turnover : 0 };
+}
+
+/** The day's return after the trade cost (cost = turnover x rate of the book). */
+function netOfCost(portRet: number, cost: number): number {
+  return cost === 0 ? portRet : (1 + portRet) * (1 - cost) - 1;
+}
+
+const weekdayIndex = (iso: string): number => (new Date(`${iso}T00:00:00Z`).getUTCDay() + 6) % 7;
+
+/** Per axis date, whether an asset's market is open. */
+function openDays(dateAxis: readonly string[], pts: Point[] | undefined, calendar: MarketCalendar): boolean[] {
+  if (calendar === "continuous") return dateAxis.map(() => true);
+  if (calendar === "weekdays") return dateAxis.map((d) => weekdayIndex(d) < 5);
+  const seen = new Set<string>();
+  if (Array.isArray(pts)) for (const p of pts) if (Number.isFinite(p.value)) seen.add(p.date);
+  return dateAxis.map((d) => seen.has(d));
+}
+
+/**
+ * The weights the book holds after each date's close (issue 1734). A target set
+ * at date j trades no earlier than date j + lagSessions, and a trade that
+ * changes an asset's weight waits for that asset's next open day. A null
+ * target leaves the day unscheduled, as before. With lag 0 and every market
+ * open the schedule is returned unchanged.
+ */
+function executionSchedule(
+  dateAxis: readonly string[],
+  schedule: Schedule,
+  prices: Record<string, Point[]>,
+  options: { lagSessions?: number; calendars?: Record<string, MarketCalendar> },
+): Schedule {
+  const lag = options.lagSessions ?? 1;
+  if (!Number.isInteger(lag) || lag < 0) throw new RangeError(`lagSessions must be a nonnegative integer, got ${JSON.stringify(lag)}`);
+  const calendars = options.calendars ?? {};
+  for (const [k, c] of Object.entries(calendars)) {
+    if (!MARKET_CALENDARS.includes(c)) throw new RangeError(`calendar for ${JSON.stringify(k)} must be one of ${MARKET_CALENDARS.join(", ")}, got ${JSON.stringify(c)}`);
+    if (!Object.hasOwn(prices, k)) throw new RangeError(`calendar key ${JSON.stringify(k)} names no series; expected a key of prices`);
+  }
+  const open: Record<string, boolean[]> = {};
+  for (const k of Object.keys(prices)) open[k] = openDays(dateAxis, prices[k], calendars[k] ?? "observed");
+  const allOpen = Object.values(open).every((o) => o.every(Boolean));
+  if (lag === 0 && allOpen) return schedule;
+
+  const out: Schedule = new Array(dateAxis.length).fill(null);
+  let held: Weights | null = null;
+  for (let i = 0; i < dateAxis.length; i++) {
+    const target = i - lag >= 0 ? schedule[i - lag]! : null;
+    if (!target) continue;
+    const changing = (held == null ? Object.keys(target) : [...new Set([...Object.keys(held), ...Object.keys(target)])]).filter(
+      (k) => k !== "cash" && Math.abs((target[k] || 0) - (held?.[k] || 0)) > 1e-9,
+    );
+    if (changing.every((k) => open[k]?.[i] ?? true)) held = target;
+    else if (held == null) continue;
+    out[i] = held;
+  }
+  return out;
 }
 
 interface PreparedSimulation {
@@ -419,13 +574,14 @@ function simulate(
   dateAxis: readonly string[],
   schedule: Schedule,
   prepared: PreparedSimulation,
-  costRate: number,
+  costs: CostSpec,
 ): SimulationResult {
   const { assetSeries, tbillDaily, firstIdx } = prepared;
   const equity = new Compounder(1);
   let lastWeights: Weights | null = null;
   const values: Point[] = [];
   const returns: Point[] = [];
+  const excess: Point[] = [];
   const trades: TradeEvidence[] = [];
   let firstActiveIdx = -1;
 
@@ -433,25 +589,32 @@ function simulate(
     const w = schedule[i];
     if (!w) continue;
     if (firstActiveIdx < 0) firstActiveIdx = i;
+    let dayRet: number | null = null;
+    let dayCash = 0;
 
     // Day i's portfolio return = lastWeights · (day i's asset returns).
     if (lastWeights != null) {
       checkHeldDay(lastWeights, prepared, dateAxis, i);
-      const dailyTbill = periodicRate((tbillDaily[i - 1] || 0) / 100, 365);
+      const dailyTbill = periodicRate(discountToYield(tbillDaily[i - 1] || 0) / 100, 365);
       // portRet = cash weight x daily cash rate + sum of weight x asset return,
       // as one compensated dot product.
       const { ws, rs } = dayTerms(lastWeights, assetSeries, i, dailyTbill);
       const portRet = ddValue(dotDD(ws, rs));
       equity.grow(portRet);
       returns.push({ date: dateAxis[i]!, value: portRet });
+      dayRet = portRet;
+      dayCash = dailyTbill;
     }
 
     // Rebalance at close of today if weights changed (turnover-based cost).
+    let tradeFraction = 0;
     if (lastWeights != null && !sameWeights(lastWeights, w)) {
-      const turnover = turnoverBetween(lastWeights, w);
-      equity.shrinkByProduct(turnover, costRate);
-      trades.push({ date: dateAxis[i]!, turnover, cost: turnover * costRate });
+      const { turnover, rate } = tradeCost(lastWeights, w, costs);
+      equity.shrinkByProduct(turnover, rate);
+      tradeFraction = turnover * rate;
+      trades.push({ date: dateAxis[i]!, turnover, cost: tradeFraction });
     }
+    if (dayRet != null) excess.push({ date: dateAxis[i]!, value: netOfCost(dayRet, tradeFraction) - dayCash });
     lastWeights = w;
     values.push({ date: dateAxis[i]!, value: equity.value });
   }
@@ -459,6 +622,7 @@ function simulate(
   return {
     values,
     returns,
+    excess,
     trades,
     startDate: dateAxis[firstActiveIdx >= 0 ? firstActiveIdx : firstIdx]!,
     endDate: dateAxis[dateAxis.length - 1]!,
@@ -491,8 +655,11 @@ export type RebalanceFrequency = "daily" | "weekly" | "monthly" | "quarterly" | 
 const REBALANCE_FREQUENCIES: readonly RebalanceFrequency[] = ["daily", "weekly", "monthly", "quarterly", "never"];
 
 export interface DriftOptions {
-  // Cost per unit of one-sided turnover, in basis points. Default 10, as simulatePortfolio.
-  costBps?: number;
+  // Cost in basis points, as simulatePortfolio (a number or a map per asset). Default 10.
+  costBps?: CostBps;
+  // Execution lag and market calendars, as simulatePortfolio (issue 1734).
+  lagSessions?: number;
+  calendars?: Record<string, MarketCalendar>;
   // Calendar rebalance rule. Default "daily".
   freq?: RebalanceFrequency;
   // Rebalance when any weight is more than `band` (absolute) from its target. Default: no band.
@@ -546,21 +713,19 @@ export function simulateDrift(
   options: DriftOptions = {},
 ): SimulationResult {
   for (const k of Object.keys(options)) {
-    if (k !== "costBps" && k !== "freq" && k !== "band" && k !== "fill") throw new RangeError(`unknown option ${JSON.stringify(k)}; expected costBps, freq, band, fill`);
+    if (!["costBps", "freq", "band", "fill", "lagSessions", "calendars"].includes(k)) throw new RangeError(`unknown option ${JSON.stringify(k)}; expected costBps, freq, band, fill, lagSessions, calendars`);
   }
-  const { costBps, freq = "daily", band } = options;
-  if (costBps !== undefined && (typeof costBps !== "number" || !Number.isFinite(costBps) || costBps < 0)) {
-    throw new RangeError(`costBps must be a finite nonnegative number, got ${JSON.stringify(costBps)}`);
-  }
+  const { freq = "daily", band } = options;
+  const costs = costSpec(options.costBps);
   if (!REBALANCE_FREQUENCIES.includes(freq)) {
     throw new RangeError(`freq must be one of ${REBALANCE_FREQUENCIES.join(", ")}, got ${JSON.stringify(freq)}`);
   }
   if (band !== undefined && (typeof band !== "number" || !Number.isFinite(band) || band < 0)) {
     throw new RangeError(`band must be a finite nonnegative number, got ${JSON.stringify(band)}`);
   }
-  const costRate = costBps === undefined ? BACKTEST_COST_PER_REBALANCE : costBps / 10_000;
   const prepared = prepareSimulation(dateAxis, schedule, prices, cashRate, options.fill);
   const { assetSeries, tbillDaily, firstIdx } = prepared;
+  schedule = executionSchedule(dateAxis, schedule, prices, options);
 
   const equity = new Compounder(1);
   // The drifted weights of the book; holdings are held x equity.
@@ -568,6 +733,7 @@ export function simulateDrift(
   let lastTarget: Weights | null = null;
   const values: Point[] = [];
   const returns: Point[] = [];
+  const excess: Point[] = [];
   const trades: TradeEvidence[] = [];
   let firstActiveIdx = -1;
 
@@ -584,7 +750,7 @@ export function simulateDrift(
     }
 
     checkHeldDay(held, prepared, dateAxis, i);
-    const dailyCash = periodicRate((tbillDaily[i - 1] || 0) / 100, 365);
+    const dailyCash = periodicRate(discountToYield(tbillDaily[i - 1] || 0) / 100, 365);
     const { ws, rs } = dayTerms(held, assetSeries, i, dailyCash);
     const portRet = ddValue(dotDD(ws, rs));
     // fl(1 + r_p) is 0 only when 1 + r_p is exactly 0, so its sign is the exact sign.
@@ -607,21 +773,25 @@ export function simulateDrift(
 
     const drifted =
       band !== undefined && [...new Set([...Object.keys(held), ...Object.keys(w)])].some((k) => Math.abs((held![k] || 0) - (w[k] || 0)) > band);
+    let tradeFraction = 0;
     if (!sameWeights(lastTarget, w) || calendarDue(freq, dateAxis[i - 1]!, date) || drifted) {
-      const turnover = turnoverBetween(held, w);
+      const { turnover, rate } = tradeCost(held, w, costs);
       if (turnover > 1e-9) {
-        equity.shrinkByProduct(turnover, costRate);
-        trades.push({ date, turnover, cost: turnover * costRate });
+        equity.shrinkByProduct(turnover, rate);
+        tradeFraction = turnover * rate;
+        trades.push({ date, turnover, cost: tradeFraction });
       }
       held = { ...w };
       lastTarget = w;
     }
+    excess.push({ date, value: netOfCost(portRet, tradeFraction) - dailyCash });
     values.push({ date, value: equity.value });
   }
 
   return {
     values,
     returns,
+    excess,
     trades,
     startDate: dateAxis[firstActiveIdx >= 0 ? firstActiveIdx : firstIdx]!,
     endDate: dateAxis[dateAxis.length - 1]!,
@@ -638,14 +808,24 @@ export const YEAR_MS = 365.25 * 86400 * 1000;
 // exactly. `_daily` carries the window's values; stripDailyFromSnapshot drops it.
 export function periodStats(valueSeries: Point[], from: string, to: string, options: PeriodStatsOptions): BacktestMetrics {
   for (const k of Object.keys(options)) {
-    if (!["returns", "trades", "splitDate"].includes(k)) throw new RangeError(`unknown option ${JSON.stringify(k)}; expected returns, trades, splitDate`);
+    if (!["returns", "excess", "trades", "splitDate"].includes(k)) throw new RangeError(`unknown option ${JSON.stringify(k)}; expected returns, excess, trades, splitDate`);
   }
   if (!Array.isArray(options.returns)) throw new RangeError("options.returns (the simulation's pre-cost daily returns) is required");
+  if (!Array.isArray(options.excess)) throw new RangeError("options.excess (the simulation's post-cost daily returns in excess of cash) is required");
   if (!ISO_DAY.test(from) || !ISO_DAY.test(to) || from > to) throw new RangeError(`period ${from}..${to} must be YYYY-MM-DD dates with from <= to`);
   const startDate = from;
   const endDate = to;
   const window = valueSeries.filter((p) => p.date >= from && p.date <= to);
+  const gaps: number[] = [];
+  for (let k = 1; k < window.length; k++) gaps.push((+new Date(window[k]!.date) - +new Date(window[k - 1]!.date)) / 86_400_000);
+  if (gaps.length > 0) {
+    const median = [...gaps].sort((x, y) => x - y)[Math.floor(gaps.length / 2)]!;
+    if (median > MAX_DAILY_MEDIAN_GAP_DAYS) {
+      throw new SparseSeriesError(`periodStats needs a daily value series: its median gap is ${median} days (limit ${MAX_DAILY_MEDIAN_GAP_DAYS})`);
+    }
+  }
   const dailyReturns = options.returns.filter((p) => p.date > from && p.date <= to).map((p) => p.value);
+  const dailyExcess = options.excess.filter((p) => p.date > from && p.date <= to).map((p) => p.value);
   const transitions = (options.trades ?? []).filter((t) => t.date > from && t.date <= to).length;
   const base = window.length ? window[0]!.value : 1;
   const equityDD = window.length ? ddDiv([window[window.length - 1]!.value, 0], [base, 0]) : ([1, 0] as const);
@@ -664,10 +844,13 @@ export function periodStats(valueSeries: Point[], from: string, to: string, opti
   // Compensated mean and sample sd. With no returns the mean is 0 and with one
   // the sd is 0 (the old max(1, n) and max(1, n - 1) divisors); either way, and
   // whenever the returns are all equal, sd is exactly 0 and Sharpe is 0.
-  const { mean, sd } = dailyReturns.length === 0 ? { mean: [0, 0] as const, sd: [0, 0] as const } : meanAndSampleSd(dailyReturns);
-  const sharpe = sd[0] > 0 ? sharpeDD(mean, sd, 365) : 0;
+  // Sharpe reads the post-cost daily returns in excess of that day's cash rate
+  // (issue 1734), so an all-cash book scores 0.
+  const sharpe = sharpeOf(dailyExcess);
 
   const splitDate = options.splitDate ?? BACKTEST_IN_SAMPLE_END;
+  const inSample = sampleBlock("in_sample", window.filter((p) => p.date <= splitDate), options, from, splitDate, true);
+  const outOfSample = sampleBlock("out_of_sample", window.filter((p) => p.date > splitDate), options, splitDate, to, false);
   let isEquityStart: number | null = null;
   let isEquityEnd: number | null = null;
   let oosEquityStart: number | null = null;
@@ -708,13 +891,77 @@ export function periodStats(valueSeries: Point[], from: string, to: string, opti
     start_date: startDate,
     end_date: endDate,
     equity_curve: downsampled,
+    sample_split_date: splitDate,
+    in_sample: inSample,
+    out_of_sample: outOfSample,
     _daily: window,
   };
 }
 
+/**
+ * The in-sample and out-of-sample blocks of a daily value series split at
+ * `splitDate` (inclusive in-sample), for the research comparisons (issue 1734).
+ * `excess` is the post-cost daily return in excess of cash, dated.
+ */
+export function splitSamples(
+  values: Point[],
+  excess: Point[],
+  splitDate: string = BACKTEST_IN_SAMPLE_END,
+): { sample_split_date: string; in_sample: SampleBlock; out_of_sample: SampleBlock } {
+  const options: PeriodStatsOptions = { returns: excess, excess };
+  const first = values.length ? values[0]!.date : splitDate;
+  const last = values.length ? values[values.length - 1]!.date : splitDate;
+  return {
+    sample_split_date: splitDate,
+    in_sample: sampleBlock("in_sample", values.filter((p) => p.date <= splitDate), options, first, splitDate, true),
+    out_of_sample: sampleBlock("out_of_sample", values.filter((p) => p.date > splitDate), options, splitDate, last, false),
+  };
+}
+
+// Annualized Sharpe of daily excess returns: compensated mean over sample sd;
+// 0 with no return or a zero sd.
+function sharpeOf(excess: number[]): number {
+  if (excess.length === 0) return 0;
+  const { mean, sd } = meanAndSampleSd(excess);
+  return sd[0] > 0 ? sharpeDD(mean, sd, 365) : 0;
+}
+
+// One labelled block of statistics over the values `vals` (already cut to the
+// block). Returns and trades count after the block's first value (or after
+// `after` when the block starts the window), as periodStats counts them.
+function sampleBlock(label: SampleBlock["label"], vals: Point[], options: PeriodStatsOptions, after: string, upTo: string, includesStart: boolean): SampleBlock {
+  if (vals.length === 0) {
+    return { label, start_date: null, end_date: null, n_days: 0, cagr: null, sharpe: null, max_drawdown: null, transitions: 0 };
+  }
+  const first = vals[0]!;
+  const last = vals[vals.length - 1]!;
+  const lo = includesStart ? first.date : after;
+  const inBlock = (d: string) => d > lo && d <= (includesStart ? last.date : upTo);
+  const excess = options.excess.filter((p) => inBlock(p.date)).map((p) => p.value);
+  let peak = first.value;
+  let maxDd = 0;
+  for (const pt of vals) {
+    if (pt.value > peak) peak = pt.value;
+    const dd = (pt.value - peak) / peak;
+    if (dd < maxDd) maxDd = dd;
+  }
+  const years = (+new Date(last.date) - +new Date(includesStart ? first.date : after)) / YEAR_MS;
+  const cagr = first.value > 0 && years > 0 ? annualizedGrowth(ddDiv([last.value, 0], [first.value, 0]), years) : null;
+  return {
+    label,
+    start_date: first.date,
+    end_date: last.date,
+    n_days: options.returns.filter((p) => inBlock(p.date)).length,
+    cagr: cagr == null ? null : nullIfNaN(cagr),
+    sharpe: nullIfNaN(sharpeOf(excess)),
+    max_drawdown: nullIfNaN(maxDd),
+    transitions: (options.trades ?? []).filter((t) => inBlock(t.date)).length,
+  };
+}
+
 // Full-range statistics of one simulation: the reference report fields.
-function fullStats(sim: SimulationResult): BacktestMetrics {
-  return periodStats(sim.values, sim.startDate, sim.endDate, { returns: sim.returns, trades: sim.trades });
+function fullStats(sim: SimulationResult, splitDate?: string): BacktestMetrics {
+  return periodStats(sim.values, sim.startDate, sim.endDate, { returns: sim.returns, excess: sim.excess, trades: sim.trades, ...(splitDate === undefined ? {} : { splitDate }) });
 }
 
 // The label series a reference backtest reads: the composite regime and one per
@@ -758,11 +1005,24 @@ export const REFERENCE_FILL_POLICIES: Readonly<Record<keyof BacktestExtras, Decl
   tbill3m: { kind: "forward", maxAgeDays: null, reason: "Reproduces the published backtest" },
 };
 
+// Market calendars of the reference assets (issue 1734): ETH trades every day,
+// the S&P 500 only on days it printed a close.
+export const REFERENCE_CALENDARS: Readonly<Record<string, MarketCalendar>> = { eth: "continuous", sp500: "observed" };
+
+/** REFERENCE_CALENDARS cut to the assets a market trades. */
+export const calendarsOf = (assets: readonly string[]): Record<string, MarketCalendar> =>
+  Object.fromEntries(assets.filter((a) => Object.hasOwn(REFERENCE_CALENDARS, a)).map((a) => [a, REFERENCE_CALENDARS[a]!]));
+
 const EXTRA_KEYS = ["spx", "eth", "tbill3m"] as const;
 
+/** Options of the reference backtest: the in-sample end (default BACKTEST_IN_SAMPLE_END, the current version's adoption date). */
+export interface ReferenceBacktestOptions {
+  splitDate?: string;
+}
+
 // The reference backtest under REFERENCE_FILL_POLICIES.
-export function computeBacktest(dateAxis: string[], labels: BacktestLabels, extras: BacktestExtras): BacktestPayload {
-  return computeBacktestWithFill(dateAxis, labels, extras, REFERENCE_FILL_POLICIES);
+export function computeBacktest(dateAxis: string[], labels: BacktestLabels, extras: BacktestExtras, options: ReferenceBacktestOptions = {}): BacktestPayload {
+  return computeBacktestWithFill(dateAxis, labels, extras, REFERENCE_FILL_POLICIES, options);
 }
 
 // The reference backtest under the supplied policies (keyed like
@@ -777,6 +1037,7 @@ export function computeBacktestWithFill(
   labels: BacktestLabels,
   extras: BacktestExtras,
   fill: Readonly<Record<keyof BacktestExtras, DeclaredFill>>,
+  options: ReferenceBacktestOptions = {},
 ): BacktestPayload {
   if (fill === null || typeof fill !== "object") throw new RangeError("fill must be a record of fill policy per extra (spx, eth, tbill3m)");
   for (const k of Object.keys(fill)) {
@@ -823,7 +1084,7 @@ export function computeBacktestWithFill(
     const port: Record<string, BacktestMetrics> = {};
     for (const [name, schedule] of Object.entries(schedules)) {
       const fromStart = startIdx < 0 ? schedule : schedule.map((w, i) => (i < startIdx ? null : w));
-      port[name] = fullStats(simulatePortfolio(axis, fromStart, prices, extras.tbill3m, { fill: marketFill }));
+      port[name] = fullStats(simulatePortfolio(axis, fromStart, prices, extras.tbill3m, { fill: marketFill, calendars: calendarsOf(spec.risky) }), options.splitDate);
     }
     out[pKey] = port;
   }

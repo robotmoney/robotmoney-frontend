@@ -44,7 +44,7 @@ describe("bun run backtest", () => {
     const h = parseInput(lines.join("\n")).history;
     const axis = Array.from({ length: 60 }, (_, i) => day(i));
     const sim = simulatePortfolio(axis, axis.map(() => ({ BTC: 0.1, GOLD: 0.06, cash: 0.84 })), { BTC: h["yahoo:BTC-USD"]!, GOLD: h["yahoo:GLD"]! }, h["fred:DTB3"]!, { costBps: 25 });
-    const { _daily, ...stats } = periodStats(sim.values, sim.startDate, sim.endDate, { returns: sim.returns, trades: sim.trades });
+    const { _daily, ...stats } = periodStats(sim.values, sim.startDate, sim.endDate, { returns: sim.returns, excess: sim.excess, trades: sim.trades });
     void _daily;
     expect(JSON.stringify(out.stats)).toBe(JSON.stringify(stats));
   });
