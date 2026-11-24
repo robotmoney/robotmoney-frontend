@@ -6,9 +6,11 @@
 // (tests/fixtures/PROVENANCE.md, "allocate/engine-*.csv").
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
+import { labelAt } from "../src/allocate/labels.ts";
+import { runRegime } from "../src/run.ts";
 import { join } from "node:path";
 import {
-  asofLabel, checkHoldings, EngineInputError, engineWeights, equalWeight, fillYieldBook, loadUniverse, parseRawHistory,
+  checkHoldings, EngineInputError, engineWeights, equalWeight, fillYieldBook, loadUniverse, parseRawHistory,
   parseRuleFile, tiltWeight, toHistory, type EngineRuleFile, type EngineSignals, type Holdings, type Universe, type Yields,
 } from "../src/index.ts";
 
@@ -227,7 +229,10 @@ describe("the prototype's weekly weights (Oct 2018 to Oct 2026)", () => {
     expect(inputs.rows.length).toBe(419);
     for (const i of [0, 200, 418]) {
       const r = inputs.rows[i]!;
-      expect(asofLabel(raw, { date: r[0]!, asof: r[1]! }, { panels: ["macro", "onchain"] }).compositePercentile).toBe(num(r[col("composite_pct")]!));
+      // The prototype refits its weights on each as-of day (v3's last-day refit, issue 1739).
+      const run = runRegime(raw, { asof: r[1]!, panels: ["macro", "onchain"], version: "v3" });
+      if (run.kind !== "complete") throw new Error(`incomplete ${r[1]}`);
+      expect(labelAt(run, r[0]!, r[1]!).compositePercentile).toBe(num(r[col("composite_pct")]!));
     }
   }, 60_000);
 
