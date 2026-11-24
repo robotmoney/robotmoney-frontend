@@ -6709,3 +6709,12 @@ The stage load check (`Q34a-analytics-load`, `scripts/release/analytics-load-che
 **Why.** A model asked to act as of a date before its cutoff already knows what happened next. Overlapping windows overstate the independent sample.
 
 **Rejected.** A historical committee replay. An as-of parameter on the session entry points. Backfilling `n_eff` into stored rows.
+
+
+## D91 — Panel weights follow a fixed refresh calendar, never the run's last day (issue 1739; owner, 2026-11-23)
+
+Panel weights refit every 21 days on a fixed calendar anchored at 2018-01-01. A day's weights are the fit from the latest refresh date on or before it. No step of the pipeline may depend on the run's end date: any run containing day t produces the same row t. Methodology v4 is changed in place (`refitOnLastDay: false`, `REGIME_WEIGHT_REFRESH`); v3 keeps its last-day refit and replays byte for byte. The latest snapshot row carries `weightFitDate`. The 21-day interval and the fit itself are unchanged.
+
+**Why.** The last-day refit gave a day different weights depending on whether it was the newest day of the run, so full-run series were hybrids no single day produced. Design: `docs/code-review/20261123T195613Z-lucky-weight-invariant/` (branch `docs/lucky-weight-invariant`).
+
+**Rejected.** A new methodology tag. A daily refit (a separate method change).

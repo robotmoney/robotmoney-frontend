@@ -196,16 +196,14 @@ describe("analyst-sdk golden equals the original JS reference", () => {
   });
 });
 
-describe("issue 1652: the v4 golden keeps the reference's numbers and cuts its labels on them", () => {
-  test("composite, percentiles, panel indices and indicators equal the v3 reference; the labels are cut on the composite and panel index", async () => {
+describe("issue 1652: the v4 golden cuts its labels on the composite and panel index", () => {
+  // Issue 1739: v4 refits its weights on a fixed calendar, so its numbers no
+  // longer equal the v3 reference (which refits on the last day). The numbers are
+  // pinned by the golden bytes below.
+  test("the labels are cut on the composite and panel index", async () => {
     const { bucketFn } = await import("../../packages/analyst-sdk/src/analyze/compute.ts");
     expect(golden.version).toBe("v3");
     expect(goldenV4.version).toBe("v4");
-    const out: string[] = [];
-    const strip = (g: any) => ({ ...g.regime, label: null, panels: Object.fromEntries(Object.entries(g.regime.panels).map(([k, v]: [string, any]) => [k, { ...v, regime: null }])) });
-    diff(strip(goldenV4), strip(ref), "regime", out, { n: 0 });
-    diff(goldenV4.indicators, ref.indicators, "indicators", out, { n: 0 });
-    expect(out).toEqual([]);
     // The fixture's last day: composite 0.521 is neutral; the v3 rank 0.645 is too.
     // macro index 0.662 is neutral under v4, its rank 0.897 risk-on under v3.
     expect(bucketFn(goldenV4.regime.panels.macro.index)).toBe("neutral");
@@ -225,6 +223,7 @@ describe("issue 1652: the v4 golden keeps the reference's numbers and cuts its l
 // issue 1652 (methodology v4, labels cut on the composite; was
 // 3480816a0d70850d4d7a3f9c9258f9de4aa0f17a2eb56000b219d6327094b206).
 describe("analyst-sdk report bytes are unchanged by the D74 storage mapping", () => {
+  // And by issue 1739 (weights refit on a fixed calendar; was fd512236f0b9baf9eafa35fc0b23ce88ad6030ec6ef877b0652ab126fd50de6f).
   // And by decision D88 (methodology renamed v5 to v4; was 9466c9d14933291155d370d6256abf862585a8c2add554fb9134c157d74884ed).
   // And by issue 1708 (D89, factor joins the 1/n composite; was c661b2e44fac9f1d1800160546a1b3a3f20e14efaef2b3321b6e8519f7e121ee).
   // And by issue 1742 (forward correlation cells gain n_eff; was fd512236f0b9baf9eafa35fc0b23ce88ad6030ec6ef877b0652ab126fd50de6f).

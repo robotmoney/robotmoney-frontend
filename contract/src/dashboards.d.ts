@@ -295,7 +295,7 @@ export interface RegimeSnapshot {
   macroPercentile?: number | null;
   onchainPercentile?: number | null;
   factorPercentile?: number | null;
-  panelWeights?: Record<string, Record<string, number>> | null;
+  panelWeights?: Record<string, Record<string, number> | string | null> | null;
   version?: string | null;
   // Row-level provenance (issue #397): which data source produced this row.
   // `null` on every pre-migration row — genuinely unknown, never fabricated.

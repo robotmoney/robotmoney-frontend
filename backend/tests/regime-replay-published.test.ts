@@ -287,13 +287,10 @@ describe("regime replay of a committed sample of published production runs (issu
       }
       // Issue 1652: under the current version (v4) the label is cut on the
       // composite, so a v3 run whose composite sits inside the cut-offs while
-      // its percentile does not would replay to another label. The fields the
-      // version does not change (composite, percentiles, indices) are the same
-      // under both.
+      // its percentile does not would replay to another label. Issue 1739: v4
+      // refits its weights on a fixed calendar, so its numbers differ from v3's
+      // too; only the label is compared.
       const current = replayPublishedRun(text, run.asof, run.publishedAsofRow, undefined, PRODUCTION_PANELS);
-      for (const f of ["composite", "compositePercentile", "macroIndex", "onchainIndex", "macroPercentile", "onchainPercentile", "percentiles"]) {
-        expect({ run: run.runKey, field: f, value: current.fields[f] }).toEqual({ run: run.runKey, field: f, value: outcome.fields[f] });
-      }
       if (run.runKey === "526a3988-0ebf-40b7-9c58-c588998303f8") {
         // Published risk_off at composite 0.477 (percentile below 0.33): v4 reads neutral.
         expect(outcome.replayLabel).toBe("risk_off");

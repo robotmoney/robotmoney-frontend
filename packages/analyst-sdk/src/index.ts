@@ -4,7 +4,7 @@ export * from "./run.ts";
 export {
   prepareRegimeInputs, latestCompleteDay, missingOnDay, type PreparedRegimeInputs, type MissingIndicator,
 } from "./prepare.ts";
-export { computeRegime, regimeLabels, type RegimeComputeResult } from "./analyze/compute.ts";
+export { computeRegime, regimeLabels, WeightAnchorOutOfRangeError, type RegimeComputeResult } from "./analyze/compute.ts";
 export {
   INDICATORS, PANELS, ALL_PANELS, PANEL_MEMBERSHIP, FillPolicyError, fillPolicyOf, fillMaxAgeDays, DAY_RULE, DAY_RULES,
   type Indicator, type Panel, type PanelMembership, type FillPolicy, type DayRule,
@@ -31,7 +31,11 @@ export {
   CURRENT_REGIME_VERSION,
   REGIME_LOOKBACK,
   REGIME_VERSIONS,
+  REGIME_WEIGHT_REFRESH,
+  isRefreshDate,
   isRegimeVersion,
+  refreshDateOn,
+  type WeightRefresh,
   type LookbackWindow,
   type RegimeLookback,
   type RegimeVersion,
