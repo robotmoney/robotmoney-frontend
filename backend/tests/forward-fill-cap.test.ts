@@ -14,6 +14,7 @@
 //      rank / panel weighting / composite (same code path as "no data that
 //      day"), and a resumed real observation re-enters normally with no
 //      special-casing (age resets to 0 the moment a real print lands).
+// Axes start on a weight refresh date (2018-01-01 + 21k days, issue 1739).
 import { test, expect } from "bun:test";
 import type { RegimeIndicator } from "@robotmoney/contract";
 import { sql } from "../src/db/client.ts";
@@ -50,7 +51,7 @@ function buildAxis(start: string, n: number): string[] {
 // ─── forwardFillAge: pure boundary behaviour ─────────────────────────────────
 
 test("forwardFillAge: NaN before the first observation, 0 on a real day, increments while carried forward, resets on the next real day", () => {
-  const dateAxis = buildAxis("2020-01-01", 10);
+  const dateAxis = buildAxis("2020-01-06", 10);
   const series = [
     { date: dateAxis[2], value: 1 },
     { date: dateAxis[5], value: 2 },
@@ -87,7 +88,7 @@ const REAL_DAYS = 300;
 const CAP = 10; // small horizon so the test stays fast and readable
 
 function scenario() {
-  const dateAxis = buildAxis("2020-01-01", REAL_DAYS + 60);
+  const dateAxis = buildAxis("2020-01-06", REAL_DAYS + 60);
   const series: { date: string; value: number }[] = [];
   for (let i = 0; i < REAL_DAYS; i++) {
     series.push({ date: dateAxis[i], value: 1 + Math.sin(i / 7) }); // genuine spread, band ~[0,2]
@@ -167,7 +168,7 @@ const withTargetPolicy = (maxAgeDays: number): Indicator[] =>
   INDICATORS.map((ind) => (ind.id === TARGET_ID ? { ...ind, fill: { kind: "forward", maxAgeDays } } : ind));
 
 function policyScenario() {
-  const dateAxis = buildAxis("2020-01-01", REAL_DAYS + 60);
+  const dateAxis = buildAxis("2020-01-06", REAL_DAYS + 60);
   const series: { date: string; value: number }[] = [];
   for (let i = 0; i < REAL_DAYS; i++) {
     series.push({ date: dateAxis[i], value: 1 + Math.sin(i / 7) }); // genuine spread, band ~[0,2]
