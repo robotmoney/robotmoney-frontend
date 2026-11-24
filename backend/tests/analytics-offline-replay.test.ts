@@ -334,7 +334,7 @@ test(
     // Each ratio under its declared parameters (issue 1733: the equity ratios from their raw legs).
     const input = { ...committed.registry, ...growth };
     const prepared = prepareRegimeInputs(ratiosFromLegs(input, resolveInputHistory(input)), { start: "2018-01-01", asof: COMMITTED_ASOF });
-    const r2 = computeRegime(prepared.transformed, prepared.dateAxis, PANELS);
+    const r2 = computeRegime(prepared.transformed, prepared.dateAxis, PANELS, undefined, undefined, undefined, undefined, undefined, undefined, prepared.carried);
     expect(latest.composite).toBe(r2.composite[r2.composite.length - 1]!);
     // Issue 1708 (D89): the composite is the 1/n mean of macro, onchain and factor.
     expect(latest.panels).toEqual(["macro", "onchain", "factor"]);
