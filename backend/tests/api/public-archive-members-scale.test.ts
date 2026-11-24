@@ -37,6 +37,7 @@ import {
 } from "../../src/analytics/store/public-archive-store.ts";
 import { useCleanDatabase } from "../support/clean-db.ts";
 import { fixtureDb } from "../support/fixture-db.ts";
+import { vacuumAnalyzeAsOwner } from "../support/vacuum-as-owner.ts";
 
 useCleanDatabase(import.meta.file);
 
@@ -74,10 +75,11 @@ async function addVintages(tool: string, count: number, createdAt: string): Prom
     FROM analytics_data_vintages v, generate_series(0, ${MEMBERS_PER_VINTAGE - 1}) g
     WHERE v.tool_id = ${tool} ORDER BY v.id, g`;
   // Settled statistics and visibility, so the plan and its heap fetches do not
-  // depend on when autovacuum last ran.
-  for (const table of ["analytics_ledger_runs", "analytics_data_vintages", "analytics_vintage_members"]) {
-    await fixtureDb.unsafe(`VACUUM ANALYZE ${table}`);
-  }
+  // depend on when autovacuum last ran. vacuumAnalyzeAsOwner flushes the WAL
+  // first, so the visibility map is set: with analytics_vintage_members_vintage_idx
+  // gone (issue 1717) the watermark is an index-only read of (vintage_id, id),
+  // which the planner prices as one only on all-visible pages.
+  await vacuumAnalyzeAsOwner("analytics_ledger_runs", "analytics_data_vintages", "analytics_vintage_members");
 }
 
 interface StepReads {
