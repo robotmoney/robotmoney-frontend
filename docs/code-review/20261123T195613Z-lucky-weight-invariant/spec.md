@@ -262,7 +262,7 @@ leaves the value open.
 | ID | Rule |
 |---|---|
 | P1 | Every field a run returns for as-of day *t*, including display fields such as the last raw value, is cut at *t*. |
-| P2 | Each series declares its calendar: every day, exchange days, or periodic (weekly or monthly releases). The axis may carry a value forward on a closed day, and it marks that row as carried. |
+| P2 | Each series declares its calendar: every day, exchange days, or periodic (weekly or monthly releases). The axis may carry a value forward on a closed day, and it marks that row as carried. Carried rows of an exchange-day series do not count in windows. Carried rows of a periodic series keep counting, because each release is repeated an equal number of times, so no day is over-weighted. |
 
 ### Transform
 

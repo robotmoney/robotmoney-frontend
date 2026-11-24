@@ -164,7 +164,7 @@ every other finding from `problem.md`.
 - **1733, source data known on each day:** E1 to E5 and P1.
 - **1741, observation-day windows:** P2, T1, A2 and A7. One methodology
   change, because all four move past values. It needs the quant analyst's
-  sign-off. It has one open question: how weekly and monthly series count.
+  sign-off. Weekly and monthly series keep counting carried rows as today (decided 2026-11-24).
 - **1734, backtest timing and reporting:** B1 to B7 and R3.
 - **1742, guards and reporting:** R1, R2, R4 and R5. It changes no computed
   value.

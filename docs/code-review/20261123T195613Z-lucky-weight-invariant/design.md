@@ -213,7 +213,7 @@ describes, not by the day it was known. One mechanism fixes all four.
 | ID | Design |
 |---|---|
 | P1 | `prepareRegimeInputs` cuts `lastRaw` at the as-of day. The "Not cut at asof" exception is removed. |
-| P2 | Add `calendar: "daily" \| "exchange" \| "periodic"` to each indicator. `periodic` covers weekly and monthly releases (`ICSA`, `SHILLER_CAPE`), whose carried rows keep counting as they do today: skipping them would leave `SHILLER_CAPE` under the 60-observation floor and `ICSA` with no shared days. How periodic series should count is an open method question (1741, 1673). `prepareRegimeInputs` returns a `carried` mask per indicator (it already computes the fill age: carried means age > 0). |
+| P2 | Add `calendar: "daily" \| "exchange" \| "periodic"` to each indicator. `periodic` covers weekly and monthly releases (`ICSA`, `SHILLER_CAPE`), whose carried rows keep counting as they do today: skipping them would leave `SHILLER_CAPE` under the 60-observation floor and `ICSA` with no shared days. Decision (2026-11-24): periodic series keep counting carried rows in the transform, the rank and the weight fit, as today. A different cadence rule for them is a method choice for 1673. `prepareRegimeInputs` returns a `carried` mask per indicator (it already computes the fill age: carried means age > 0). |
 
 ### Transform
 
