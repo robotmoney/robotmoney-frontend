@@ -101,7 +101,7 @@ jobs:
           tests/prepare.test.ts:7
           tests/input-rule.test.ts:11
           tests/extract.test.ts:9
-          tests/research-comparison-samples.test.ts:2
+          tests/research-comparison-samples.test.ts:6
       # Decision D78: the exact-arithmetic suite ran (results against BigInt
       # rationals on real data, the pearson scale cases, the constant-return Sharpe),
       # and the up-to-rounding comparison rejected every mutated original.
