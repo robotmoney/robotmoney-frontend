@@ -120,3 +120,28 @@ export function refreshDateOn(day: string, refresh: WeightRefresh): string | nul
 export function isRefreshDate(day: string, refresh: WeightRefresh): boolean {
   return refreshDateOn(day, refresh) === day;
 }
+
+/**
+ * The day each methodology version was adopted (issue 1734, decision D94).
+ * Every backtest statistic before it is in-sample (the version was tuned on
+ * that data), after it out-of-sample.
+ */
+export const REGIME_ADOPTION_DATE: Readonly<Record<string, string>> = Object.freeze({
+  v3: "2026-07-01",
+  v4: "2026-11-17",
+});
+
+/** Thrown by adoptionDate for a version with no declared adoption date. */
+export class AdoptionDateError extends Error {
+  constructor(version: string) {
+    super(`regime methodology version ${JSON.stringify(version)} declares no adoption date (REGIME_ADOPTION_DATE)`);
+    this.name = "AdoptionDateError";
+  }
+}
+
+/** The adoption date (YYYY-MM-DD) of a methodology version; throws AdoptionDateError when there is none. */
+export function adoptionDate(version: string): string {
+  const d = Object.hasOwn(REGIME_ADOPTION_DATE, version) ? REGIME_ADOPTION_DATE[version] : undefined;
+  if (typeof d !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(d)) throw new AdoptionDateError(version);
+  return d;
+}

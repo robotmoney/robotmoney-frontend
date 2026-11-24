@@ -609,6 +609,19 @@ The computed value is the one committed before it, for example `VIX` 15.98 (comm
 compute code in `analyze/` and `transform/` is the same on 2026-09-24 and 2026-09-27 as
 today apart from comments.
 
+### 8.1.3 Backtest execution and samples (issue 1734, D94)
+
+A backtest result is one a real strategy could have achieved. A label known at a
+day's close trades at the close of the next session at the earliest, and a trade
+never executes in a closed market: the S&P 500 leg of a weekend label change waits
+for the next day it printed a close. Each methodology version declares its adoption
+date (`REGIME_ADOPTION_DATE` in `regime-versions.ts`, refused by name when missing).
+Every backtest statistic reports an `in_sample` block up to and including that date
+and an `out_of_sample` block after it, because the version was tuned on the earlier
+data. Sharpe is the daily post-cost return minus the same day's cash return, and the
+cash rate is the bond-equivalent yield of the DTB3 discount quote. The rules are in
+`analytics-requirements.md` section 5. No label, composite or methodology tag changes.
+
 ### 8.1.2 Knowledge time (issue 1733, D92)
 
 A computation for day t reads only the source values published on or before t, at

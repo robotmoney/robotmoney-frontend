@@ -13,7 +13,11 @@ import { parseRawHistory, toHistory } from "../src/input/load.ts";
 import { mean, pearson, rollingBeta, rollingSum, sma, std, stddev } from "../src/transform/math.ts";
 import { pearson as rankPearson, ranks } from "../src/analyze/correlations.ts";
 import { rollingBetaSeries } from "../src/analyze/research-signals.ts";
-import { periodStats, simulatePortfolio } from "../src/analyze/backtest.ts";
+import { periodStats, simulatePortfolio as simulateWithDefaults } from "../src/analyze/backtest.ts";
+
+// Same-close execution with every market open: these cases test arithmetic, not timing (issue 1734).
+const simulatePortfolio: typeof simulateWithDefaults = (a, s, p, c, o = {}) =>
+  simulateWithDefaults(a, s, p, c, { lagSessions: 0, calendars: Object.fromEntries(Object.keys(p).map((k) => [k, "continuous" as const])), ...o });
 import { correlation, dot2, mean2, meanAndSampleSd, twoProd, twoSum } from "../src/transform/exact.ts";
 import type { Point } from "../src/types.ts";
 import { median, quantile } from "../src/transform/exact.ts";
@@ -338,19 +342,19 @@ describe("backtest: compounding, Sharpe and the constant-return regression", () 
   });
 
   test("periodStats Sharpe is the exact Sharpe of the pre-cost returns", () => {
-    const st = periodStats(sim.values, sim.startDate, sim.endDate, { returns: sim.returns });
+    const st = periodStats(sim.values, sim.startDate, sim.endDate, { returns: sim.returns, excess: sim.excess });
     expect(st.sharpe).toBe(exactSharpe(rets, 365));
     expect(st.final_value).toBe(sim.values.at(-1)!.value);
   });
 
-  test("a mixed portfolio with cash yield and rebalancing costs: Sharpe exact on its returns", () => {
+  test("a mixed portfolio with cash yield and rebalancing costs: Sharpe exact on its post-cost excess returns", () => {
     const tbill = history.TBILL3M!;
     const eth = history.ETH!;
     const sched = axis.map((_, i) => (i % 60 < 30 ? { spx: 0.5, eth: 0.3, cash: 0.2 } : { spx: 0.2, eth: 0.1, cash: 0.7 }));
     const m = simulatePortfolio(axis, sched, { spx: spxPoints, eth }, tbill);
     expect(m.trades.length).toBeGreaterThan(10);
-    const st = periodStats(m.values, m.startDate, m.endDate, { returns: m.returns, trades: m.trades });
-    expect(st.sharpe).toBe(exactSharpe(m.returns.map((p) => p.value), 365));
+    const st = periodStats(m.values, m.startDate, m.endDate, { returns: m.returns, excess: m.excess, trades: m.trades });
+    expect(st.sharpe).toBe(exactSharpe(m.excess.map((p) => p.value), 365));
   });
 
   test("regression: 3,000 bit-identical returns have exact variance 0, so Sharpe is 0 (was 3.99e14)", () => {
@@ -366,7 +370,7 @@ describe("backtest: compounding, Sharpe and the constant-return regression", () 
     expect(exactStd(r, 1)).toBe(0);
     expect(meanAndSampleSd(r).sd).toEqual([0, 0]);
     expect(exactSharpe(r)).toBe(0);
-    const st = periodStats(c.values, c.startDate, c.endDate, { returns: c.returns });
+    const st = periodStats(c.values, c.startDate, c.endDate, { returns: c.returns, excess: c.excess });
     expect(st.sharpe).toBe(0);
     // The old plain mean/variance made these returns look volatile.
     const m = plainMean(r);

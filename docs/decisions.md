@@ -6750,3 +6750,23 @@ Panel weights refit every 21 days on a fixed calendar anchored at 2018-01-01. A 
 **Why.** `prepareRegimeInputs` forward-filled each series, then transformed it: `SPX_TREND` covered about 36 and 143 trading days and counted each Friday close three times. Ranks and correlations leaned toward Friday values and pulled equity-versus-crypto correlations toward zero. A missing panel re-based the composite with no market cause.
 
 **Rejected.** One cadence rule for periodic series (issue 1673). A new methodology tag.
+
+## D94 — A backtest result is one a real strategy could have achieved (issue 1734)
+
+**Status:** Accepted for implementation 2026-11-24. `packages/analyst-sdk/src/analyze/backtest.ts`, `packages/analyst-sdk/src/analyze/regime-versions.ts` (`REGIME_ADOPTION_DATE`), `packages/analyst-sdk/src/analyze/weighting-comparison.ts`, `packages/analyst-sdk/src/analyze/regime-eq-comparison.ts`, `docs/technical/analytics-requirements.md` section 5.
+
+**Decision.**
+
+1. **Execution lag.** A target set at a day's close trades at the close of the next session at the earliest (`lagSessions`, default 1). The allocation path already lagged its as-of day, so `markowitzBacktest` simulates its schedules with `lagSessions` 0.
+2. **Market calendars.** A trade that changes an asset's weight waits for that asset's next open day (`calendars`; default `observed`: the dates its own series has a value). A mixed book waits for every leg it changes. The reference backtest declares ETH `continuous` and the S&P 500 `observed`.
+3. **Adoption date.** Every methodology version declares the day it was adopted (`REGIME_ADOPTION_DATE`: v3 2026-07-01, v4 2026-11-17). The loader (`adoptionDate`) throws `AdoptionDateError` for a version without one. `BACKTEST_IN_SAMPLE_END` is the current version's adoption date, no longer a fixed 2024-01-31.
+4. **Labelled samples.** Every backtest line and every line of both research comparisons reports an `in_sample` block (up to and including the adoption date) and an `out_of_sample` block (after it).
+5. **Sharpe.** Daily post-cost returns minus that day's cash return. An all-cash portfolio scores 0. The research comparisons use the same rule over their constant cash rate.
+6. **Cash basis.** DTB3 is a discount quote. Both simulators convert it to a bond-equivalent yield, 365 d / (360 - 91 d), before compounding (finding B5).
+7. **Cost per asset.** `costBps` accepts a map of asset id to basis points. A number keeps its meaning and 10 bps stays the default (finding B6).
+8. **Daily values.** `periodStats` refuses a value series whose median gap is more than one day (`SparseSeriesError`). Drawdown is measured on daily values (finding B7).
+9. **Tag.** `v4` is corrected in place and `v3` is unchanged: this is a reporting rule, so no methodology tag, no migration and no stored row changes. No frozen published report is restated. The research comparisons lag the label by one day but do not model closed markets: they remain research generators.
+
+**Why.** The audit found the backtest traded day i's label at day i's close and earned day i+1's return, traded the S&P 500 at Friday's close on a weekend change, mixed in-sample and out-of-sample years without saying so, and scored Sharpe on pre-cost returns with no risk-free subtraction.
+
+**Rejected.** A legacy switch that keeps same-close execution: the original numbers stay in the frozen reference code only. Restating published reports.

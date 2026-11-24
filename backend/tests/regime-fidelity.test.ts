@@ -75,6 +75,7 @@ import {
   sharedAnalysisBytes,
 } from "../../packages/analyst-sdk/tests/support/originals.ts";
 import { expectSameUpToRounding } from "../../packages/analyst-sdk/tests/support/numeric-diff.ts";
+import { shapeDiffs } from "../../packages/analyst-sdk/tests/support/shape-diff.ts";
 import { apply1559ToText, type DailyEvidence } from "../../packages/analyst-sdk/tests/support/issue-1559.ts";
 import {
   loadRawIndicatorHistory,
@@ -377,16 +378,22 @@ describe("issue 1421: backend report bytes equal the original captured bytes", (
       const storedReport = new TextDecoder().decode(report!.report_bytes);
       const evidence = JSON.parse(readOriginal(originalFile.daily(v))) as DailyEvidence;
       const original = (file: string) => apply1559ToText(readOriginal(file), evidence);
-      expectSameUpToRounding(storedRows, original(originalFile.backendRows(v)), `${v} stored regime_snapshots`);
-      expectSameUpToRounding(storedReport, original(originalFile.backendReport(v)), `${v} stored report`);
+      // Issue 1734 (D94): the backtest keeps the original's shape, not its numbers; everything else is compared up to rounding.
+      const noBacktest = (text: string) => JSON.stringify(JSON.parse(text), (k, x) => (k === "backtest" ? undefined : x));
+      expectSameUpToRounding(noBacktest(storedRows), noBacktest(original(originalFile.backendRows(v))), `${v} stored regime_snapshots`);
+      expectSameUpToRounding(noBacktest(storedReport), noBacktest(original(originalFile.backendReport(v))), `${v} stored report`);
 
       const rows = submitted[0]!.regimeSnapshots!;
       const last = rows[rows.length - 1]!;
       expect(last.date).toBe(inputs.asof);
-      expectSameUpToRounding(sharedAnalysisBytes({ correlations: last.correlations, backtest: last.backtest }), original(originalFile.sharedAnalysis(v)), `${v} shared artifact`);
+      const sharedGot = JSON.parse(sharedAnalysisBytes({ correlations: last.correlations, backtest: last.backtest })) as { correlations: unknown; backtest: unknown };
+      const sharedWant = JSON.parse(original(originalFile.sharedAnalysis(v))) as { correlations: unknown; backtest: unknown };
+      expectSameUpToRounding(JSON.stringify(sharedGot.correlations), JSON.stringify(sharedWant.correlations), `${v} shared correlations`);
+      expect(shapeDiffs(sharedGot.backtest, sharedWant.backtest), `${v} shared backtest shape`).toEqual([]);
       if (v === "zero-volatility") {
-        const sharpes = Object.values(last.backtest as BacktestPayload).flatMap((p) => Object.values(p).map((m) => m.sharpe));
-        expect(new Set(sharpes)).toEqual(new Set([0]));
+        // Flat prices, zero cash: only trading costs move the post-cost returns (issue 1734), so lines that never trade score 0.
+        const lines = Object.values(last.backtest as BacktestPayload).flatMap((p) => Object.values(p));
+        expect(new Set(lines.filter((m) => m.transitions === 0).map((m) => m.sharpe))).toEqual(new Set([0]));
       }
       if (v === "missing-label") {
         // Unlabelled days are not published as rows (buildSnapshotRows skips them).

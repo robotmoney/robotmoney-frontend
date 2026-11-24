@@ -32,6 +32,7 @@ import {
 import { smoothRegimes, bucketFn } from "./compute.ts";
 import { annualizedGrowth, Compounder, ddDiv, ddValue, dotDD, meanAndSampleSd, periodicRate, sharpeDD, sumDD, twoSum } from "../transform/exact.ts";
 import type { Point } from "../types.ts";
+import { splitSamples, type SampleBlock } from "./backtest.ts";
 
 export const CONSTANT_CASH_YR = 0.026;
 export const COST_PER_REBALANCE = 0.001;
@@ -74,6 +75,10 @@ interface BacktestResult {
   cagr: number;
   sharpe: number;
   max_drawdown: number;
+  // Labelled in-sample and out-of-sample statistics, split at the adoption date (issue 1734).
+  sample_split_date: string;
+  in_sample: SampleBlock;
+  out_of_sample: SampleBlock;
   equity_curve: Point[];
   phases: { name: string; cagr: number | null; max_drawdown: number | null }[];
 }
@@ -245,12 +250,14 @@ export function computeWeightingComparison(input: WeightingComparisonInput): Wei
     let lw: Record<string, number> | null = null;
     let pk = 1;
     let mdd = 0;
-    const rets: number[] = [];
+    const excess: Point[] = [];
     const curve: Point[] = [];
     const cashDaily = periodicRate(CONSTANT_CASH_YR, 365);
     for (let i = i0; i < dateAxis.length; i++) {
-      const w = spec.fixed || (regimes ? spec.weights[regimes[i] as string] : undefined);
+      // A label trades no earlier than the next session (issue 1734): day i holds day i-1's label.
+      const w = spec.fixed || (regimes && i > 0 ? spec.weights[regimes[i - 1] as string] : undefined);
       if (!w) continue;
+      let dayRet: number | null = null;
       if (lw) {
         // Daily return as one compensated dot product; equity compounds unrounded (D78).
         const wv: number[] = [w0(lw, "cash")];
@@ -268,9 +275,15 @@ export function computeWeightingComparison(input: WeightingComparisonInput): Wei
         }
         const pr = ddValue(dotDD(wv, rv));
         eq.grow(pr);
-        rets.push(pr);
+        dayRet = pr;
       }
-      if (lw && !sameW(lw, w)) eq.shrinkByProduct(turnover(lw, w), COST_PER_REBALANCE);
+      let tradeCost = 0;
+      if (lw && !sameW(lw, w)) {
+        const t = turnover(lw, w);
+        eq.shrinkByProduct(t, COST_PER_REBALANCE);
+        tradeCost = t * COST_PER_REBALANCE;
+      }
+      if (dayRet != null) excess.push({ date: dateAxis[i], value: (tradeCost === 0 ? dayRet : (1 + dayRet) * (1 - tradeCost) - 1) - cashDaily });
       lw = w;
       const eqv = eq.value;
       if (eqv > pk) pk = eqv;
@@ -279,14 +292,15 @@ export function computeWeightingComparison(input: WeightingComparisonInput): Wei
       curve.push({ date: dateAxis[i], value: eqv });
     }
     const yrs = (+new Date(curve[curve.length - 1].date) - +new Date(curve[0].date)) / (365.25 * 864e5);
-    const { mean, sd } = meanAndSampleSd(rets);
+    const { mean, sd } = meanAndSampleSd(excess.map((p) => p.value));
     const monthEnd = new Map<string, Point>();
     for (const p of curve) monthEnd.set(p.date.slice(0, 7), p);
     return {
       final_value: eq.value,
       cagr: annualizedGrowth(eq.dd, yrs),
-      sharpe: sd[0] > 0 ? sharpeDD(mean, sd, 365) : 0,
+      sharpe: excess.length > 0 && sd[0] > 0 ? sharpeDD(mean, sd, 365) : 0,
       max_drawdown: mdd,
+      ...splitSamples(curve, excess),
       equity_curve: [...monthEnd.values()],
       phases: PHASES.map((ph) => {
         const w = curve.filter((p) => p.date >= ph.start && p.date <= ph.end);

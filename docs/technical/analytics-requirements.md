@@ -191,19 +191,21 @@ The backend and SDK run one shared backtest calculation. Generalizing the API pr
 | `dateAxis` | The days to replay. |
 | `schedule` | Applicable target weights per date. |
 | `prices` | Supplied daily price levels per asset id. |
-| `cashRate` | Supplied annual cash yield in percent. |
-| `options.costBps` | Cost per unit of one-sided turnover. Default 10 basis points, matching existing reports. |
+| `cashRate` | Supplied 3-month T-bill quote in percent, on the DTB3 discount basis. Both simulators convert it to a bond-equivalent yield, 365 d / (360 - 91 d), before compounding it daily over 365 days (`discountToYield`, D94). |
+| `options.costBps` | Cost in basis points. A number is the cost per unit of one-sided turnover (default 10, matching existing reports). A map of asset id to basis points charges each risky asset its own rate on the notional of its leg of a trade; an asset with no entry pays 10, and cash trades free (D94). |
+| `options.lagSessions` | Axis days between the day a target is known and the day it trades, at that day's close. Default 1: a day's label trades no earlier than the next session. 0 is same-close execution. |
+| `options.calendars` | Open days per asset id: `continuous`, `weekdays` or `observed` (the dates the asset's own series has a value; the default). A trade that changes an asset's weight waits for the next day that asset's market is open, so no trade executes in a closed market. The reference backtest declares ETH `continuous` and the S&P 500 `observed` (`REFERENCE_CALENDARS`). |
 | `options.fill` | A declared fill policy (with its `reason`) per key of `prices`, and one under `cash` for `cashRate` (section 5.2). A series with no entry uses `DEFAULT_SIMULATOR_FILL`: `forward` with no age limit, which reproduces the former carry. At `null` every series must be declared, and a missing entry is refused naming the series. A key that names no series is refused. |
 
-The result includes the daily value series, trade count, cost evidence and the pre-cost daily returns needed by period statistics. Additional simulation evidence is exposed separately from the existing report payload. The established report fields and serialization are unchanged; the numbers of a payload published before D78 replay up to rounding.
+The result includes the daily value series, trade count, cost evidence, the pre-cost daily returns and the post-cost daily returns in excess of that day's cash return (`excess`) that period statistics need. Additional simulation evidence is exposed separately from the existing report payload. The established report fields and serialization are unchanged; the numbers of a payload published before D78 replay up to rounding.
 
-Weights set at today's close apply to later returns; changing today's target can change today's cost, but cannot change today's pre-cost return or earlier values. Computation reads no file and makes no HTTP request.
+A target set at a day's close trades at the close of the next session at the earliest (`lagSessions`, `calendars`), and its weights apply to later returns; changing a day's target cannot change that day's pre-cost return or earlier values. The weights of a schedule that is already dated by the day they take effect (the allocation path lags its as-of day) are simulated with `lagSessions` 0. Computation reads no file and makes no HTTP request.
 
 `simulateDrift(dateAxis, schedule, prices, cashRate, options)` is the drift-aware variant for client research. It takes the same inputs, checks and start date as `simulatePortfolio`. Holdings drift between rebalances: each weight becomes w (1 + r_k) / (1 + r_p) after a day's return, rounded once (D78).
 
 | Option | Meaning |
 | ------ | ------- |
-| `options.costBps` | Cost per unit of one-sided turnover. Default 10 basis points. |
+| `options.costBps`, `options.lagSessions`, `options.calendars` | As `simulatePortfolio`. |
 | `options.freq` | Calendar rebalance: `daily` (default), `weekly` (the first date of a new Monday-to-Sunday week), `monthly` (a new YYYY-MM), `quarterly` (a new January, April, July or October) or `never`, each judged against the previous axis date. |
 | `options.band` | Rebalance when any weight is more than this absolute distance from its target. Default: no band. |
 | `options.fill` | Fill policy per series, as `simulatePortfolio`. |
@@ -212,12 +214,14 @@ The book also rebalances when the target changes. A rebalance with turnover abov
 
 ### 5.4 Period statistics
 
-`periodStats(valueSeries, from, to, options)` uses the same statistics calculation as production. `options` supplies the simulator's original pre-cost daily returns and date-boundary evidence where required; there is no methodology selector. A net value series alone cannot reproduce existing Sharpe, because values include trading costs and the daily returns used for Sharpe do not.
+`periodStats(valueSeries, from, to, options)` uses the same statistics calculation as production. `options` supplies the simulator's pre-cost daily returns (`returns`), its post-cost excess-of-cash daily returns (`excess`) and date-boundary evidence where required; there is no methodology selector.
 
 - Total return and annualized growth use the established values, operation order and elapsed-time conventions. CAGR uses years of 365.25 days.
-- Volatility and Sharpe use the original pre-cost return observations and sample standard deviation. Sharpe is annualized over 365 days with no risk-free subtraction and returns 0 when standard deviation is zero.
+- Volatility and Sharpe use the post-cost daily returns minus the same day's cash return, and the sample standard deviation. Sharpe is annualized over 365 days and returns 0 when standard deviation is zero, so an all-cash portfolio scores 0 (D94).
 - Maximum drawdown uses the established net values and peak calculation.
-- In-sample and out-of-sample statistics preserve the existing boundary conventions. Out-of-sample growth uses the first value after the split date and elapsed time from the split date.
+- In-sample and out-of-sample growth (`cagr_in_sample`, `cagr_out_sample`) keep the existing boundary conventions. Out-of-sample growth uses the first value after the split date and elapsed time from the split date.
+- Every report also carries `sample_split_date` and two labelled blocks, `in_sample` (up to and including the split date) and `out_of_sample` (after it), each with `start_date`, `end_date`, `n_days`, `cagr`, `sharpe`, `max_drawdown` and `transitions`. The split date defaults to the adoption date of the current methodology version (`REGIME_ADOPTION_DATE`, `BACKTEST_IN_SAMPLE_END`): the version was tuned on the data before it. A version with no adoption date is refused by name (`AdoptionDateError`). The weighting and regime-equal comparisons carry the same blocks on every strategy line.
+- Maximum drawdown is measured on daily values. A value series whose median gap between consecutive values is more than one day (weekly, monthly) is refused with `SparseSeriesError`; a hole where no label applied is still daily.
 - Empty, short and non-finite cases preserve existing zero/null behavior; the refactor does not standardize them to new defaults.
 - The equity curve is the window's first value (1 at a simulation's start), then each month's last value.
 
@@ -231,7 +235,7 @@ The reference portfolios are data: `eth`, `sp500` and `mixed`, with their existi
 
 `referenceStrategies(labels)` returns the reference grid's label series (composite, one per panel, `macro_inverted` when a macro panel exists, conservative and aggressive) from `{ regime, panelRegimes, panels? }`. `computeBacktest` takes the same label shape, so a client with published label series needs no copy of the grid. `REFERENCE_FILL_POLICIES` (`spx`, `eth`, `tbill3m`, each `forward` with no age limit) is the one place the reference backtest's fill policies are declared. An analyst changes one by editing its row, in a reviewed diff that also regenerates the golden.
 
-Running those schedules through `simulatePortfolio` and `periodStats`, each empty before the portfolio's start date (section 5.2), gives the same daily values, statistics and serialized reference report as `computeBacktest`.
+Running those schedules through `simulatePortfolio` (with `REFERENCE_CALENDARS`) and `periodStats`, each empty before the portfolio's start date (section 5.2), gives the same daily values, statistics and serialized reference report as `computeBacktest`.
 
 ### 5.6 Consumers
 
@@ -275,7 +279,9 @@ Package paths are relative to `packages/analyst-sdk/`.
 | Changing a date's weights does not change earlier values or that date's pre-cost return; its close-of-day cost follows the established rules. | `tests/backtest.test.ts` |
 | A date with no applicable weights preserves the established skip behavior and daily return observations. | `tests/backtest.test.ts` |
 | Reference baselines retain their existing target-weight behavior, keys and start dates without introducing holding drift. | `tests/backtest.test.ts` |
-| `periodStats` with original pre-cost returns and boundary evidence reproduces existing full-range and split statistics, including Sharpe on a path with costs. | `tests/backtest.test.ts` |
+| `periodStats` computes Sharpe from post-cost daily returns minus that day's cash return (an all-cash portfolio scores 0), reports labelled in-sample and out-of-sample blocks, and refuses a series sparser than daily. | `tests/backtest.test.ts` |
+| A target trades no earlier than the next session, a weekend label change defers the S&P 500 trade to the next open session, the cash leg uses the bond-equivalent yield, and `costBps` takes a per-asset map. | `tests/backtest.test.ts` |
+| Every methodology version declares an adoption date and the loader refuses one without. | `tests/regime-versions.test.ts` |
 | A label with no weight row is refused by default and skipped under `unknownLabel: "skip"`; a null label is a skipped day under both. | `tests/backtest.test.ts` |
 | Every simulator series has a declared fill policy: a covered gap runs, an uncovered gap on a held day is refused naming the series, the date and the policy, the cash rate earns zero before its first observation, and a missing or unknown `fill` entry is refused. The shipped default reproduces every existing call. | `tests/backtest.test.ts`, `tests/backtest-drift.test.ts` |
 | The reference backtest over `{ regime, panelRegimes, panels }` equals it over a full result; `REFERENCE_FILL_POLICIES` reproduce the golden; a changed reference policy ends each portfolio on its latest complete day and equals the original cut there. | `tests/backtest.test.ts` |

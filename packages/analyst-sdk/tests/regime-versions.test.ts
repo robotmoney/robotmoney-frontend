@@ -52,3 +52,28 @@ describe("REGIME_WEIGHT_REFRESH (issue 1739)", () => {
     expect(refreshDateOn("2020-03-09", r)).toBe("2020-03-09");
   });
 });
+
+import { AdoptionDateError, REGIME_ADOPTION_DATE, adoptionDate } from "../src/analyze/regime-versions.ts";
+
+describe("adoption date per version (issue 1734, D94)", () => {
+  test("every entry of REGIME_VERSIONS declares an ISO adoption date, in order", () => {
+    let prev = "";
+    for (const v of REGIME_VERSIONS) {
+      const d = adoptionDate(v);
+      expect(d, v).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+      expect(d > prev, `${v} adopted after the version before it`).toBe(true);
+      prev = d;
+    }
+    expect(Object.keys(REGIME_ADOPTION_DATE).sort()).toEqual([...REGIME_VERSIONS].sort());
+  });
+
+  test("the loader throws a named error for a version without one", () => {
+    expect(() => adoptionDate("v99")).toThrow(AdoptionDateError);
+    try {
+      adoptionDate("v99");
+    } catch (e) {
+      expect((e as Error).name).toBe("AdoptionDateError");
+      expect((e as Error).message).toContain("v99");
+    }
+  });
+});
