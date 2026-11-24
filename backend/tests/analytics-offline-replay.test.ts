@@ -172,7 +172,7 @@ const SDK_TESTS = join(import.meta.dir, "..", "..", "packages", "analyst-sdk", "
 // and by issue 1708 (D89, factor joins the 1/n composite; was c661b2e44fac9f1d1800160546a1b3a3f20e14efaef2b3321b6e8519f7e121ee).
 // and by issue 1742 (forward correlation cells gain n_eff; was fd512236f0b9baf9eafa35fc0b23ce88ad6030ec6ef877b0652ab126fd50de6f).
 // and by issue 1733 (knowledge time and raw-close equity ratios; was 212c205675ae6046cad5406baad3429910189b0c4a8a918de8e53b24aa392eae).
-const GOLDEN_SHA256 = "7b138ad34fb42eb01fc438b711a3c3c6bb840457ecd14d903e1a07f0b7c038c2";
+const GOLDEN_SHA256 = "20305498dabbef1a99fa6a39681dddd9836244ab1ffb54e8b899f8a6e461858f";
 
 test(
   "a frozen regime vintage reloads offline with unchanged membership and rebuilds the golden report bytes through the D74 mapping",
@@ -334,7 +334,7 @@ test(
     // Each ratio under its declared parameters (issue 1733: the equity ratios from their raw legs).
     const input = { ...committed.registry, ...growth };
     const prepared = prepareRegimeInputs(ratiosFromLegs(input, resolveInputHistory(input)), { start: "2018-01-01", asof: COMMITTED_ASOF });
-    const r2 = computeRegime(prepared.transformed, prepared.dateAxis, PANELS);
+    const r2 = computeRegime(prepared.transformed, prepared.dateAxis, PANELS, undefined, undefined, undefined, undefined, undefined, undefined, prepared.carried);
     expect(latest.composite).toBe(r2.composite[r2.composite.length - 1]!);
     // Issue 1708 (D89): the composite is the 1/n mean of macro, onchain and factor.
     expect(latest.panels).toEqual(["macro", "onchain", "factor"]);

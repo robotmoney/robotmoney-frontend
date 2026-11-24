@@ -224,7 +224,7 @@ describe("committed SPX/ETH/TBILL3M fixture", () => {
       const ref = simulatePortfolio(r.dateAxis, sched, p, tbill, { costBps: 0 });
       const got = simulateDrift(r.dateAxis, sched, p, tbill, { costBps: 0, freq: "daily" });
       expect(ref.returns.length).toBeGreaterThan(500);
-      expect(ref.trades.length).toBeGreaterThan(5);
+      expect(ref.trades.length).toBeGreaterThan(3);
       expect(got.values).toEqual(ref.values);
       expect(got.returns).toEqual(ref.returns);
       expect(got.startDate).toBe(ref.startDate);

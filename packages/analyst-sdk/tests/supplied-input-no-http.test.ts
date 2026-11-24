@@ -103,7 +103,7 @@ describe("downstream paths make zero acquisition attempts", () => {
     expect(attempts).toEqual([]);
   });
 
-  test("missing factor panel: the factor figures are null, the composite is the mean of the panels left", () => {
+  test("missing factor panel: the factor figures are null, and so are the composite and its label (issue 1741)", () => {
     const ids = panelIds("factor");
     const base = buildReport(runRegime(full, { panels: ["macro", "onchain"] }));
     const run = runRegime(without((id) => ids.has(id)), { factor: true });
@@ -112,8 +112,11 @@ describe("downstream paths make zero acquisition attempts", () => {
     const serialised = JSON.parse(JSON.stringify(report)) as { factor: { index: number | null; percentile: number | null } };
     expect(serialised.factor.index).toBeNull();
     expect(serialised.factor.percentile).toBeNull();
-    expect(report.regime.composite).toEqual(base.regime.composite);
-    expect(report.regime.label).toEqual(base.regime.label);
+    // A missing panel is a missing composite, never a mean of the panels left (D93).
+    const regime = JSON.parse(JSON.stringify(report.regime)) as { composite: number | null; label: string | null };
+    expect(regime.composite).toBeNull();
+    expect(regime.label).toBeNull();
+    expect(base.regime.composite).not.toBeNull();
     expect(attempts).toEqual([]);
   });
 

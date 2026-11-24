@@ -93,8 +93,21 @@ function generalized(dateAxis: string[], result: RegimeComputeResult, extras: Ba
   return { ref, out };
 }
 
+// Issue 1741: a missing panel gives a NaN composite, so the composite can label
+// later than a panel. The frozen original starts each strategy on its own first
+// label and apply1559 requires one start per market, so the original is handed
+// labels cut to the market's latest first label: the day the shared path starts
+// every strategy on (issue 1559).
+function labelsFromMarketStart(result: RegimeComputeResult): RegimeComputeResult {
+  const series = [result.regime, ...result.panels.map((p) => result.panelRegimes[p]!)];
+  const start = Math.max(...series.map((l) => l.findIndex((b) => b != null)));
+  const cut = (l: (string | null)[]) => l.map((b, i) => (i < start ? null : b));
+  const panelRegimes = Object.fromEntries(Object.entries(result.panelRegimes).map(([p, l]) => [p, cut(l)]));
+  return { ...result, regime: cut(result.regime), panelRegimes } as RegimeComputeResult;
+}
+
 function threeWay(dateAxis: string[], result: RegimeComputeResult, extras: BacktestExtras) {
-  const original = JSON.stringify(apply1559(originalBacktest(dateAxis, result, extras)));
+  const original = JSON.stringify(apply1559(originalBacktest(dateAxis, labelsFromMarketStart(result), extras)));
   const shared = JSON.stringify(computeBacktest(dateAxis, result, extras));
   expectSameUpToRounding(shared, original, "shared vs frozen original (issue 1559 rule)");
   // The generalized path runs the same arithmetic as the shared one: byte for byte.
@@ -433,7 +446,7 @@ describe("reference backtest: label shape, referenceStrategies and fill policies
       const axis = run.dateAxis.slice(0, cut);
       const panelRegimes = Object.fromEntries(Object.entries(run.result.panelRegimes).map(([p, l]) => [p, l.slice(0, cut)]));
       const labels = { ...run.result, regime: run.result.regime.slice(0, cut), panelRegimes } as RegimeComputeResult;
-      const original = apply1559(originalBacktest(axis, labels, extras))[market];
+      const original = apply1559(originalBacktest(axis, labelsFromMarketStart(labels), extras))[market];
       expectSameUpToRounding(JSON.stringify(changed[market]), JSON.stringify(original), `${market} cut at ${end}`);
       // Non-vacuity: the changed policies change the market's lines.
       expect(JSON.stringify(changed[market])).not.toBe(JSON.stringify(shipped[market]));

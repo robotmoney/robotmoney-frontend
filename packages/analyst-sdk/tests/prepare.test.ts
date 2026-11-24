@@ -9,7 +9,7 @@ import type { FillPolicy, Indicator } from "../src/analyze/indicators.ts";
 const ZERO: FillPolicy = { kind: "zero" };
 const FORWARD: FillPolicy = { kind: "forward", maxAgeDays: 120 };
 const mk = (id: string, transform: string, fill: FillPolicy = FORWARD): Indicator => ({
-  id, name: id, panel: "macro", source: "test", sign: 1, transform, unit: "x", fill, fillReason: "test", publication: { kind: "same-day" },
+  id, name: id, panel: "macro", source: "test", sign: 1, transform, unit: "x", fill, fillReason: "test", calendar: "daily", publication: { kind: "same-day" },
 });
 const TRANSFORMS = ["level", "change30", "change90", "sma4", "sma7", "trend_50_200", "rolling_sum_7"];
 const START = "2024-01-01";

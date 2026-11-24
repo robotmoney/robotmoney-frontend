@@ -198,10 +198,10 @@ export function runRegime(input: RawIndicatorHistory, opts: RunOptions = {}): Ru
   }
   // The fill policy already masked `transformed`; passing `ages` keeps the
   // global-cap mask too, which leaves a policy-masked series unchanged.
-  const { dateAxis, transformed, ages } = prepareRegimeInputs(raw, { start, asof, indicators, version });
-  const result = computeRegime(transformed, dateAxis, [...panels], ages, undefined, version, undefined, indicators);
+  const { dateAxis, transformed, ages, carried } = prepareRegimeInputs(raw, { start, asof, indicators, version });
+  const result = computeRegime(transformed, dateAxis, [...panels], ages, undefined, version, undefined, indicators, undefined, carried);
   const out: RunResult = { kind: "complete", version, dateAxis, result };
-  if (opts.factor) out.factor = computeRegime(transformed, dateAxis, ALL_PANELS, ages, undefined, version, undefined, indicators);
+  if (opts.factor) out.factor = computeRegime(transformed, dateAxis, ALL_PANELS, ages, undefined, version, undefined, indicators, undefined, carried);
   const spx: Point[] | undefined = raw[EXTRA_IDS.spx];
   const eth: Point[] | undefined = raw[EXTRA_IDS.eth];
   const tbill3m: Point[] | undefined = raw[EXTRA_IDS.tbill3m];

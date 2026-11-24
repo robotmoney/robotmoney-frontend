@@ -5,11 +5,11 @@
 // Semantics: docs/technical/regime-engine.md section 8.1; decision D59 in docs/decisions.md.
 // Guarded by backend/tests/regime-sdk-equivalence.test.ts.
 import type { RawIndicatorHistory } from "./types.ts";
-import { INDICATORS, fillMaxAgeDays, fillPolicyOf, type Indicator } from "./analyze/indicators.ts";
+import { INDICATORS, calendarOf, fillMaxAgeDays, fillPolicyOf, type Indicator } from "./analyze/indicators.ts";
 import { alignDailyForwardFill, alignDailyZeroFill, buildDateAxis, forwardFillAge } from "./transform/math.ts";
 import { applyTransform } from "./transform/transforms.ts";
 import { knowledgeTimeSeries, publicationRuleOf } from "./transform/knowledge-time.ts";
-import { CURRENT_REGIME_VERSION, REGIME_KNOWLEDGE_TIME, type RegimeVersion } from "./analyze/regime-versions.ts";
+import { CURRENT_REGIME_VERSION, REGIME_KNOWLEDGE_TIME, REGIME_OBSERVATION_WINDOWS, type RegimeVersion } from "./analyze/regime-versions.ts";
 
 export interface PreparedRegimeInputs {
   dateAxis: string[];
@@ -19,6 +19,11 @@ export interface PreparedRegimeInputs {
   // Days since the last real observation, per indicator whose policy is NOT
   // zero. Zero-fill indicators are left out: a gap there is a real 0.
   ages: Record<string, number[]>;
+  // True on a day whose value is carried over from an earlier real observation
+  // (forwardFillAge above 0), per indicator (issue 1741). All false for a
+  // zero-fill indicator. computeRegime counts only the real rows of an
+  // `exchange` series under a version that counts observation days.
+  carried: Record<string, boolean[]>;
   // Last row of each input series known on or before asof (null when none),
   // dated by its period date (issue 1733, finding P1).
   lastRaw: Record<string, { date: string; value: number } | null>;
@@ -69,14 +74,25 @@ export function knowledgeTimeHistory(
 // masking computeRegime once applied with the global cap, moved per indicator.
 export function prepareRegimeInputs(
   raw: RawIndicatorHistory,
-  opts: { start: string; asof: string; indicators?: readonly Indicator[]; version?: RegimeVersion },
+  opts: {
+    start: string;
+    asof: string;
+    indicators?: readonly Indicator[];
+    version?: RegimeVersion;
+    // Override the version's observation-day rule (issue 1741). The research
+    // comparisons pass false to keep their published, forward-filled windows.
+    observationDays?: boolean;
+  },
 ): PreparedRegimeInputs {
   const indicators = opts.indicators ?? INDICATORS;
   const policies = indicators.map((ind) => fillPolicyOf(ind));
+  const calendars = indicators.map((ind) => calendarOf(ind));
+  const observationDays = opts.observationDays ?? REGIME_OBSERVATION_WINDOWS[opts.version ?? CURRENT_REGIME_VERSION];
   const known = knowledgeTimeHistory(raw, { asof: opts.asof, indicators, version: opts.version });
   const dateAxis = buildDateAxis(opts.start, opts.asof);
   const transformed: Record<string, number[]> = {};
   const ages: Record<string, number[]> = {};
+  const carried: Record<string, boolean[]> = {};
   const lastRaw: PreparedRegimeInputs["lastRaw"] = {};
   indicators.forEach((ind, k) => {
     const policy = policies[k]!;
@@ -85,16 +101,37 @@ export function prepareRegimeInputs(
     lastRaw[ind.id] = last ? { date: last.period, value: last.value } : null;
     if (policy.kind === "zero") {
       transformed[ind.id] = applyTransform(ind.transform, alignDailyZeroFill(s, dateAxis));
+      carried[ind.id] = dateAxis.map(() => false);
       return;
     }
     const age = forwardFillAge(s, dateAxis);
     ages[ind.id] = age;
     const maxAge = fillMaxAgeDays(policy);
-    transformed[ind.id] = applyTransform(ind.transform, alignDailyForwardFill(s, dateAxis)).map((v, i) =>
-      age[i]! > maxAge ? NaN : v,
-    );
+    carried[ind.id] = age.map((a) => a > 0);
+    // Observation days (issue 1741): an exchange series is transformed over its
+    // own real observations, then the result is carried onto the axis.
+    const filled =
+      observationDays && calendars[k] === "exchange"
+        ? alignDailyForwardFill(transformOwnObservations(ind.transform, s, dateAxis), dateAxis)
+        : applyTransform(ind.transform, alignDailyForwardFill(s, dateAxis));
+    transformed[ind.id] = filled.map((v, i) => (age[i]! > maxAge ? NaN : v));
   });
-  return { dateAxis, transformed, ages, lastRaw };
+  return { dateAxis, transformed, ages, carried, lastRaw };
+}
+
+// The transform of a series over its own observation days: one value per real
+// row on the axis, in date order, each row counted once (issue 1741).
+function transformOwnObservations(
+  transform: string,
+  series: { date: string; value: number }[],
+  dateAxis: string[],
+): { date: string; value: number }[] {
+  const onAxis = new Set(dateAxis);
+  const byDate = new Map<string, number>();
+  for (const p of series) if (onAxis.has(p.date)) byDate.set(p.date, p.value);
+  const dates = [...byDate.keys()].sort();
+  const out = applyTransform(transform, dates.map((d) => byDate.get(d)!));
+  return dates.map((date, i) => ({ date, value: out[i]! }));
 }
 
 // ── Day completeness (issue 1655) ────────────────────────────────────────────

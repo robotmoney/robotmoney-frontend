@@ -88,6 +88,22 @@ export const REGIME_WEIGHT_REFRESH: Readonly<Record<RegimeVersion, WeightRefresh
  */
 export const REGIME_KNOWLEDGE_TIME: Readonly<Record<RegimeVersion, boolean>> = Object.freeze({ v3: false, v4: true });
 
+/**
+ * Whether a version counts observation days (issue 1741, decision D93): an
+ * `exchange` series is transformed, ranked and correlated over its own real
+ * observations, each counted once, and the result is placed on the calendar
+ * axis. v3 keeps the forward-filled rows in every window.
+ */
+export const REGIME_OBSERVATION_WINDOWS: Readonly<Record<RegimeVersion, boolean>> = Object.freeze({ v3: false, v4: true });
+
+/**
+ * The composite rule when an included panel has no index on a day (issue 1741):
+ * `rebase` averages the panels that are finite (v3), `nan` leaves the composite
+ * NaN and the label null (v4).
+ */
+export type MissingPanelRule = "rebase" | "nan";
+export const REGIME_MISSING_PANEL: Readonly<Record<RegimeVersion, MissingPanelRule>> = Object.freeze({ v3: "rebase", v4: "nan" });
+
 const MS_PER_DAY = 86_400_000;
 const dayNumber = (day: string): number => Math.floor(Date.parse(`${day}T00:00:00Z`) / MS_PER_DAY);
 

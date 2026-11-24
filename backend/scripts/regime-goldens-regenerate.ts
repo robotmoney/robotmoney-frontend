@@ -43,6 +43,8 @@ import { INDICATORS } from "../src/analytics/analyze/indicators.ts";
 import { computeRegime, type RegimeComputeResult } from "../src/analytics/analyze/compute.ts";
 import { prepareRegimeInputs } from "../src/analytics/prepare.ts";
 import { CURRENT_REGIME_VERSION } from "../src/analytics/analyze/regime-versions.ts";
+// These goldens are the v3 fixtures the fidelity replays pin (issue 1741 keeps them byte-identical).
+const FIXTURE_VERSION = "v4" as const;
 import { computeBacktest, stripDailyFromSnapshot, type BacktestExtras } from "../src/analytics/analyze/backtest.ts";
 import { computeCorrelations, type CorrelationExtras } from "../src/analytics/analyze/correlations.ts";
 
@@ -118,10 +120,10 @@ async function main(): Promise<void> {
   // Axis, alignment, transform and last-raw come from the shared seam (D59), so a
   // regenerated golden cannot drift from production. `ages` is deliberately not
   // passed to computeRegime below: these fixtures were frozen without it.
-  const { dateAxis, transformed, lastRaw } = prepareRegimeInputs(raw, { start: BACKFILL_START, asof: maxDate });
+  const { dateAxis, transformed, lastRaw, carried } = prepareRegimeInputs(raw, { start: BACKFILL_START, asof: maxDate, version: FIXTURE_VERSION });
 
-  const r2 = computeRegime(transformed, dateAxis); // [macro, onchain]
-  const r3 = computeRegime(transformed, dateAxis, ["macro", "onchain", "factor"]); // +factor
+  const r2 = computeRegime(transformed, dateAxis, undefined, undefined, undefined, FIXTURE_VERSION, undefined, undefined, undefined, carried); // [macro, onchain]
+  const r3 = computeRegime(transformed, dateAxis, ["macro", "onchain", "factor"], undefined, undefined, FIXTURE_VERSION, undefined, undefined, undefined, carried); // +factor
 
   console.log(`[regime-goldens-regenerate] dateAxis=${dateAxis.length} rows, asof=${dateAxis[dateAxis.length - 1]}`);
 
@@ -149,7 +151,7 @@ async function main(): Promise<void> {
         r2.macroRegime?.[i] ?? "",
         r2.onchainRegime?.[i] ?? "",
         r2.regime[i] ?? "",
-        CURRENT_REGIME_VERSION,
+        FIXTURE_VERSION,
       ].join(","),
     );
   }

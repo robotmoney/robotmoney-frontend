@@ -110,6 +110,14 @@ production use:
 registry indicator currently uses them — dead-but-faithfully-ported code, not
 a gap.
 
+**Observation days (issue 1741, D93).** Every indicator declares a `calendar`:
+`daily` (24/7), `exchange` (business or trading days) or `periodic` (weekly or
+monthly release). Under `v4` an `exchange` series is transformed over its own
+real observations only, then carried onto the daily axis within its fill
+policy, so `SPX_TREND` is SMA50 / SMA200 of 50 and 200 trading days and a
+closed day repeats the prior trading day. `daily` and `periodic` series, and
+`v3`, transform the forward-filled series as before.
+
 **Why "level-only" is the default, and what the two exceptions buy.** See §4.
 
 ## 4. Percentile, sign alignment, and weights
@@ -174,10 +182,11 @@ a published number ships with a new methodology version.
 - **Panel index** — the weighted mean of that panel's sign-aligned percentiles
   on each day (`weightedMeanOnDay`, `analyze/compute.ts:247`), using the
   weights from step 3 above.
-- **Composite** — the arithmetic mean of whichever panel indices are finite
-  that day (`computeRegime`, `analyze/compute.ts:117-124`): the naive 1/n
-  mean over the included panels (`PANELS`, from `PANEL_MEMBERSHIP`), where n
-  counts the included panels finite that day. Today that is macro, onchain and
+- **Composite** — the naive 1/n mean over the included panels (`PANELS`, from
+  `PANEL_MEMBERSHIP`; `computeRegime` in `analyze/compute.ts`). Under `v4` it is
+  NaN, and its label null, on a day any included panel has no index (issue
+  1741, D93, which amends D89 item 2). `v3` averages the panels finite that
+  day. Today that is macro, onchain and
   factor, one third each (D89). `analytics/index.ts` calls `computeRegime`
   twice: `r2` over `PANELS` (the composite) and `r3` over `ALL_PANELS` (the
   index of every panel, included or not). Before issue 1708 the composite was
@@ -260,6 +269,16 @@ percentile would carry little or no signal:
   these two indicators exist to answer; `DEFI_TVL`/`STABLES` (the plain
   levels) stay in the registry alongside them because position and flow are
   different questions that both matter.
+
+**Observation days within the forward-fill (issue 1741, D93).** The daily axis
+stays, but under `v4` an `exchange` series no longer counts its carried rows:
+its transform, its rank window and its weight fit use each real observation
+once, and the rank of a closed day is that of the last real observation. The
+30 and 60 observation floors count real observations. A `periodic` series
+keeps counting carried rows, because a weekly or monthly release is repeated
+an equal number of times and has no Friday-style tilt. Skipping them would
+leave `SHILLER_CAPE` under the 60-observation floor and `ICSA` (dated
+Saturdays) sharing no real day with any other series.
 
 **Why daily forward-fill across mismatched publication calendars, rather
 than ranking each indicator only on the days its own source actually

@@ -358,7 +358,8 @@ import { INDICATORS, prepareRegimeInputs, computeRegime, runRegime } from "./src
 
 const trial = INDICATORS.map((i) => (i.id === "VIX" ? { ...i, fill: { kind: "none" as const } } : i));
 const prepared = prepareRegimeInputs(raw, { start: "2018-01-01", asof: "2026-08-14", indicators: trial });
-const composite = computeRegime(prepared.transformed, prepared.dateAxis).composite;
+// `carried` marks the forward-filled rows; computeRegime counts only the real rows of an exchange series (D93).
+const composite = computeRegime(prepared.transformed, prepared.dateAxis, undefined, undefined, undefined, undefined, undefined, trial, undefined, prepared.carried).composite;
 
 const strict = runRegime(raw, { dayRule: "require-complete" }); // the latest complete day
 ```

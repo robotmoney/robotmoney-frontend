@@ -10,7 +10,8 @@
 //   3. Point-in-time inverse-correlation weights per panel (weight lookback
 //      ending that day; refit on the fixed refresh calendar of the version, REGIME_WEIGHT_REFRESH)
 //   4. Panel index = weighted mean of sign-aligned percentile-ranks
-//   5. Composite = arithmetic mean of all included panel indices
+//   5. Composite = arithmetic mean of all included panel indices (v4: NaN on a
+//      day any included panel has no index; v3 averages the panels that have one)
 //   6. Bucket the composite → risk-off / neutral / risk-on, with 5-day
 //      confirmation OR 2σ fast-track smoothing. Each panel label is bucketed
 //      the same way from its panel index. The rolling percentile of the
@@ -33,6 +34,7 @@ import {
   INDICATORS,
   PANELS,
   COMPOSITE_BUCKETS,
+  calendarOf,
   type Indicator,
   type Panel,
 } from "./indicators.ts";
@@ -44,6 +46,8 @@ import {
 import {
   CURRENT_REGIME_VERSION,
   REGIME_LOOKBACK,
+  REGIME_MISSING_PANEL,
+  REGIME_OBSERVATION_WINDOWS,
   REGIME_WEIGHT_REFRESH,
   isRefreshDate,
   refreshDateOn,
@@ -121,11 +125,19 @@ export function computeRegime(
   indicators: readonly Indicator[] = INDICATORS,
   // Opt-in: list every weight fit of the run in `weightFits` (tests, research).
   opts: { recordWeightFits?: boolean } = {},
+  // Which rows are carried over from an earlier real observation, per indicator
+  // (prepareRegimeInputs `carried`, issue 1741). Optional: without it every row
+  // counts. Used only under a version that counts observation days, and only
+  // for an `exchange` indicator.
+  carried?: Record<string, boolean[]>,
 ): RegimeComputeResult {
   if (!isRegimeVersion(version)) throw new RangeError(`unknown regime version ${JSON.stringify(version)}`);
   const rankWindow = lookbackDays(lookback, "rank");
   const weightWindow = lookbackDays(lookback, "weight");
   const percentileWindow = lookbackDays(lookback, "percentile");
+  const observationDays = REGIME_OBSERVATION_WINDOWS[version];
+  const maskOf = (ind: Indicator): boolean[] | undefined =>
+    observationDays && calendarOf(ind) === "exchange" ? carried?.[ind.id] : undefined;
   const ranks: Record<string, number[]> = {};
   const signed: Record<string, number[]> = {};
   for (const ind of indicators) {
@@ -135,7 +147,7 @@ export function computeRegime(
     const xs = age
       ? raw.map((v, i) => (Number.isFinite(age[i]) && age[i] > maxForwardFillDays ? NaN : v))
       : raw;
-    const r = rollingPercentileRank(xs, rankWindow);
+    const r = rollingPercentileRank(xs, rankWindow, maskOf(ind));
     ranks[ind.id] = r;
     signed[ind.id] = r.map((v) => (Number.isFinite(v) ? (ind.sign >= 0 ? v : 1 - v) : NaN));
   }
@@ -161,7 +173,12 @@ export function computeRegime(
       for (const ind of indsByPanel[p]) {
         window[ind.id] = signed[ind.id].slice(start, i + 1);
       }
-      curWeights[p] = inverseCorrelationWeights(window);
+      const masks: Record<string, boolean[] | undefined> = {};
+      for (const ind of indsByPanel[p]) {
+        const m = maskOf(ind);
+        masks[ind.id] = m && m.slice(start, i + 1);
+      }
+      curWeights[p] = inverseCorrelationWeights(window, undefined, undefined, masks);
     }
     weightFitDate = fitDate;
     if (opts.recordWeightFits) {
@@ -188,13 +205,15 @@ export function computeRegime(
   const weightsByPanel = curWeights;
 
   const composite = new Array(dateAxis.length).fill(NaN);
+  const nanOnMissingPanel = REGIME_MISSING_PANEL[version] === "nan";
   for (let i = 0; i < dateAxis.length; i++) {
     const vs: number[] = [];
     for (const p of panels) {
       const v = panelIndices[p][i];
       if (Number.isFinite(v)) vs.push(v);
     }
-    composite[i] = vs.length > 0 ? ddValue(ddDivD(sumDD(vs), vs.length)) : NaN;
+    // Issue 1741: a missing panel is a missing composite, never a re-based mean.
+    composite[i] = vs.length > 0 && !(nanOnMissingPanel && vs.length < panels.length) ? ddValue(ddDivD(sumDD(vs), vs.length)) : NaN;
   }
 
   const compRank = rollingPercentileRank(composite, percentileWindow);

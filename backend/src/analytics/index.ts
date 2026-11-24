@@ -499,13 +499,13 @@ export async function runAnalytics(
     // policy is not zero; a day older than its policy allows is already NaN in
     // `transformed` (issue 1655), and computeRegime's global-cap mask over the
     // same ages leaves it unchanged. Built by the shared SDK seam.
-    const { dateAxis, transformed, lastRaw, ages } = prepareRegimeInputs(registry, { start: BACKFILL_START, asof: regimeAsof, version: regimeVersion });
+    const { dateAxis, transformed, lastRaw, ages, carried } = prepareRegimeInputs(registry, { start: BACKFILL_START, asof: regimeAsof, version: regimeVersion });
     if (regimeAsof !== asof) extras = { spx: cutAtAsof(extras.spx, regimeAsof), eth: cutAtAsof(extras.eth, regimeAsof), tbill3m: cutAtAsof(extras.tbill3m, regimeAsof) };
     collector.stage("transform", "ok", `built ${dateAxis.length}-day date axis and aligned/transformed ${INDICATORS.length} indicator(s)`, t0);
 
     t0 = new Date();
-    const r2 = computeRegime(transformed, dateAxis, opts.panels ?? PANELS, ages, undefined, regimeVersion); // the included panels (the composite)
-    const r3 = computeRegime(transformed, dateAxis, ALL_PANELS, ages, undefined, regimeVersion); // every panel, included or not
+    const r2 = computeRegime(transformed, dateAxis, opts.panels ?? PANELS, ages, undefined, regimeVersion, undefined, undefined, undefined, carried); // the included panels (the composite)
+    const r3 = computeRegime(transformed, dateAxis, ALL_PANELS, ages, undefined, regimeVersion, undefined, undefined, undefined, carried); // every panel, included or not
 
     // Predictive correlations + regime backtest — computed from the SAME 2-panel
     // composite the original main snapshot uses, over the chart-overlay extras
