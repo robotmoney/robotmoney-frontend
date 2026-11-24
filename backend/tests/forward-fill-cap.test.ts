@@ -295,7 +295,12 @@ test(
       date: addDays(asof, k - 1200),
       value: 18 + 4 * Math.sin(k / 6),
     }));
-    await saveRawIndicatorHistory({ [STALE_ID]: staleFloor, [HEALTHY_ID]: healthyFloor }, fixtureDb);
+    // A missing panel is a missing composite (issue 1741), so each other panel
+    // gets one healthy indicator as well.
+    await saveRawIndicatorHistory(
+      { [STALE_ID]: staleFloor, [HEALTHY_ID]: healthyFloor, BTC_ACTIVE: healthyFloor, SPX_TREND: healthyFloor },
+      fixtureDb,
+    );
 
     const origFetch = globalThis.fetch;
     (globalThis as any).fetch = () => Promise.reject(new Error("network disabled for forward-fill-cap test"));
