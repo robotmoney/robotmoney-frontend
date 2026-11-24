@@ -590,6 +590,71 @@ The computed value is the one committed before it, for example `VIX` 15.98 (comm
 compute code in `analyze/` and `transform/` is the same on 2026-09-24 and 2026-09-27 as
 today apart from comments.
 
+### 8.1.2 Knowledge time (issue 1733, D92)
+
+A computation for day t reads only the source values published on or before t, at
+the value they had then. The live run, a history replay, `asofLabels`, the backtest
+and the research gauges all follow this rule. A replay of day t gets the same
+intermediate series a live run on day t had. Code:
+`packages/analyst-sdk/src/transform/knowledge-time.ts`.
+
+**Publication rules.** Every registry indicator declares `publication`, and every
+research input has an entry in `CHANNEL_PUBLICATION` or `LATE_CYCLE_PUBLICATION`.
+The loader (`prepareRegimeInputs`, `knownResearchInputs`) throws
+`PublicationRuleError` naming a series without one. A stored row keeps its period
+date. The rule maps the period date to the day the value is known:
+
+| Series | Rule | Example |
+| --- | --- | --- |
+| `T10Y2Y`, `DFII10`, `T5YIE`, `HY_OAS` (FRED dailies) | next business day | Fri 2024-03-08 is known Mon 2024-03-11 |
+| `DXY` (`DTWEXBGS`, H.10) | the Monday after | Wed 2024-03-06 is known Mon 2024-03-11 |
+| `ICSA` | the Thursday after its week-ending Saturday | Sat 2024-03-02 is known Thu 2024-03-07 |
+| `SHILLER_CAPE` | 1st of the next month (the month's average price) | 2024-03-01 is known 2024-04-01 |
+| research `margin` (`BOGZ1FL663067003Q`, Z.1) | 1st of the 6th month after the quarter's first day | Q1 2024 is known 2024-07-01 |
+| research `conf` (`UMCSENT`) | 1st of the next month (final reading) | 2024-03-01 is known 2024-04-01 |
+| every other indicator and research input | same day | |
+
+EDGAR's month-end stamp is the same pattern: a month's count is known on its last day.
+
+**Versions and revisions.** A row may carry `known`, the instant that version was
+first seen (the source ledger's `knowledge_time`). A version is known on the later
+of its publication date and that day. On each day the series shows the newest period
+known by then, at its newest version known by then. A revision of an older period
+never reaches back into the past. So the series up to day t depends only on what was
+known by t, and a run as-of t equals row t of any later run (prefix invariance,
+`tests/knowledge-time.test.ts`).
+
+**Partial days (finding E4).** A value fetched before its UTC day ends is
+provisional. The first fetch after the day ends is a revision, known that day. A
+replay as of the day reads the provisional value. Each extractor documents the
+instant that ends its day (00:00:00Z) and pins it with a midnight fixture test.
+
+**The ledger read.** A run for an as-of day before its own UTC date is a replay. It
+reads, per dated coordinate, the version known by the end of that UTC day
+(`loadCommittedInputs` with `knownBy`, the `knownBy` query parameter of
+`GET committed-inputs`). A coordinate with no version known by then (history
+seeded or backfilled later) reads its first-known version, the closest the ledger
+holds to the first release; `extract/fred.ts` `fetchAlfredFirstRelease` supplies
+first-release values for a FRED backfill. A run for its own UTC date (the
+producer's daily run) reads the heads, as before.
+
+**Raw closes.** The six equity ratios (`IWM_SPY`, `SPHB_SPLV`, `MTUM_SPY`,
+`IWF_IWD`, `XLU_SPY`, `XLP_XLY`) declare `ratioInput: "legs"` and
+`ratioClose: "raw"`. A dividend paid later back-adjusts every earlier adjusted
+close; a raw close never changes. `COPPER_GOLD` and `BTC_ETH` (futures and crypto,
+no dividends) keep the stored adjusted ratio. `SPX_TREND` reads `^GSPC`, an index
+whose adjusted close equals its close. Ingestion still stores all eight ratios
+(`STORED_RATIO_IDS`), because `v3` reads them; `v4` ignores a stored equity ratio.
+
+**Cut at the as-of day.** `lastRaw` and every other field `prepareRegimeInputs`
+returns are cut at the as-of day (finding P1). `lastRaw` keeps the period date of
+the value it shows.
+
+**Versions.** Methodology `v4` reads by knowledge time, corrected in place
+(`REGIME_KNOWLEDGE_TIME`). `v3` keeps reading by period date with every ratio
+stored and adjusted (`ratioDeclarationsFor`), so its published runs replay byte
+for byte. Frozen published reports and past published labels are not restated.
+
 ### 8.2 Source ids and the storage mapping (D74, issue 1423)
 
 A source series has one id, `<provider>:<symbol>`, for example `yahoo:^GSPC` or

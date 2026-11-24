@@ -166,8 +166,9 @@ export function analyticsApiClient(cfg: AnalyticsApiConfig = resolveAnalyticsApi
     async saveSourceAcquisition(acquisition) {
       return await call<SaveSourceAcquisitionResult>("POST", ROUTES.analytics.sourceAcquisitions, { acquisition });
     },
-    async loadCommittedInputs(marketTimeCutoff: string) {
-      return await call<CommittedInputs>("GET", `${ROUTES.analytics.committedInputs}?asof=${encodeURIComponent(marketTimeCutoff)}`);
+    async loadCommittedInputs(marketTimeCutoff: string, knownBy?: string) {
+      const known = knownBy === undefined ? "" : `&knownBy=${encodeURIComponent(knownBy)}`;
+      return await call<CommittedInputs>("GET", `${ROUTES.analytics.committedInputs}?asof=${encodeURIComponent(marketTimeCutoff)}${known}`);
     },
     async loadRawHistory() {
       const { history } = await call<{ history: RawIndicatorHistory }>("GET", ROUTES.analytics.rawHistory);

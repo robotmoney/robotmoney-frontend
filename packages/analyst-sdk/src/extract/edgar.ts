@@ -9,6 +9,8 @@
 // request rates; we send one request per month with retry/backoff. Each count is
 // stamped on month-END so forward-fill aligns it to the month it describes
 // without intra-month lookahead.
+// Day boundary (issue 1733, finding E5): a month's count is stamped on its last
+// UTC day, the day the month is complete; it is known that day.
 import type { Point } from "../types.ts";
 import { fetchJson, httpFetch, recordFetch } from "./http.ts";
 

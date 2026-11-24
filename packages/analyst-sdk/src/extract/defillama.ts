@@ -1,6 +1,9 @@
 // Extract stage: DefiLlama (keyless) source client. Pure parsers — JSON in →
 // date-keyed Point[] out, throw on garbage — plus the canonical endpoint URLs
 // and async fetchers. Ported from agentjuno/robotmoney fetchers/defillama.js.
+// Day boundary (issue 1733, finding E5): `date` is unix seconds at 00:00:00Z
+// of the UTC day the value belongs to; that day ends at the next 00:00:00Z. The
+// current day's row is provisional until then.
 import type { Point } from "../types.ts";
 import { isoDay } from "../transform/math.ts";
 import { applyDayClose, fetchJson, type DayClose } from "./http.ts";

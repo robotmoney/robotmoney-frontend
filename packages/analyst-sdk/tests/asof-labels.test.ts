@@ -197,3 +197,25 @@ describe("hindsight on the 8-year fixture", () => {
     { timeout: 900_000 },
   );
 });
+
+// Issue 1733: an as-of label reads each value at the version known on its as-of
+// day. ICSA revisions known a week after each first release never change a
+// label; reading them by period date does.
+describe("revision-at-asof selection (issue 1733)", () => {
+  const revise = (v: number, i: number) => v * (i % 2 ? 1.5 : 0.6);
+  const icsaKnown = (date: string) => `${new Date(Date.parse(`${date}T00:00:00Z`) + 12 * 86_400_000).toISOString().slice(0, 10)}T13:30:00Z`;
+  const revised: RawIndicatorHistory = {
+    ...raw8y,
+    ICSA: [...raw8y.ICSA!, ...raw8y.ICSA!.map((p, i) => ({ date: p.date, value: revise(p.value, i), known: icsaKnown(p.date) }))],
+  };
+  const leaked: RawIndicatorHistory = { ...raw8y, ICSA: raw8y.ICSA!.map((p, i) => ({ date: p.date, value: revise(p.value, i) })) };
+  const dates = decisionDates("2024-03-04", "2024-03-25");
+
+  test("given a revised fixture, asofLabels use the value known at each as-of day, not the later revision", () => {
+    const first = asofLabels(raw8y, { dates });
+    expect(asofLabels(revised, { dates })).toEqual(first);
+    // Non-vacuity: the revisions read by period date change ICSA's figure.
+    const bad = asofLabels(leaked, { dates });
+    expect(bad.map((l) => l.indicators.ICSA)).not.toEqual(first.map((l) => l.indicators.ICSA));
+  });
+});

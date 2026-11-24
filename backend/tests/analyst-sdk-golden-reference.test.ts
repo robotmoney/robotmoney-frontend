@@ -227,7 +227,8 @@ describe("analyst-sdk report bytes are unchanged by the D74 storage mapping", ()
   // And by decision D88 (methodology renamed v5 to v4; was 9466c9d14933291155d370d6256abf862585a8c2add554fb9134c157d74884ed).
   // And by issue 1708 (D89, factor joins the 1/n composite; was c661b2e44fac9f1d1800160546a1b3a3f20e14efaef2b3321b6e8519f7e121ee).
   // And by issue 1742 (forward correlation cells gain n_eff; was fd512236f0b9baf9eafa35fc0b23ce88ad6030ec6ef877b0652ab126fd50de6f).
-  const GOLDEN_SHA256 = "212c205675ae6046cad5406baad3429910189b0c4a8a918de8e53b24aa392eae";
+  // And by issue 1733 (knowledge time and raw-close equity ratios; was 212c205675ae6046cad5406baad3429910189b0c4a8a918de8e53b24aa392eae).
+  const GOLDEN_SHA256 = "7b138ad34fb42eb01fc438b711a3c3c6bb840457ecd14d903e1a07f0b7c038c2";
 
   test("with fetch throwing, the full serialized report equals the pre-change golden bytes", async () => {
     const { createHash } = await import("node:crypto");

@@ -50,6 +50,10 @@ import type { Point } from "../src/analytics/types.ts";
 import type { Indicator } from "../src/analytics/analyze/indicators.ts";
 import type { AnalyticsDataSource, ResearchInputs } from "../src/analytics/access/data-source.ts";
 import { TOP7 } from "../src/analytics/analyze/research-signals.ts";
+import { RATIO_LEG_KEYS } from "../src/analytics/extras.ts";
+import { knowledgeTimeHistory } from "../src/analytics/prepare.ts";
+import { ratiosFromLegs } from "../../packages/analyst-sdk/src/transform/ratios.ts";
+import { resolveInputHistory } from "../../packages/analyst-sdk/src/series-ids.ts";
 import { MAX_FORWARD_FILL_DAYS } from "../src/analytics/transform/math.ts";
 import { computeCorrelations } from "../src/analytics/analyze/correlations.ts";
 import { REGIME_WEIGHT_REFRESH, refreshDateOn } from "../../packages/analyst-sdk/src/analyze/regime-versions.ts";
@@ -106,6 +110,9 @@ function source(raw: Rows, extras: { spx: Point[]; eth: Point[]; tbill3m: Point[
     async fetchIndicators(indicators: Indicator[]) {
       const out: Rows = {};
       for (const ind of indicators) out[ind.id] = (raw[ind.id] ?? []).map((p) => ({ date: p.date, value: p.value }));
+      // A live fetch also returns each ratio symbol's two closes (issue 1644);
+      // v4 reads the equity ratios from the raw closes (issue 1733).
+      for (const k of RATIO_LEG_KEYS) if (raw[k]) out[k] = raw[k]!.map((p) => ({ date: p.date, value: p.value }));
       return out;
     },
     async fetchResearchInputs() {
@@ -195,16 +202,19 @@ function assertEquivalent(asof: string, sdk: ReturnType<typeof runRegime>, rows:
   expect(JSON.stringify(latest.correlations)).toBe(JSON.stringify(sdk.correlations));
   expect(JSON.stringify(latest.backtest)).toBe(JSON.stringify(sdk.backtest));
   // Rich indicator provenance: raw_value/raw_date are each input series' last
-  // row as given (prepareRegimeInputs lastRaw; null when the series is empty).
-  // Pinned here because no composite column depends on them.
+  // row known on or before asof, at its period date (prepareRegimeInputs
+  // lastRaw, issue 1733; null when the series is empty). The equity ratios are
+  // their raw-close legs' ratio. Pinned here because no composite column
+  // depends on them.
+  const known = knowledgeTimeHistory(ratiosFromLegs(raw, resolveInputHistory(raw)), { asof });
   const inds = latest.indicators as any[];
   expect(inds.length).toBeGreaterThan(20);
   let withRaw = 0;
   for (const ind of inds) {
-    const rs = raw[ind.id] ?? [];
+    const rs = known[ind.id] ?? [];
     const last = rs.length ? rs[rs.length - 1]! : null;
     expect(ind.raw_value).toBe(last ? last.value : null);
-    expect(ind.raw_date).toBe(last ? last.date : null);
+    expect(ind.raw_date).toBe(last ? last.period : null);
     if (last) withRaw++;
   }
   expect(withRaw).toBeGreaterThan(20);

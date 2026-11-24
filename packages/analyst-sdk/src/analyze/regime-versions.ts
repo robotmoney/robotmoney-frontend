@@ -80,6 +80,14 @@ export const REGIME_WEIGHT_REFRESH: Readonly<Record<RegimeVersion, WeightRefresh
   v4: Object.freeze({ intervalDays: 21, anchor: WEIGHT_REFRESH_ANCHOR, refitOnLastDay: false }),
 });
 
+/**
+ * Whether a version reads its inputs by knowledge time (issue 1733,
+ * docs/technical/regime-engine.md section 8.1.2): each value from the day it was
+ * published, at the version known then. v4 is corrected in place; v3 keeps
+ * reading by period date, so its published runs replay byte for byte.
+ */
+export const REGIME_KNOWLEDGE_TIME: Readonly<Record<RegimeVersion, boolean>> = Object.freeze({ v3: false, v4: true });
+
 const MS_PER_DAY = 86_400_000;
 const dayNumber = (day: string): number => Math.floor(Date.parse(`${day}T00:00:00Z`) / MS_PER_DAY);
 

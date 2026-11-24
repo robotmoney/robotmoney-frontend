@@ -23,13 +23,20 @@ import { fetchDefillamaStables, fetchDefillamaTvl } from "../src/extract/defilla
 import { fetchCoinmetrics } from "../src/extract/coinmetrics.ts";
 import { DROP_UNCLOSED_SOURCES, SOURCE_DAY_CLOSE, assertDayCloseRules } from "../src/extract/sources.ts";
 import type { Point, RawIndicatorHistory } from "../src/types.ts";
+import { publicationRuleOf, publishedOn } from "../src/transform/knowledge-time.ts";
 
 afterEach(() => { configureHttp({}); });
 
 const fixture = toHistory(parseRawHistory(await Bun.file(join(import.meta.dir, "fixtures/raw-indicator-history.csv")).text()));
 const addDays = (d: string, n: number) => new Date(Date.parse(`${d}T00:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
+// Issue 1733: what a run on `day` reads is every row published by then, so a
+// registry series is cut on its publication date, everything else on its date.
+const published = (id: string, date: string) => {
+  const ind = INDICATORS.find((i) => i.id === id);
+  return ind ? publishedOn(date, publicationRuleOf(ind)) : date;
+};
 const cut = (h: RawIndicatorHistory, day: string): RawIndicatorHistory =>
-  Object.fromEntries(Object.entries(h).map(([id, rows]) => [id, rows.filter((r) => r.date <= day)]));
+  Object.fromEntries(Object.entries(h).map(([id, rows]) => [id, rows.filter((r) => published(id, r.date) <= day)]));
 
 // T: a day every daily series observes in the fixture; C its eve.
 const T = "2026-06-20";
@@ -53,6 +60,8 @@ function staleInputs(): RawIndicatorHistory {
   return h;
 }
 const lastHy = () => staleInputs().HY_OAS!.at(-1)!.date;
+// The day HY_OAS's last row was known: its age counts from then (issue 1733).
+const lastHyKnown = () => published("HY_OAS", lastHy());
 
 function withPolicies<T>(ids: string[], fill: FillPolicy, fn: () => T): T {
   const saved = ids.map((id) => [INDICATORS.find((i) => i.id === id)!, INDICATORS.find((i) => i.id === id)!.fill] as const);
@@ -93,7 +102,7 @@ describe("latestCompleteDay and the day rules", () => {
     expect(latestCompleteDay(earlyRunInputs())).toBe(addDays(T, 1));
     expect(missingOnDay(earlyRunInputs(), addDays(T, 1))).toEqual([]);
     // With HY_OAS stale, the latest complete day is the last day of its horizon.
-    expect(latestCompleteDay(staleInputs())).toBe(addDays(lastHy(), 120));
+    expect(latestCompleteDay(staleInputs())).toBe(addDays(lastHyKnown(), 120));
     expect(missingOnDay(staleInputs(), T)).toEqual([{ id: "HY_OAS", lastObserved: lastHy() }]);
     // With Coin Metrics declared none, the trailing day is missing on T.
     withPolicies(COIN_METRICS, { kind: "none" }, () => {
@@ -112,7 +121,7 @@ describe("latestCompleteDay and the day rules", () => {
 
   test("require-complete: no as-of day scores the latest complete day; an explicit incomplete day is IncompleteDay with no figure; both differ from score-newest", () => {
     const latest = requireComplete(runRegime(staleInputs(), { dayRule: "require-complete" }));
-    expect(latest.dateAxis.at(-1)).toBe(addDays(lastHy(), 120));
+    expect(latest.dateAxis.at(-1)).toBe(addDays(lastHyKnown(), 120));
     const shipped = requireComplete(runRegime(staleInputs()));
     expect(latest.dateAxis.length).not.toBe(shipped.dateAxis.length);
     const out = runRegime(staleInputs(), { asof: T, dayRule: "require-complete" });

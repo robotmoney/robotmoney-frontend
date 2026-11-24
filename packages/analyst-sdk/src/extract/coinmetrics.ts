@@ -7,6 +7,9 @@
 // Response is paginated; we follow next_page_token until exhausted. Used for
 // ETH_ACTIVE (asset=eth, metric=AdrActCnt) and BTC_MVRV (asset=btc,
 // metric=CapMVRVCur — repointed off blockchain.com's removed mvrv chart, #127).
+// Day boundary (issue 1733, finding E5): a row's `time` is the UTC instant its
+// daily interval starts; the value belongs to that UTC day, which ends at the
+// next 00:00:00Z. A row fetched before that instant is provisional.
 import type { Point } from "../types.ts";
 import { applyDayClose, fetchJson } from "./http.ts";
 import type { DayCloseOptions } from "./defillama.ts";

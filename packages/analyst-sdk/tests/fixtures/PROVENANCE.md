@@ -23,7 +23,7 @@ The rule reproduces the fixture committed before this script existed exactly, as
 - Rows: 71413.
 - `raw-indicator-history.csv` sha256 `3674d727db8abc8005d55052584c22313c7f4b97d5ec3061fa9d04bf45d91ff4`.
 - `raw-indicator-history.json` sha256 `5c3ad87b1619f1cc6dcf3409d981c6e0a8e56e6494486818e448ad37ce7044a4`.
-- `../golden/regime-report.json` sha256 `212c205675ae6046cad5406baad3429910189b0c4a8a918de8e53b24aa392eae`.
+- `../golden/regime-report.json` sha256 `7b138ad34fb42eb01fc438b711a3c3c6bb840457ecd14d903e1a07f0b7c038c2`.
 
 | indicator | rows |
 | --- | ---: |

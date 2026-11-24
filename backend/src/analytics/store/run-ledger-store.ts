@@ -197,6 +197,36 @@ const selectCommittedInputs = registerQuery({
   },
 });
 
+// Issue 1733: a run for a past as-of day reads, per dated coordinate, the
+// version known by the end of that UTC day; a coordinate with no version known
+// by then (history seeded or backfilled later) reads its first-known version,
+// the closest the ledger holds to the value first published.
+const selectCommittedInputsKnownAt = registerQuery({
+  role: "rm_app",
+  object: "source_value_versions",
+  privileges: ["SELECT"],
+  site: "src/analytics/store/run-ledger-store:loadCommittedInputs.knownAt",
+  purpose: "Read the ledger versions of the regime's storage keys known by the end of a past as-of day, so a replay never sees a later revision (issue 1733).",
+  callers: [ANALYTICS_ROUTE],
+  probe: {
+    statement: `WITH c AS (SELECT clock_timestamp() AS t, (($3::date + 1)::timestamp AT TIME ZONE 'UTC') AS day_end)
+    SELECT to_char(c.t AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cutoff,
+      h.id, h.source_key, h.market_date, h.value
+    FROM c LEFT JOIN LATERAL (
+      SELECT DISTINCT ON (v.source_key, v.market_date) v.id, v.source_key, v.market_date::text AS market_date, v.value
+      FROM source_value_versions v
+      WHERE v.source_key = ANY($1::text[])
+        AND v.knowledge_time <= c.t
+        AND v.market_date IS NOT NULL AND v.market_date <= $2::date
+      ORDER BY v.source_key, v.market_date,
+        (v.knowledge_time < c.day_end) DESC,
+        CASE WHEN v.knowledge_time < c.day_end THEN v.knowledge_time END DESC NULLS LAST,
+        v.knowledge_time ASC, v.id DESC
+    ) h ON true`,
+    params: ["{}", "2000-01-01", "2000-01-01"],
+  },
+});
+
 const selectRegimeMembers = registerQuery({
   role: "rm_app",
   object: "source_value_versions",
@@ -534,12 +564,30 @@ export interface CommittedInputs {
   values: { versionId: string; sourceKey: string; marketDate: string; value: number }[];
 }
 
+// Issue 1733: with `knownBy` (a replay of a past as-of day) each coordinate
+// reads the version known by the end of that UTC day, else its first-known
+// version (selectCommittedInputsKnownAt); without it, the heads, unchanged.
 export async function loadCommittedInputs(
   sourceKeys: readonly string[],
   marketTimeCutoff: string,
   db: DbHandle = sql,
+  knownBy?: string,
 ): Promise<CommittedInputs> {
-  const rows = await on(db, selectCommittedInputs)<{ cutoff: string; id: string | number | null; source_key: string | null; market_date: string | null; value: number | null }>`
+  const rows = knownBy !== undefined ? await on(db, selectCommittedInputsKnownAt)<{ cutoff: string; id: string | number | null; source_key: string | null; market_date: string | null; value: number | null }>`
+    WITH c AS (SELECT clock_timestamp() AS t, ((${knownBy}::date + 1)::timestamp AT TIME ZONE 'UTC') AS day_end)
+    SELECT to_char(c.t AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cutoff,
+      h.id, h.source_key, h.market_date, h.value
+    FROM c LEFT JOIN LATERAL (
+      SELECT DISTINCT ON (v.source_key, v.market_date) v.id, v.source_key, v.market_date::text AS market_date, v.value
+      FROM source_value_versions v
+      WHERE v.source_key = ANY(${[...sourceKeys]}::text[])
+        AND v.knowledge_time <= c.t
+        AND v.market_date IS NOT NULL AND v.market_date <= ${marketTimeCutoff}::date
+      ORDER BY v.source_key, v.market_date,
+        (v.knowledge_time < c.day_end) DESC,
+        CASE WHEN v.knowledge_time < c.day_end THEN v.knowledge_time END DESC NULLS LAST,
+        v.knowledge_time ASC, v.id DESC
+    ) h ON true` : await on(db, selectCommittedInputs)<{ cutoff: string; id: string | number | null; source_key: string | null; market_date: string | null; value: number | null }>`
     WITH c AS (SELECT clock_timestamp() AS t)
     SELECT to_char(c.t AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cutoff,
       h.id, h.source_key, h.market_date, h.value

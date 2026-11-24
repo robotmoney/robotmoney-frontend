@@ -92,12 +92,20 @@ export function decisionDates(start: string, end: string, cadence: DecisionCaden
   return out;
 }
 
-/** sha256 of the input rows in a canonical order (id, then date), so equal data gives an equal hash. */
+/**
+ * sha256 of the input rows in a canonical order (id, date, then known), so
+ * equal data gives an equal hash. A row's `known` instant (issue 1733) is
+ * hashed when present: two inputs that differ only in when a revision was
+ * known label differently.
+ */
 export function inputSha256(raw: RawIndicatorHistory): string {
   const h = createHash("sha256");
+  const known = (r: { known?: string }) => r.known ?? "";
   for (const id of Object.keys(raw).sort()) {
-    const rows = [...raw[id]!].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
-    for (const r of rows) h.update(`${id},${r.date},${r.value}\n`);
+    const rows = [...(raw[id]! as { date: string; value: number; known?: string }[])].sort((a, b) =>
+      a.date < b.date ? -1 : a.date > b.date ? 1 : known(a) < known(b) ? -1 : known(a) > known(b) ? 1 : 0,
+    );
+    for (const r of rows) h.update(r.known === undefined ? `${id},${r.date},${r.value}\n` : `${id},${r.date},${r.value},${r.known}\n`);
   }
   return h.digest("hex");
 }

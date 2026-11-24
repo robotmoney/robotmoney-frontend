@@ -2,8 +2,12 @@ export * from "./types.ts";
 export * from "./input/load.ts";
 export * from "./run.ts";
 export {
-  prepareRegimeInputs, latestCompleteDay, missingOnDay, type PreparedRegimeInputs, type MissingIndicator,
+  prepareRegimeInputs, latestCompleteDay, missingOnDay, knowledgeTimeHistory, type PreparedRegimeInputs, type MissingIndicator,
 } from "./prepare.ts";
+export {
+  PublicationRuleError, publicationRuleOf, publishedOn, knownOn, isProvisional, knowledgeTimeSeries,
+  type PublicationRule, type VersionedPoint, type KnownPoint,
+} from "./transform/knowledge-time.ts";
 export { computeRegime, regimeLabels, WeightAnchorOutOfRangeError, type RegimeComputeResult } from "./analyze/compute.ts";
 export {
   INDICATORS, PANELS, ALL_PANELS, PANEL_MEMBERSHIP, FillPolicyError, fillPolicyOf, fillMaxAgeDays, DAY_RULE, DAY_RULES,

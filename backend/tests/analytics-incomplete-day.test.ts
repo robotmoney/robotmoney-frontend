@@ -19,8 +19,9 @@ import type { AnalyticsDataSource, ResearchInputs } from "../src/analytics/acces
 import type { TerminalRunPackageInput } from "../src/analytics/output-snapshots.ts";
 import type { Indicator } from "../src/analytics/analyze/indicators.ts";
 import { INDICATORS } from "../src/analytics/analyze/indicators.ts";
-import { STORED_UNDER } from "../src/analytics/extras.ts";
+import { RATIO_LEG_KEYS, STORED_UNDER } from "../src/analytics/extras.ts";
 import { latestCompleteDay } from "../src/analytics/prepare.ts";
+import { publicationRuleOf, publishedOn } from "../../packages/analyst-sdk/src/transform/knowledge-time.ts";
 import { TOP7 } from "../src/analytics/analyze/research-signals.ts";
 import { noopTelemetrySink } from "../src/analytics/telemetry.ts";
 import { IncompleteDayError, requireComplete, runRegime } from "../../packages/analyst-sdk/src/run.ts";
@@ -44,6 +45,8 @@ function early(): Rows {
   return h;
 }
 const lastHy = () => early()[STALE_ID]!.at(-1)!.date;
+// Its horizon counts from the day that row was published (issue 1733).
+const hyHorizon = () => addDays(publishedOn(lastHy(), publicationRuleOf(INDICATORS.find((i) => i.id === STALE_ID)!)), 120);
 // An explicit replay of D, made later: require-complete applies its exact-day check.
 const REQUIRE = { dayRule: "require-complete" as const, now: new Date("2026-11-19T00:00:00Z") };
 
@@ -51,7 +54,9 @@ function source(raw: Rows): AnalyticsDataSource {
   const research: ResearchInputs = { btc: [], qqq: [], spy: [], rsp: [], top7: TOP7.map(() => [] as Point[]), mna: [], margin: [], conf: [] };
   return {
     async fetchIndicators(indicators: Indicator[]) {
-      return Object.fromEntries(indicators.map((ind) => [ind.id, (raw[ind.id] ?? []).map((p) => ({ ...p }))]));
+      // With each ratio symbol's two closes, as a live fetch returns them (issues 1644, 1733).
+      const legs = [...RATIO_LEG_KEYS].filter((k) => raw[k]).map((k) => [k, raw[k]!.map((p) => ({ ...p }))]);
+      return Object.fromEntries([...indicators.map((ind) => [ind.id, (raw[ind.id] ?? []).map((p) => ({ ...p }))]), ...legs]);
     },
     async fetchResearchInputs() {
       return research;
@@ -117,7 +122,7 @@ afterEach(() => void (logs.length = 0));
 describe("the analytics worker publishes only complete days", () => {
   test("the scenario: D is complete with every row, and the early inputs' latest complete day is HY_OAS's horizon", () => {
     expect(latestCompleteDay(cut(history, D), { notAfter: D })).toBe(D);
-    expect(latestCompleteDay(early(), { notAfter: D })).toBe(addDays(lastHy(), 120));
+    expect(latestCompleteDay(early(), { notAfter: D })).toBe(hyHorizon());
     expect(INDICATORS.find((i) => i.id === STALE_ID)!.fill).toEqual({ kind: "forward", maxAgeDays: 120 });
   });
 
@@ -164,7 +169,7 @@ describe("the analytics worker publishes only complete days", () => {
     const { state, persistence } = memory();
     const now = new Date(`${D}T21:30:00Z`);
     const results: any = await runAnalytics(D, "regime", source(early()), persistence, noopTelemetrySink, undefined, undefined, { dayRule: "require-complete", now });
-    const scored = addDays(lastHy(), 120);
+    const scored = hyHorizon();
     expect(state.beganAsof).toEqual([D]);
     expect(results.regime.asof).toBe(scored);
     const pkg = state.packages[0]! as any;

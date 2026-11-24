@@ -22,6 +22,7 @@ import { fixtureDb } from "./support/fixture-db.ts";
 import { computeRegime } from "../src/analytics/analyze/compute.ts";
 import { INDICATORS, type Indicator } from "../src/analytics/analyze/indicators.ts";
 import { prepareRegimeInputs } from "../src/analytics/prepare.ts";
+import { publicationRuleOf, publishedOn } from "../../packages/analyst-sdk/src/transform/knowledge-time.ts";
 import {
   buildDateAxis,
   alignDailyForwardFill,
@@ -164,8 +165,9 @@ test("computeRegime: omitting `ages` (every existing call site) preserves curren
 // maxAgeDays CAP on TARGET_ID and expect the same outcomes.
 // The registry with TARGET_ID's forward policy set to `maxAgeDays`; every
 // other indicator keeps its declared policy (and has no rows here).
+// It is published the same day, so its ages count from its own dates (issue 1733).
 const withTargetPolicy = (maxAgeDays: number): Indicator[] =>
-  INDICATORS.map((ind) => (ind.id === TARGET_ID ? { ...ind, fill: { kind: "forward", maxAgeDays } } : ind));
+  INDICATORS.map((ind) => (ind.id === TARGET_ID ? { ...ind, fill: { kind: "forward", maxAgeDays }, publication: { kind: "same-day" } } : ind));
 
 function policyScenario() {
   const dateAxis = buildAxis("2020-01-06", REAL_DAYS + 60);
@@ -269,8 +271,10 @@ test(
 
     // Last real print well past MAX_FORWARD_FILL_DAYS before asof — genuinely dead.
     const lastRealDate = "2025-09-01";
+    // Its age counts from the day it was published, the next business day (issue 1733).
+    const knownDate = publishedOn(lastRealDate, publicationRuleOf(INDICATORS.find((i) => i.id === STALE_ID)!));
     const expectedAge = Math.round(
-      (Date.parse(`${asof}T00:00:00Z`) - Date.parse(`${lastRealDate}T00:00:00Z`)) / 86_400_000,
+      (Date.parse(`${asof}T00:00:00Z`) - Date.parse(`${knownDate}T00:00:00Z`)) / 86_400_000,
     );
     expect(expectedAge).toBeGreaterThan(MAX_FORWARD_FILL_DAYS);
 

@@ -18,6 +18,7 @@ import { captureSourceAcquisition, type AcquisitionSink, type CommittedSourceVal
 import { TOP7 } from "../../src/analytics/analyze/research-signals.ts";
 import { RATIO_LEG_KEYS, STORED_UNDER } from "../../src/analytics/extras.ts";
 import { INDICATORS } from "../../src/analytics/analyze/indicators.ts";
+import { publicationRuleOf, publishedOn } from "../../../packages/analyst-sdk/src/transform/knowledge-time.ts";
 import { toleranceFor } from "../../src/analytics/source-tolerance.ts";
 import type { Point, RawIndicatorHistory } from "../../src/analytics/types.ts";
 import type { TelemetryRunSubmission, TelemetrySink } from "../../src/analytics/telemetry.ts";
@@ -28,6 +29,10 @@ import { PRODUCTION_CSV } from "../../../packages/analyst-sdk/tests/support/orig
 import { poisonNetwork, type NetworkPoison } from "./network-poison.ts";
 
 export const ASOF = "2026-08-15";
+// Issue 1733: a run for a day before its own UTC date is a replay that reads
+// only what was known by that day. These scenarios are live runs on their
+// as-of day, so they pass the run time explicitly.
+export const liveOn = (day: string) => ({ now: new Date(`${day}T23:59:00Z`) });
 export const JITTER = 5e-7; // inside Yahoo's 1e-6 float32 tolerance (D56)
 
 export interface Observations {
@@ -56,6 +61,11 @@ export async function baseObservations(): Promise<Observations> {
   // symbol (the committed fixture's legs), under their own keys.
   const all = toHistory(parseRawHistory(readFileSync(PRODUCTION_CSV, "utf8")));
   for (const key of RATIO_LEG_KEYS) registry[key] = all[key]!;
+  // Issue 1733: T10Y2Y is published the next business day, so a run on ASOF
+  // reads no row the fixture dates after the last one published by then; the
+  // revision secondObservations makes lands on a row that run reads.
+  const t10 = publicationRuleOf(INDICATORS.find((i) => i.id === "T10Y2Y")!);
+  registry.T10Y2Y = registry.T10Y2Y!.filter((p) => publishedOn(p.date, t10) <= ASOF);
   return {
     registry,
     mna: r.mna,

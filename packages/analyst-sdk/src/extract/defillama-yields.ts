@@ -8,6 +8,8 @@
 // per year. A row whose apyBase is null or not finite is dropped, never filled
 // from `apy` (that would serve rewards as supply rate, a silent proxy). The date
 // is the UTC day of the timestamp; a repeated day keeps the last row.
+// Day boundary (issue 1733, finding E5): a row belongs to the UTC day of its
+// timestamp; the day ends at the next 00:00:00Z.
 import type { Point } from "../types.ts";
 import { fetchJson } from "./http.ts";
 

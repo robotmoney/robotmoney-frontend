@@ -8,6 +8,8 @@
 // Coinmetrics (btc/CapMVRVCur, see coinmetrics.ts / #127). timespan=all returns
 // the full ~2009+ series; append-only merge preserves everything accumulated,
 // so we always request the full window.
+// Day boundary (issue 1733, finding E5): `x` is unix seconds at 00:00:00Z of
+// the UTC day the value belongs to; that day ends at the next 00:00:00Z.
 import type { Point } from "../types.ts";
 import { isoDay } from "../transform/math.ts";
 import { fetchJson } from "./http.ts";
