@@ -49,8 +49,8 @@ const WEEKLY_AFTER_DAYS = 400;
 // The panels' lines on the history, kept off the reading's colours: green and
 // beacon are the composite's two sides and slate the neutral band, so no
 // panel may wear them. Cyan (Beam) and the light text are the two hues left;
-// equity factor, context outside the composite, takes slate, which on this
-// chart only ever names a band that is drawn clear.
+// equity factor takes slate, which on this chart only ever names a band that
+// is drawn clear.
 const HISTORY_LINE = { macro: PALETTE.accent, onchain: PALETTE.text, factor: SERIES.slate };
 const HISTORY_SERIES = [["composite", "Composite"], ["macro", "Macro"], ["onchain", "On-chain"], ["factor", "Equity factor"]];
 
@@ -65,12 +65,18 @@ const BT_MEMO = new Map();
 
 // The summary cards' panel tips (panelTip below). `reads` is each panel's own
 // description on the indicators page; `count` is that page's count, used only
-// when a snapshot carries no indicator rows to count.
+// when a snapshot carries no indicator rows to count. A panel's part in the
+// composite comes from the snapshot's own `panels` (compositePanels).
 const PANEL_TIP = {
-  macro: { noun: "macro", count: 8, reads: "rates, credit, the dollar, jobs, volatility", role: "Half of the composite." },
-  onchain: { noun: "on-chain", count: 10, reads: "DeFi TVL, stablecoin float, active addresses, valuation, trend", role: "Half of the composite." },
-  factor: { noun: "equity factor", count: 8, reads: "trend, breadth, momentum, style, valuation", role: "Tracked for context and left out of the composite." },
+  macro: { noun: "macro", count: 8, reads: "rates, credit, the dollar, jobs, volatility" },
+  onchain: { noun: "on-chain", count: 10, reads: "DeFi TVL, stablecoin float, active addresses, valuation, trend" },
+  factor: { noun: "equity factor", count: 8, reads: "trend, breadth, momentum, style, valuation" },
 };
+// The panels the composite averages when a snapshot does not list them: all
+// three since v0.10.0 (#1709).
+const COMPOSITE_PANELS = ["macro", "onchain", "factor"];
+// "a", "a and b", "a, b and c".
+const listOf = (/** @type {string[]} */ xs) => xs.length < 2 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`;
 
 // The panel readings draw with the session page's Market context component
 // (lib/session-brief.js): the same rows, track, cuts and tips, fed today's
@@ -104,7 +110,7 @@ export function registerRegimeView(Alpine) {
     // Market context (lib/session-brief.js), fed the latest snapshot.
     backdrop: null,
     backdropDate: "",
-    backdropV0: false,
+    backdropFactorIn: false,
     setBackdrop: BRIEF.setBackdrop,
     // The snapshot carries every panel's level, so a label-only row (a panel
     // with a label and no index) is left out here rather than drawn.
@@ -177,7 +183,7 @@ export function registerRegimeView(Alpine) {
     _apply(data) {
       const l = data.latest;
       this.latest = l;
-      this.setBackdrop(l, { date: l?.date });
+      this.setBackdrop(l, { date: l?.date, panels: l?.panels });
       this.history = data.history || [];
       this.staleness = data.staleness || null;
     },
@@ -186,8 +192,8 @@ export function registerRegimeView(Alpine) {
     panelsList() {
       const p = this.latest?.panels;
       if (Array.isArray(p) && p.length) return p;
-      // Fallback when `panels` is null: always show macro + on-chain, and append the
-      // display-only Equity factor panel when its index is present in the data.
+      // Fallback when `panels` is null: always show macro + on-chain, and append
+      // Equity factor when its index is present in the data.
       const base = ["macro", "onchain"];
       return this.latest?.factorIndex != null ? [...base, "factor"] : base;
     },
@@ -220,13 +226,24 @@ export function registerRegimeView(Alpine) {
     regimeTip() {
       const lo = (+this.bucketPct("risk_off") / 100).toFixed(2);
       const hi = (+this.bucketPct("risk_on") / 100).toFixed(2);
-      return `The composite is the mean of the macro and on-chain indices, on a scale of 0 to 1: risk-off below ${lo}, risk-on above ${hi}, neutral between. The label switches after 5 consecutive trading days in a new bucket.`;
+      const names = this.compositePanels().map((p) => PANEL_TIP[/** @type {keyof typeof PANEL_TIP} */ (p)]?.noun || this.panelLabel(p).toLowerCase());
+      return `The composite is the mean of the ${listOf(names)} indices, on a scale of 0 to 1: risk-off below ${lo}, risk-on above ${hi}, neutral between. The label switches after 5 consecutive trading days in a new bucket.`;
     },
     panelTip(p) {
       const t = PANEL_TIP[p];
       const n = this.indicatorsIn(p).length || t?.count;
       const what = [n, t ? t.noun : this.panelLabel(p).toLowerCase(), n === 1 ? "indicator" : "indicators"].filter(Boolean).join(" ");
-      return `A weighted mean of ${what}${t ? ` (${t.reads})` : ""}, each a percentile of its own last 3 years: 0 is risk-off, 1 risk-on.${t ? " " + t.role : ""}`;
+      return `A weighted mean of ${what}${t ? ` (${t.reads})` : ""}, each a percentile of its own last 3 years: 0 is risk-off, 1 risk-on. ${this.panelRole(p)}`;
+    },
+    // The panels the composite averages, as the snapshot lists them.
+    compositePanels() {
+      const p = this.latest?.panels;
+      return Array.isArray(p) && p.length ? p : COMPOSITE_PANELS;
+    },
+    panelRole(/** @type {string} */ p) {
+      const inc = this.compositePanels();
+      if (!inc.includes(p)) return "Tracked for context and left out of the composite.";
+      return inc.length === 2 ? "Half of the composite." : inc.length === 3 ? "A third of the composite." : `One of the ${inc.length} panels the composite averages.`;
     },
     // An id for a heading whose text is data (a panel or backtest title): the
     // text, lowercased, with every run of other characters as one hyphen.

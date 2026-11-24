@@ -18,7 +18,7 @@
     <div class="rv__hero-art" x-data="orbitsHero()" aria-hidden="true"></div>
     <div class="rv__hero-inner">
       <h1 class="rv__title">Regime Classifier</h1>
-      <p class="rv__hero-sub">A daily cross-asset reading of risk-on or risk-off: the arithmetic mean of a macro panel and an on-chain panel. A third panel, equity factor, is tracked beside them for context and left out of the composite. All three recompute every 24 hours from open data, with point-in-time inverse-correlation weights.</p>
+      <p class="rv__hero-sub">A daily cross-asset reading of risk-on or risk-off: the arithmetic mean of a macro, an on-chain and an equity factor panel. All three recompute every 24 hours from open data, with point-in-time inverse-correlation weights.</p>
     </div>
   </div>
 
@@ -124,7 +124,7 @@
               </template>
               <!-- With the dial, its bowl carries the composite, so this line says what
                    the number is; without it, the line carries the number too. -->
-              <p class="rr-stat__sub" x-show="dialModel()">The composite: the mean of the macro and on-chain indices</p>
+              <p class="rr-stat__sub" x-show="dialModel()">The composite: the mean of the macro, on-chain and equity factor indices</p>
               <p class="rr-stat__sub" x-show="!dialModel()">Composite <b x-text="latest.composite == null ? '—' : latest.composite.toFixed(2)"></b></p>
             </div>
             <!-- The session page's Market context component, fed index levels
@@ -495,26 +495,26 @@
     <section class="rr-sec" id="methodology-sec" aria-labelledby="methodology">
       <div class="rr-sec__head"><h2 class="rr-sec__h" id="methodology">Methodology</h2></div>
       <!-- The bucket thresholds come from the snapshot (bucketPct). -->
-      <p class="rv__method-lead" x-show="latest">Composite = 0.5 × macro + 0.5 × on-chain. Each panel is a weighted mean of sign-aligned 3-year rolling percentile ranks; weights within a panel are inversely proportional to each indicator's mean absolute correlation with the rest of the panel. A composite below <span x-text="(+bucketPct('risk_off') / 100).toFixed(2)"></span> reads risk-off and above <span x-text="(+bucketPct('risk_on') / 100).toFixed(2)"></span> reads risk-on.</p>
+      <p class="rv__method-lead" x-show="latest">Composite = (macro + on-chain + equity factor) / 3. Each panel is a weighted mean of sign-aligned 3-year rolling percentile ranks; weights within a panel are inversely proportional to each indicator's mean absolute correlation with the rest of the panel. A composite below <span x-text="(+bucketPct('risk_off') / 100).toFixed(2)"></span> reads risk-off and above <span x-text="(+bucketPct('risk_on') / 100).toFixed(2)"></span> reads risk-on.</p>
 
       <h3 class="rr-subhead__h" id="panels">Panels</h3>
       <div class="rr-tablewrap">
         <table class="rr-table rv__mtable">
           <thead><tr><th scope="col">Panel</th><th scope="col">Reads</th><th scope="col">Indicators</th><th scope="col">Sources</th><th scope="col">In the composite</th></tr></thead>
           <tbody>
-            <tr><th scope="row">Macro <small>8 indicators</small></th><td>Upstream causes: monetary policy, credit conditions and the labor market.</td><td>10y–2y curve, real 10y, 5y breakeven, HY OAS, DXY, initial jobless claims, VIX, copper/gold</td><td>FRED and Yahoo</td><td>Yes, half</td></tr>
-            <tr><th scope="row">On-chain <small>10 indicators</small></th><td>Crypto-native flows and network health.</td><td>DeFi TVL (level + 90d growth), stablecoin float (level + 90d growth), BTC/ETH active addresses, BTC MVRV, BTC/ETH ratio, ETH 50d/200d trend, new DEX pools per 24h</td><td>DefiLlama, blockchain.com, Coinmetrics, Yahoo, GeckoTerminal</td><td>Yes, half</td></tr>
-            <tr><th scope="row">Equity factor <small>8 indicators</small></th><td>Price-setters who have already digested the upstream inputs and are committing capital. Sign-stable signals of equity risk appetite, style and valuation.</td><td>High-beta vs low-vol (SPHB/SPLV), momentum (MTUM/SPY), growth vs value (IWF/IWD), utilities leadership (XLU/SPY), staples vs discretionary (XLP/XLY), S&amp;P 500 50d/200d trend, IWM/SPY breadth, Shiller CAPE</td><td>Yahoo Finance and a mirror of the Shiller spreadsheet</td><td>No, tracked beside it for context; the conservative and aggressive backtests do use it</td></tr>
+            <tr><th scope="row">Macro <small>8 indicators</small></th><td>Upstream causes: monetary policy, credit conditions and the labor market.</td><td>10y–2y curve, real 10y, 5y breakeven, HY OAS, DXY, initial jobless claims, VIX, copper/gold</td><td>FRED and Yahoo</td><td>Yes, a third</td></tr>
+            <tr><th scope="row">On-chain <small>10 indicators</small></th><td>Crypto-native flows and network health.</td><td>DeFi TVL (level + 90d growth), stablecoin float (level + 90d growth), BTC/ETH active addresses, BTC MVRV, BTC/ETH ratio, ETH 50d/200d trend, new DEX pools per 24h</td><td>DefiLlama, blockchain.com, Coinmetrics, Yahoo, GeckoTerminal</td><td>Yes, a third</td></tr>
+            <tr><th scope="row">Equity factor <small>8 indicators</small></th><td>Price-setters who have already digested the upstream inputs and are committing capital. Sign-stable signals of equity risk appetite, style and valuation.</td><td>High-beta vs low-vol (SPHB/SPLV), momentum (MTUM/SPY), growth vs value (IWF/IWD), utilities leadership (XLU/SPY), staples vs discretionary (XLP/XLY), S&amp;P 500 50d/200d trend, IWM/SPY breadth, Shiller CAPE</td><td>Yahoo Finance and a mirror of the Shiller spreadsheet</td><td>Yes, a third</td></tr>
           </tbody>
         </table>
       </div>
-      <p class="rv__method-note">Macro and on-chain are two independent viewpoints, averaged into the composite. The <a class="rr-lnk" href="/blog/regime-eq-vs-base">research write-up</a> compares the composite with and without the equity factor panel, panel by panel.</p>
+      <p class="rv__method-note">Macro, on-chain and equity factor are three viewpoints, averaged into the composite at a third each. The <a class="rr-lnk" href="/blog/regime-eq-vs-base">research write-up</a> compares the composite with and without the equity factor panel, panel by panel.</p>
 
       <h3 class="rr-subhead__h" id="how-it-works">How it works</h3>
       <dl class="rr-dl rv__mdl">
         <div><dt>Normalization</dt><dd>A rolling 3-year percentile rank per indicator, sign-aligned so +1 always means risk-on.</dd></div>
         <div><dt>Weighting</dt><dd>Point-in-time inverse correlation within each panel. Each day's weights use only the trailing 3-year window, so there is no look-ahead. Redundant inputs are discounted automatically, without manual sub-grouping. No indicator carries more than 25%.</dd></div>
-        <div><dt>Composite</dt><dd>The arithmetic mean of the macro and on-chain panel indices (the equity factor panel is excluded), bucketed at 0.33 / 0.67 on its own 0 to 1 scale.</dd></div>
+        <div><dt>Composite</dt><dd>The arithmetic mean of the macro, on-chain and equity factor panel indices, a third each, bucketed at 0.33 / 0.67 on its own 0 to 1 scale.</dd></div>
         <div><dt>Smoothing</dt><dd>The published label switches after <strong>5 consecutive trading days</strong> in the new bucket, or at once on a single-day move in the composite larger than <strong>2σ</strong>. The wait filters out flips at a boundary; the 2σ rule lets a sharp move through.</dd></div>
         <div><dt>Storage</dt><dd>The history is kept daily in long format; the current snapshot is served from the analytics store.</dd></div>
       </dl>

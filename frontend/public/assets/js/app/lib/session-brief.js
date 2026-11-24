@@ -62,20 +62,28 @@ export function normalizeRegime(raw) {
   return out.composite === null && !out.regime ? null : out;
 }
 
+// From v0.10.0 (#1709) the composite averages all three panels, a third each.
+// The first session on it opened on 21 Nov 2026; one before averaged macro
+// and on-chain only. A session's regime record does not say which.
+export const FACTOR_IN_FROM = "2026-11-21";
+
 export function sessionBrief() {
   return {
     /** @type {any} */
     backdrop: null,
     backdropDate: "",
-    // True for a v0 archive reading, whose composite averages macro, on-chain
-    // AND factor. The latest review draws factor as context only when it is.
-    backdropV0: false,
+    // True when this reading's composite averages equity factor too. A
+    // snapshot says so in its own `panels`; a session's record does not, so
+    // its date decides (FACTOR_IN_FROM), and a v0 archive reading always did.
+    backdropFactorIn: false,
 
-    /** @param {any} summary @param {{date?: string, v0?: boolean}} opts */
+    /** @param {any} summary @param {{date?: string, v0?: boolean, panels?: string[] | null}} opts */
     setBackdrop(summary, opts = {}) {
       this.backdrop = normalizeRegime(summary);
       this.backdropDate = opts.date || "";
-      this.backdropV0 = Boolean(opts.v0);
+      this.backdropFactorIn = Array.isArray(opts.panels) && opts.panels.length
+        ? opts.panels.includes("factor")
+        : Boolean(opts.v0) || String(opts.date || "").slice(0, 10) >= FACTOR_IN_FROM;
       return this.backdrop;
     },
 
@@ -83,8 +91,8 @@ export function sessionBrief() {
     // Dots on one 0 to 1 scale: the composite first, then each panel's index.
     // `v` is the level; a panel the reading has a label for but no level is a
     // row with `v` null, which a surface draws as its label alone.
-    // Factor is drawn apart as context on the published method, where it is
-    // not an input; on a v0 reading it was one, so it is drawn as one.
+    // Factor is drawn apart as context on a reading whose composite left it
+    // out (a session before 21 Nov 2026), and as an input otherwise.
     signalRows() {
       const b = this.backdrop;
       if (!b) return [];
@@ -92,21 +100,24 @@ export function sessionBrief() {
       const rows = [];
       if (b.composite !== null) {
         rows.push({ key: "composite", label: "Composite", v: b.composite, regime: b.regime, kind: "lead", at: at(b.composite),
-          href: "/regime#composite", about: "Macro and on-chain averaged. Its cuts set the regime." });
+          href: "/regime#composite",
+          about: this.backdropFactorIn
+            ? "Macro, on-chain and equity factor averaged. Its cuts set the regime."
+            : "Macro and on-chain averaged. Its cuts set the regime." });
       }
       /** @type {Record<string, string>} */
       const about = {
         macro: "Eight macro indicators: rates, credit spreads, the dollar, volatility.",
         onchain: "Ten on-chain indicators: DeFi TVL, stablecoins, activity, new DEX pools.",
-        factor: this.backdropV0
-          ? "Eight equity factor signals, in the composite of this older reading."
-          : "Eight equity factor signals, shown for context. Not in the composite.",
+        factor: this.backdropFactorIn
+          ? "Eight equity factor signals, averaged into the composite."
+          : "Eight equity factor signals, left out of this reading's composite.",
       };
       for (const [key, label] of [["macro", "Macro"], ["onchain", "On-chain"], ["factor", "Equity factor"]]) {
         const v = b[key];
         const regime = b[`${key}Regime`];
         if (v === null && !regime) continue;
-        const kind = key === "factor" && !this.backdropV0 ? "context" : "input";
+        const kind = key === "factor" && !this.backdropFactorIn ? "context" : "input";
         rows.push({ key, label, v, regime, kind, at: v === null ? "" : at(v), href: `/regime#panel-${key}`, about: about[key] });
       }
       return rows;
