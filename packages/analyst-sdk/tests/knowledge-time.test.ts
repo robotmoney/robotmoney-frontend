@@ -29,6 +29,7 @@ import { parseBlockchainChart } from "../src/extract/blockchain-com.ts";
 import { parseYahoo, parseYahooClose } from "../src/extract/yahoo.ts";
 import { parseFredCsv } from "../src/extract/fred.ts";
 import { parseMultplHtml } from "../src/extract/shiller.ts";
+import { enumerateMonths } from "../src/extract/edgar.ts";
 
 setDefaultTimeout(120_000);
 
@@ -227,6 +228,13 @@ describe("each extractor pins the UTC day of a value around midnight (finding E5
     const chart = { chart: { result: [{ timestamp: [MIDNIGHT - 1, MIDNIGHT], indicators: { quote: [{ close: [1, 2] }], adjclose: [{ adjclose: [1, 2] }] } }] } };
     expect(parseYahoo(chart).map((p) => p.date)).toEqual(["2024-02-29", "2024-03-01"]);
     expect(parseYahooClose(chart).map((p) => p.date)).toEqual(["2024-02-29", "2024-03-01"]);
+  });
+
+  test("EDGAR: a month's count is stamped on its last UTC day, never the next month's first", () => {
+    expect(enumerateMonths("2024-02-29", "2024-03-01")).toEqual([
+      { monthStart: "2024-02-01", monthEnd: "2024-02-29" },
+      { monthStart: "2024-03-01", monthEnd: "2024-03-31" },
+    ]);
   });
 
   test("FRED and multpl: period dates are kept as served, with no time zone shift", () => {

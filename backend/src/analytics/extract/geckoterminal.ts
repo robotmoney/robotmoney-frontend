@@ -9,6 +9,10 @@
 // CSV floor itself), persistence is the orchestrator's job here: the append-only
 // merge into raw_indicator_history accumulates the daily history.
 //
+// Day boundary (issue 1733, finding E5): the point is dated the UTC day of the
+// fetch instant; that day ends at the next 00:00:00Z. A count fetched before
+// then is provisional: the day's full count is known only after it ends.
+//
 // Caveat: paginates at most MAX_PAGES × ~20 pools, so the busiest days (Solana
 // meme manias) under-count; relative intensity still ranks correctly, which is
 // what the rolling-percentile classifier uses. NEW_TOKENS carries sign -1.
