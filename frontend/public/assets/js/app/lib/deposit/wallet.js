@@ -25,6 +25,15 @@ export const REOWN_PROJECT_ID = "47925b0f4aa68c28fb5b0760e9dd0a36";
 
 let loading = null;
 
+/**
+ * What a call adds to an aggregate3 multicall once encoded: its (address, bool,
+ * bytes) tuple with offsets, 160 bytes, plus its calldata padded to 32. Every
+ * argument the page passes is a static type, so the calldata is 4 + 32 each.
+ */
+const callBytes = (c) => 160 + Math.ceil((4 + 32 * (c.args?.length ?? 0)) / 32) * 32;
+/** Encoded bytes per multicall. Hex doubles them: a request body stays near 14 KB, under Reown's 16 KiB (see readMany). */
+const READ_BUDGET = 7000;
+
 /** Load the kit once and open a session. Resolves to the handle the page uses. */
 /** EIP-1967: keccak256("eip1967.proxy.implementation") - 1. */
 const IMPL_SLOT = "0x360894a13ba1a3210667c828492db98dca3e2076cc3735a920a3ca505d382bbc";
@@ -40,7 +49,11 @@ function boot(kit) {
   const networks = [kit.base];
   // A local-only node (manifest.js `rpc`, an anvil fork) replaces Base's RPC for reads and sends alike.
   const customRpcUrls = MANIFEST.rpc ? { [`eip155:${MANIFEST.chainId}`]: [{ url: MANIFEST.rpc }] } : undefined;
-  const adapter = new kit.WagmiAdapter({ networks, projectId: REOWN_PROJECT_ID, customRpcUrls });
+  // No client-level merging (wagmi's default): it merges concurrent reads into
+  // one multicall capped by RAW calldata, but each call costs about 190 bytes
+  // once encoded, so three concurrent vault reads made one 17.5 KB request and
+  // Reown's RPC refused it (see readMany). readMany packs by encoded size instead.
+  const adapter = new kit.WagmiAdapter({ networks, projectId: REOWN_PROJECT_ID, customRpcUrls, batch: { multicall: false } });
   const config = adapter.wagmiConfig;
   const modal = kit.createAppKit({
     adapters: [adapter],
@@ -94,11 +107,28 @@ function boot(kit) {
 
     /** One contract read on Base. */
     read: (c) => kit.readContract(config, { chainId: MANIFEST.chainId, ...c }),
-    /** Many reads in one round trip (multicall); throws on the first failure. */
+    /**
+     * Many reads in few round trips (multicall); throws on the first failure.
+     * Reown's RPC, the deployed site's, answers a request body over 16 KiB with
+     * a bare 403 and no CORS header, so the browser reports a CORS error and the
+     * page reads nothing (measured 24 Nov 2026; Base's public RPC takes it). A
+     * multicall grows with its calls, and the request list grows with every
+     * request on the queue, so calls are packed into multicalls of at most
+     * READ_BUDGET encoded bytes (36 argument-free calls, 31 with one argument).
+     */
     async readMany(cs) {
       if (!cs.length) return [];
-      const res = await kit.readContracts(config, { contracts: cs.map((c) => ({ chainId: MANIFEST.chainId, ...c })), allowFailure: false });
-      return res;
+      const parts = [];
+      let part = [], size = 0;
+      for (const c of cs) {
+        const b = callBytes(c);
+        if (part.length && size + b > READ_BUDGET) { parts.push(part); part = []; size = 0; }
+        part.push(c); size += b;
+      }
+      parts.push(part);
+      // batchSize (raw calldata) above any part's, so the kit sends each part whole.
+      const res = await Promise.all(parts.map((p) => kit.readContracts(config, { contracts: p.map((c) => ({ chainId: MANIFEST.chainId, ...c })), allowFailure: false, batchSize: READ_BUDGET })));
+      return res.flat();
     },
     /** A mined transaction's receipt. */
     receipt: (hash) => kit.getTransactionReceipt(config, { chainId: MANIFEST.chainId, hash }),
