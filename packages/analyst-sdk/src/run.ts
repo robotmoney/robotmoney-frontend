@@ -15,7 +15,7 @@ import { CURRENT_REGIME_VERSION, REGIME_VERSIONS, isRegimeVersion, type RegimeVe
 import { cutAtAsof, latestCompleteDay, missingOnDay, prepareRegimeInputs, type MissingIndicator } from "./prepare.ts";
 import { LEDGER_EXTRA_KEYS } from "./extras.ts";
 import { resolveInputHistory } from "./series-ids.ts";
-import { ratiosFromLegs } from "./transform/ratios.ts";
+import { ratioDeclarationsFor, ratiosFromLegs } from "./transform/ratios.ts";
 import { assertRequiredCoverage } from "./coverage.ts";
 
 export const BACKFILL_START = "2018-01-01";
@@ -136,7 +136,7 @@ export function runRegime(input: RawIndicatorHistory, opts: RunOptions = {}): Ru
   }
   // Input names (input id, storage key or source id, D74) -> the ids read
   // below, and each ratio the input does not store from its legs (4.3).
-  const rawIn = ratiosFromLegs(input, resolveInputHistory(input));
+  const rawIn = ratiosFromLegs(input, resolveInputHistory(input), ratioDeclarationsFor(version));
   const start = opts.start ?? BACKFILL_START;
   let asof = opts.asof;
   assertIsoDate("start", start);
@@ -184,8 +184,8 @@ export function runRegime(input: RawIndicatorHistory, opts: RunOptions = {}): Ru
   if (dayRule === "score-newest") {
     asof ??= maxDate;
   } else if (asof === undefined) {
-    const day = latestCompleteDay(raw, { notAfter: maxDate, notBefore: start, indicators });
-    if (day === null) return { kind: "incomplete", asof: maxDate, missing: missingOnDay(raw, maxDate, indicators) };
+    const day = latestCompleteDay(raw, { notAfter: maxDate, notBefore: start, indicators, version });
+    if (day === null) return { kind: "incomplete", asof: maxDate, missing: missingOnDay(raw, maxDate, indicators, version) };
     asof = day;
     if (asof < maxDate) {
       const cut: RawIndicatorHistory = {};
@@ -193,12 +193,12 @@ export function runRegime(input: RawIndicatorHistory, opts: RunOptions = {}): Ru
       raw = cut;
     }
   } else {
-    const missing = missingOnDay(raw, asof, indicators);
+    const missing = missingOnDay(raw, asof, indicators, version);
     if (missing.length > 0) return { kind: "incomplete", asof, missing };
   }
   // The fill policy already masked `transformed`; passing `ages` keeps the
   // global-cap mask too, which leaves a policy-masked series unchanged.
-  const { dateAxis, transformed, ages } = prepareRegimeInputs(raw, { start, asof, indicators });
+  const { dateAxis, transformed, ages } = prepareRegimeInputs(raw, { start, asof, indicators, version });
   const result = computeRegime(transformed, dateAxis, [...panels], ages, undefined, version, undefined, indicators);
   const out: RunResult = { kind: "complete", version, dateAxis, result };
   if (opts.factor) out.factor = computeRegime(transformed, dateAxis, ALL_PANELS, ages, undefined, version, undefined, indicators);

@@ -139,8 +139,12 @@ describe("the variants exercise the edge cases they are named for", () => {
     expect(new Set(sharpes)).toEqual(new Set([0]));
   });
 
-  test("production: under the current version, the default envelope is the committed CLI golden", async () => {
-    const current = JSON.stringify(buildReport(runRegime(computed.production.history)), null, 2) + "\n";
+  // The production variant drops the ratio legs (the originals predate them).
+  // The current version reads the equity ratios from their raw-close legs
+  // (issue 1733), so it runs on the committed fixture, legs included.
+  test("production: under the current version, the committed fixture's default envelope is the committed CLI golden", async () => {
+    const fixture = toHistory(parseRawHistory(await Bun.file(join(import.meta.dir, "fixtures/raw-indicator-history.csv")).text()));
+    const current = JSON.stringify(buildReport(runRegime(fixture)), null, 2) + "\n";
     expect(current).toBe(await Bun.file(join(import.meta.dir, "golden/regime-report.json")).text());
   });
 });

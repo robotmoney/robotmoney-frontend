@@ -9,6 +9,9 @@
 //
 // multpl wins on overlap; datahub backfills older dates. Any value <= 0 is
 // rejected (CAPE is a strictly positive valuation ratio). SHILLER_CAPE, sign -1.
+// Day boundary (issue 1733, finding E5): a CAPE row is dated the 1st of the
+// month it averages (its period date). It is known from the 1st of the next
+// month: SHILLER_CAPE's publication rule.
 import type { Point } from "../types.ts";
 import { fetchText } from "./http.ts";
 

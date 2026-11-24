@@ -9,6 +9,10 @@
 // parseYahoo's value is adjclose when finite, else the raw close; NaN rows are
 // dropped. parseYahooClose's value is the raw close only (issue 1644: a ratio
 // leg is source data, so never the dividend-adjusted close).
+// Day boundary (issue 1733, finding E5): a row's timestamp is its session's
+// open instant; the value belongs to that UTC day (isoDay), which ends at the
+// next 00:00:00Z. Crypto pairs trade a UTC day; an exchange session closes
+// before it ends.
 import type { Point } from "../types.ts";
 import { isoDay } from "../transform/math.ts";
 import { fetchJson } from "./http.ts";

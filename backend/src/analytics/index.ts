@@ -23,7 +23,7 @@
 // never referenced on this path. Tests inject a fixture-backed AnalyticsDataSource.
 import { ALL_PANELS, DAY_RULE, INDICATORS, PANELS, fillMaxAgeDays, fillPolicyOf, type DayRule, type Panel } from "./analyze/indicators.ts";
 import { LEDGER_EXTRA_KEYS, RATIO_IDS, STORED_RATIO_IDS, STORED_UNDER, inputHistoryFromStorage, storedIndicatorId } from "./extras.ts";
-import { ratiosFromLegs } from "../../../packages/analyst-sdk/src/transform/ratios.ts";
+import { ratioDeclarationsFor, ratiosFromLegs } from "../../../packages/analyst-sdk/src/transform/ratios.ts";
 import { computeRegime, type RegimeComputeResult } from "./analyze/compute.ts";
 import { cutAtAsof, latestCompleteDay, missingOnDay, prepareRegimeInputs } from "./prepare.ts";
 import { IncompleteDayError } from "../../../packages/analyst-sdk/src/run.ts";
@@ -360,14 +360,14 @@ export async function runAnalytics(
     for (const ind of INDICATORS) byInput[ind.id] = merged[storedIndicatorId(ind.id)] ?? [];
     const dayRule = opts.dayRule ?? DAY_RULE;
     const runDate = (opts.now ?? new Date()).toISOString().slice(0, 10);
-    const scored = dayRule === "require-complete" && asof === runDate ? latestCompleteDay(byInput, { notAfter: asof, notBefore: BACKFILL_START }) : null;
+    const scored = dayRule === "require-complete" && asof === runDate ? latestCompleteDay(byInput, { notAfter: asof, notBefore: BACKFILL_START, version: regimeVersion }) : null;
     if (dayRule === "score-newest") {
       // As before: the day given is scored; an indicator older than its policy is NaN that day.
     } else if (scored !== null) {
       regimeAsof = scored;
       if (scored !== asof) logger.log?.(`[analytics] regime: ${asof} is not complete; scoring the latest complete day on or before it, ${scored}`);
     } else {
-      const missing = missingOnDay(byInput, asof);
+      const missing = missingOnDay(byInput, asof, undefined, regimeVersion);
       if (missing.length > 0) {
         const err = new IncompleteDayError({ kind: "incomplete", asof, missing });
         logger.error?.(`[analytics] regime ${err.message}; the run fails and persists nothing`);
@@ -392,7 +392,7 @@ export async function runAnalytics(
     for (const ind of INDICATORS) registry[ind.id] = committedFloor[storedIndicatorId(ind.id)] ?? [];
     // Issue 1644: each ratio under its declared parameters, from the legs this
     // source served when the ratio is not read as stored.
-    registry = withRatios(fetched, registry);
+    registry = withRatios(fetched, registry, regimeVersion);
     inputEvidence.registry = registryEvidence(merged, registry);
     mergedRaw = registry;
     collector.stage("store", "ok", "persisted merged raw indicator floor and read the committed floor back", t0);
@@ -468,7 +468,7 @@ export async function runAnalytics(
     regimeVersionIds = committed.values.map((v) => v.versionId);
     // Issue 1644: each ratio under its declared parameters (transform/ratios.ts).
     const ledgerInput = inputHistoryFromStorage(committed.values);
-    const fromLedger = withRatios(ledgerInput, ledgerInput);
+    const fromLedger = withRatios(ledgerInput, ledgerInput, regimeVersion);
     registry = {};
     for (const ind of INDICATORS) registry[ind.id] = fromLedger[ind.id] ?? [];
     const X = LEDGER_EXTRA_KEYS;
@@ -494,7 +494,7 @@ export async function runAnalytics(
     // policy is not zero; a day older than its policy allows is already NaN in
     // `transformed` (issue 1655), and computeRegime's global-cap mask over the
     // same ages leaves it unchanged. Built by the shared SDK seam.
-    const { dateAxis, transformed, lastRaw, ages } = prepareRegimeInputs(registry, { start: BACKFILL_START, asof: regimeAsof });
+    const { dateAxis, transformed, lastRaw, ages } = prepareRegimeInputs(registry, { start: BACKFILL_START, asof: regimeAsof, version: regimeVersion });
     if (regimeAsof !== asof) extras = { spx: cutAtAsof(extras.spx, regimeAsof), eth: cutAtAsof(extras.eth, regimeAsof), tbill3m: cutAtAsof(extras.tbill3m, regimeAsof) };
     collector.stage("transform", "ok", `built ${dateAxis.length}-day date axis and aligned/transformed ${INDICATORS.length} indicator(s)`, t0);
 
@@ -833,10 +833,11 @@ function recordAcquisitionEvidence(
 function withRatios(
   input: Record<string, { date: string; value: number }[]>,
   resolved: Record<string, { date: string; value: number }[]>,
+  version: RegimeVersion,
 ): Record<string, { date: string; value: number }[]> {
   // A stored ratio the fetch left empty is no stored ratio.
   const present = Object.fromEntries(Object.entries(resolved).filter(([id, pts]) => !RATIO_IDS.has(id) || pts.length > 0));
-  const out = { ...ratiosFromLegs(input, present) };
+  const out = { ...ratiosFromLegs(input, present, ratioDeclarationsFor(version)) };
   for (const id of RATIO_IDS) out[id] ??= [];
   return out;
 }

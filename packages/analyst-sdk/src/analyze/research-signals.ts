@@ -15,6 +15,7 @@ import {
   rollingPercentileRank,
   pctChangeLag,
 } from "../transform/math.ts";
+import { knowledgeTimeSeries, publicationRuleOf, type PublicationRule } from "../transform/knowledge-time.ts";
 import { centeredCrossDD, Compounder, ddDiv, ddDivD, ddValue, mean2, sumDD } from "../transform/exact.ts";
 
 const CHANNEL_START = "2018-01-01";
@@ -160,6 +161,59 @@ function latestOf(dates: string[], arr: number[]): { date: string | null; value:
   return { date: null, value: null };
 }
 
+// ─── KNOWLEDGE TIME (issue 1733) ─────────────────────────────────────────────
+// Every research input declares when its source publishes a period's value.
+// Each input is read by knowledge time: a value from the day it was published,
+// cut at the as-of day (transform/knowledge-time.ts). A missing rule is a
+// PublicationRuleError naming the input, before any computation.
+const SAME_DAY: PublicationRule = { kind: "same-day" };
+
+export const CHANNEL_PUBLICATION: Readonly<Record<keyof ChannelInputs, PublicationRule>> = Object.freeze({
+  btc: SAME_DAY,
+  qqq: SAME_DAY,
+  spy: SAME_DAY,
+  stables: SAME_DAY,
+});
+
+export const LATE_CYCLE_PUBLICATION: Readonly<Record<keyof LateCycleInputs, PublicationRule>> = Object.freeze({
+  spy: SAME_DAY,
+  rsp: SAME_DAY,
+  top7: SAME_DAY,
+  // EDGAR counts are stamped at month end, the day the month's count is complete.
+  mna: SAME_DAY,
+  // Z.1 is released about 10 weeks after the quarter ends; FRED dates the
+  // quarter by its first day. The 1st of the 6th month after is on or after
+  // every release (Q1, dated Jan 1, is known from Jul 1).
+  margin: { kind: "months-later", months: 6 },
+  // UMCSENT's final reading for a month is released at the month's end; FRED
+  // dates it the 1st. It is known from the 1st of the next month.
+  conf: { kind: "months-later", months: 1 },
+});
+
+/**
+ * Each named input read by knowledge time under its declared rule, cut at
+ * `asof`. Throws PublicationRuleError for a name without a rule.
+ */
+export function knownResearchInputs<T extends object>(
+  inputs: T,
+  names: readonly (keyof T & string)[],
+  rules: Readonly<Partial<Record<string, unknown>>>,
+  asof: string,
+): T {
+  const out: Record<string, unknown> = { ...(inputs as Record<string, unknown>) };
+  for (const name of names) {
+    const rule = publicationRuleOf({ id: `research input ${name}`, publication: rules[name] });
+    const v = (inputs as Record<string, unknown>)[name] as Point[] | Point[][];
+    const stamp = (pts: Point[]) => knowledgeTimeSeries(pts, rule, asof).map((p) => ({ date: p.date, value: p.value }));
+    out[name] = Array.isArray(v[0]) ? (v as Point[][]).map(stamp) : stamp(v as Point[]);
+  }
+  return out as T;
+}
+
+// Rows of a period-dated input whose value is known on or before `asof`.
+const publishedBy = (pts: Point[], rule: PublicationRule, asof: string): Point[] =>
+  pts.filter((p) => knowledgeTimeSeries([p], rule, asof).length > 0).map((p) => ({ date: p.date, value: p.value }));
+
 // ─── CHANNEL DIVERGENCE ──────────────────────────────────────────────────────
 // "Is the easy-money → crypto transmission channel breaking down?"
 export interface ChannelInputs {
@@ -172,7 +226,14 @@ export interface ChannelInputs {
 const channelRead = (p: number) =>
   !Number.isFinite(p) ? NO_READ : p >= 0.6 ? "channel intact" : p <= 0.35 ? "breaking down" : "softening";
 
-export function computeChannelDivergence(inputs: ChannelInputs, asof: string): ResearchPayload {
+// `publication` defaults to the declared rules; a fidelity replay of the
+// period-dated original passes its own (issue 1733).
+export function computeChannelDivergence(
+  given: ChannelInputs,
+  asof: string,
+  publication: Readonly<Partial<Record<keyof ChannelInputs, PublicationRule>>> = CHANNEL_PUBLICATION,
+): ResearchPayload {
+  const inputs = knownResearchInputs(given, ["btc", "qqq", "spy", "stables"], publication, asof);
   const dateAxis = buildDateAxis(CHANNEL_START, asof);
   const btcA = alignDailyForwardFill(inputs.btc, dateAxis);
   const qqqA = alignDailyForwardFill(inputs.qqq, dateAxis);
@@ -281,7 +342,12 @@ export interface LateCycleInputs {
 const lateRead = (p: number) =>
   !Number.isFinite(p) ? NO_READ : p >= 0.7 ? "saturated (late-cycle)" : p >= 0.5 ? "elevated" : "benign";
 
-export function computeLateCycle(inputs: LateCycleInputs, asof: string): ResearchPayload {
+export function computeLateCycle(
+  given: LateCycleInputs,
+  asof: string,
+  publication: Readonly<Partial<Record<keyof LateCycleInputs, PublicationRule>>> = LATE_CYCLE_PUBLICATION,
+): ResearchPayload {
+  const inputs = knownResearchInputs(given, ["spy", "rsp", "top7", "mna", "margin", "conf"], publication, asof);
   const dateAxis = buildDateAxis(LATECYCLE_START, asof);
   const n = dateAxis.length;
 
@@ -352,10 +418,11 @@ export function computeLateCycle(inputs: LateCycleInputs, asof: string): Researc
       concentration_top7_vs_spy_pct: wseries(top7VsSpyPct),
       mna_s4_monthly: inputs.mna.map((p) => ({ date: p.date, value: p.value })),
       mna_pct: wseries(mnaPct),
-      margin_debt_level: inputs.margin.map((p) => ({ date: p.date, value: p.value })),
+      // Levels keep their period dates, listing only those published by asof.
+      margin_debt_level: publishedBy(given.margin, publicationRuleOf({ id: "research input margin", publication: publication.margin }), asof),
       margin_debt_yoy: wseries(marginYoY),
       margin_debt_yoy_pct: wseries(marginYoYPct),
-      consumer_conf_level: inputs.conf.map((p) => ({ date: p.date, value: p.value })),
+      consumer_conf_level: publishedBy(given.conf, publicationRuleOf({ id: "research input conf", publication: publication.conf }), asof),
       consumer_conf_pct: wseries(confPct),
     },
     summary: {

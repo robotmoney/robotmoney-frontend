@@ -463,3 +463,29 @@ describe("reference backtest: label shape, referenceStrategies and fill policies
     for (const m of Object.values(ref)) expect(m.composite!.end_date).toBe(axis[4]);
   });
 });
+
+// Issue 1733: the backtest reads labels computed by knowledge time. Revisions of
+// ICSA known a week after each first release (together with the next week's
+// first release) never reach a past day, so the backtest equals the one on the
+// first-release values; a run that reads the revisions by period date differs.
+describe("revision-at-asof selection (issue 1733)", () => {
+  const raw = toHistory(parseRawHistory(readFileSync(join(DIR, "fixtures/raw-indicator-history.csv"), "utf8")));
+  const revise = (v: number, i: number) => v * (i % 2 ? 1.5 : 0.6);
+  const icsaKnown = (date: string) => {
+    // ICSA is published the Thursday after its Saturday; the revision a week later.
+    const t = Date.parse(`${date}T00:00:00Z`) + (5 + 7) * 86_400_000;
+    return `${new Date(t).toISOString().slice(0, 10)}T13:30:00Z`;
+  };
+  const revised = { ...raw, ICSA: [...raw.ICSA!, ...raw.ICSA!.map((p, i) => ({ date: p.date, value: revise(p.value, i), known: icsaKnown(p.date) }))] };
+  const leaked = { ...raw, ICSA: raw.ICSA!.map((p, i) => ({ date: p.date, value: revise(p.value, i) })) };
+
+  test("given a revised fixture, the backtest uses the value known at each as-of day, not the later revision", () => {
+    const first = runRegime(raw);
+    const withRevisions = runRegime(revised);
+    expect(withRevisions.backtest).toBeDefined();
+    expect(JSON.stringify(withRevisions.backtest)).toBe(JSON.stringify(first.backtest));
+    expect(JSON.stringify(withRevisions.result.regime)).toBe(JSON.stringify(first.result.regime));
+    // Non-vacuity: reading the revisions by period date changes the regime.
+    expect(JSON.stringify(runRegime(leaked).result.signed.ICSA)).not.toBe(JSON.stringify(first.result.signed.ICSA));
+  });
+});

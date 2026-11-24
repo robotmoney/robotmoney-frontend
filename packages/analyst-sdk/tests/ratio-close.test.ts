@@ -1,6 +1,7 @@
 // Issue 1644: each ratio declares two methodology parameters in the registry,
 // ratioInput ("stored" | "legs") and ratioClose ("adjusted" | "raw"). The
-// shipped values ("stored", "adjusted") reproduce main; a malformed
+// values shipped before issue 1733 ("stored", "adjusted", which v3 keeps:
+// ratioDeclarationsFor("v3")) reproduce main; a malformed
 // declaration is refused when the registry loads; and changing either value
 // changes the output (non-vacuity). The choices themselves are research issue
 // 1673.
@@ -11,21 +12,29 @@ import { createFetchMemo, fetchAll, registryYahooPlan } from "../src/extract/sou
 import { fetchYahoo } from "../src/extract/yahoo.ts";
 import { MissingRatioLegError, RATIO_IDS, resolveInputHistory } from "../src/series-ids.ts";
 import { mergeRatioSeries } from "../src/transform/grid.ts";
-import { ratiosFromLegs } from "../src/transform/ratios.ts";
+import { ratioDeclarationsFor, ratiosFromLegs } from "../src/transform/ratios.ts";
 import { requireComplete, runRegime } from "../src/run.ts";
 import type { RawIndicatorHistory } from "../src/types.ts";
 import { fixture } from "./support/ratio-legs.ts";
 
 afterEach(() => { configureHttp({}); });
 
-const RATIOS = INDICATORS.filter((i) => RATIO_IDS.has(i.id));
+// The declarations v3 reads: every ratio "stored" and "adjusted" (issue 1733).
+const V3 = ratioDeclarationsFor("v3");
+const RATIOS = V3.filter((i) => RATIO_IDS.has(i.id));
 const copyWith = (id: string, patch: Partial<Indicator> | ((i: Indicator) => Indicator)): Indicator[] =>
-  INDICATORS.map((i) => (i.id !== id ? i : typeof patch === "function" ? patch(i) : { ...i, ...patch }));
-const resolve = (h: RawIndicatorHistory, inds: readonly Indicator[] = INDICATORS) => ratiosFromLegs(h, resolveInputHistory(h), inds);
+  V3.map((i) => (i.id !== id ? i : typeof patch === "function" ? patch(i) : { ...i, ...patch }));
+const resolve = (h: RawIndicatorHistory, inds: readonly Indicator[] = V3) => ratiosFromLegs(h, resolveInputHistory(h), inds);
+const EQUITY = ["IWF_IWD", "IWM_SPY", "MTUM_SPY", "SPHB_SPLV", "XLP_XLY", "XLU_SPY"];
 
-test("each of the eight ratios declares ratioInput stored and ratioClose adjusted, and no other indicator declares either", () => {
+test("the six equity ratios declare legs and raw closes, COPPER_GOLD and BTC_ETH stored and adjusted, v3 reads all eight stored and adjusted, and no other indicator declares either", () => {
   expect(RATIOS.map((i) => i.id).sort()).toEqual(["BTC_ETH", "COPPER_GOLD", "IWF_IWD", "IWM_SPY", "MTUM_SPY", "SPHB_SPLV", "XLP_XLY", "XLU_SPY"]);
   for (const r of RATIOS) expect({ id: r.id, input: r.ratioInput, close: r.ratioClose }).toEqual({ id: r.id, input: "stored", close: "adjusted" });
+  for (const r of INDICATORS.filter((x) => RATIO_IDS.has(x.id))) {
+    const want = EQUITY.includes(r.id) ? { input: "legs" as const, close: "raw" as const } : { input: "stored" as const, close: "adjusted" as const };
+    expect({ id: r.id, input: r.ratioInput, close: r.ratioClose }).toEqual({ id: r.id, ...want });
+  }
+  expect(ratioDeclarationsFor("v4")).toBe(INDICATORS);
   for (const i of INDICATORS.filter((x) => !RATIO_IDS.has(x.id))) expect({ id: i.id, input: i.ratioInput, close: i.ratioClose }).toEqual({ id: i.id, input: undefined, close: undefined });
   expect(validateRatioDeclarations(INDICATORS)).toBe(INDICATORS);
 });
@@ -75,7 +84,7 @@ test("for each ratio, on mocked charts whose close and adjclose differ, the rati
 });
 
 test("non-vacuity: ratioInput legs and ratioClose raw each change the output against the shipped values", () => {
-  const legs = copyWith("IWM_SPY", { ratioInput: "legs" });
+  const legs = copyWith("IWM_SPY", { ratioInput: "legs", ratioClose: "adjusted" });
   const legsRaw = copyWith("IWM_SPY", { ratioInput: "legs", ratioClose: "raw" });
   const shipped = resolve(fixture).IWM_SPY!;
   expect(shipped).toBe(fixture.IWM_SPY!);
@@ -90,7 +99,7 @@ test("non-vacuity: ratioInput legs and ratioClose raw each change the output aga
   // and only the .close legs it is a missing input.
   const closeOnly: RawIndicatorHistory = {};
   for (const sym of ["IWM", "SPY", "MTUM", "XLU"]) closeOnly[`yahoo:${sym}.close`] = fixture[`yahoo:${sym}.close`]!;
-  const rawOnly = INDICATORS.map((i) => (["IWM_SPY", "MTUM_SPY", "XLU_SPY"].includes(i.id) ? { ...i, ratioClose: "raw" as const } : i));
+  const rawOnly = V3.map((i) => (["IWM_SPY", "MTUM_SPY", "XLU_SPY"].includes(i.id) ? { ...i, ratioClose: "raw" as const } : i));
   expect(resolve(closeOnly, rawOnly).IWM_SPY).toEqual(fromRaw);
   expect(() => resolve(closeOnly)).toThrow(MissingRatioLegError);
 });
@@ -103,7 +112,7 @@ test("non-vacuity: ratioInput legs and ratioClose raw each change the output aga
 // and not the ranks. "legs" with "raw" moves the composite.
 test("non-vacuity: the factor run's composite series with IWM_SPY from its raw legs differs from the shipped one", () => {
   const fromRaw = resolve(fixture, copyWith("IWM_SPY", { ratioInput: "legs", ratioClose: "raw" })).IWM_SPY!;
-  const composite = (h: RawIndicatorHistory) => requireComplete(runRegime(h, { factor: true })).factor!.composite;
+  const composite = (h: RawIndicatorHistory) => requireComplete(runRegime(h, { factor: true, version: "v3" })).factor!.composite;
   const shipped = composite(fixture);
   expect(shipped.filter(Number.isFinite).length).toBeGreaterThan(100);
   expect(composite({ ...fixture, IWM_SPY: fromRaw })).not.toEqual(shipped);

@@ -40,6 +40,12 @@ type Pt = { date: string; value: number | null };
 // Fixture Pt[] (value nullable) → shipped-function Point[] input (value
 // required), dropping the pre-history / gap NaNs the same way a real fetcher's
 // sparse observation list would never contain them in the first place.
+// Issue 1733: the original read margin debt and consumer confidence on their
+// period dates. These fidelity checks pin the signal math, so they replay the
+// original's reading; the declared publication rules are pinned by
+// packages/analyst-sdk/tests/knowledge-time.test.ts.
+const PERIOD_DATED = { margin: { kind: "same-day" }, conf: { kind: "same-day" }, spy: { kind: "same-day" }, rsp: { kind: "same-day" }, top7: { kind: "same-day" }, mna: { kind: "same-day" } } as const;
+
 function toPoints(pts: Pt[]): { date: string; value: number }[] {
   return pts.filter((p): p is { date: string; value: number } => p.value != null);
 }
@@ -110,7 +116,7 @@ test("late-cycle fidelity: computeLateCycle (shipped) reproduces mna_pct, margin
     margin: toPoints(lc.indicators.margin_debt_level),
     conf: toPoints(lc.indicators.consumer_conf_level),
   };
-  const result = computeLateCycle(inputs, lc.asof);
+  const result = computeLateCycle(inputs, lc.asof, PERIOD_DATED);
 
   const m = maxDiffByDate(lc.indicators.mna_pct, result.indicators?.mna_pct);
   console.log(`[research-fidelity] mna_pct: compared=${m.n} maxDiff=${m.max}`);
@@ -186,7 +192,7 @@ test("late-cycle fidelity via the EDGAR refresh path: a full re-crawl, run throu
     margin: toPoints(lc.indicators.margin_debt_level),
     conf: toPoints(lc.indicators.consumer_conf_level),
   };
-  const result = computeLateCycle(inputs, lc.asof);
+  const result = computeLateCycle(inputs, lc.asof, PERIOD_DATED);
 
   const m = maxDiffByDate(lc.indicators.mna_pct, result.indicators?.mna_pct);
   console.log(`[research-fidelity] mna_pct (via refreshEdgarIncremental full re-crawl + computeLateCycle): compared=${m.n} maxDiff=${m.max}`);

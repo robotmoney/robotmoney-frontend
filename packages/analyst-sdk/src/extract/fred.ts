@@ -14,6 +14,9 @@
 // floor, which keeps every row as the window moves.
 //
 // FRED publishes missing days as "." → NaN (dropped); consumers forward-fill.
+// Day boundary (issue 1733, finding E5): FRED dates are period dates, kept as
+// served. The day a value is known is the indicator's publication rule
+// (transform/knowledge-time.ts), not this date.
 import type { Point } from "../types.ts";
 import { fetchText } from "./http.ts";
 

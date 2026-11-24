@@ -8,6 +8,8 @@ import type { RawIndicatorHistory } from "./types.ts";
 import { INDICATORS, fillMaxAgeDays, fillPolicyOf, type Indicator } from "./analyze/indicators.ts";
 import { alignDailyForwardFill, alignDailyZeroFill, buildDateAxis, forwardFillAge } from "./transform/math.ts";
 import { applyTransform } from "./transform/transforms.ts";
+import { knowledgeTimeSeries, publicationRuleOf } from "./transform/knowledge-time.ts";
+import { CURRENT_REGIME_VERSION, REGIME_KNOWLEDGE_TIME, type RegimeVersion } from "./analyze/regime-versions.ts";
 
 export interface PreparedRegimeInputs {
   dateAxis: string[];
@@ -17,7 +19,8 @@ export interface PreparedRegimeInputs {
   // Days since the last real observation, per indicator whose policy is NOT
   // zero. Zero-fill indicators are left out: a gap there is a real 0.
   ages: Record<string, number[]>;
-  // Last row of each input series as given (null when empty). Not cut at asof.
+  // Last row of each input series known on or before asof (null when none),
+  // dated by its period date (issue 1733, finding P1).
   lastRaw: Record<string, { date: string; value: number } | null>;
 }
 
@@ -27,6 +30,28 @@ export interface PreparedRegimeInputs {
 // cut, a job run for a past as-of day read prices dated after it).
 export function cutAtAsof<T extends { date: string }>(rows: readonly T[], asof: string): T[] {
   return rows.filter((r) => r.date <= asof);
+}
+
+// Knowledge time (issue 1733, docs/technical/regime-engine.md section 8.1.2).
+// Every indicator must declare a publication rule, or this throws
+// PublicationRuleError naming it. Under a version that reads by knowledge time
+// (REGIME_KNOWLEDGE_TIME) each series is re-dated to the day each value was
+// known and cut at `asof` (knowledgeTimeSeries); under any other version it is
+// cut at `asof` by period date, as before. Rows are { date, value, period }.
+export function knowledgeTimeHistory(
+  raw: RawIndicatorHistory,
+  opts: { asof?: string; indicators?: readonly Indicator[]; version?: RegimeVersion } = {},
+): Record<string, { date: string; value: number; period: string }[]> {
+  const indicators = opts.indicators ?? INDICATORS;
+  const rules = indicators.map((ind) => publicationRuleOf(ind));
+  const byKnowledge = REGIME_KNOWLEDGE_TIME[opts.version ?? CURRENT_REGIME_VERSION];
+  const out: Record<string, { date: string; value: number; period: string }[]> = {};
+  indicators.forEach((ind, k) => {
+    const s = raw[ind.id] ?? [];
+    if (byKnowledge) out[ind.id] = knowledgeTimeSeries(s, rules[k]!, opts.asof);
+    else out[ind.id] = (opts.asof === undefined ? s : cutAtAsof(s, opts.asof)).map((p) => ({ date: p.date, value: p.value, period: p.date }));
+  });
+  return out;
 }
 
 // Axis start..asof (inclusive). Rows dated after asof never land on the axis, so
@@ -44,18 +69,20 @@ export function cutAtAsof<T extends { date: string }>(rows: readonly T[], asof: 
 // masking computeRegime once applied with the global cap, moved per indicator.
 export function prepareRegimeInputs(
   raw: RawIndicatorHistory,
-  opts: { start: string; asof: string; indicators?: readonly Indicator[] },
+  opts: { start: string; asof: string; indicators?: readonly Indicator[]; version?: RegimeVersion },
 ): PreparedRegimeInputs {
   const indicators = opts.indicators ?? INDICATORS;
   const policies = indicators.map((ind) => fillPolicyOf(ind));
+  const known = knowledgeTimeHistory(raw, { asof: opts.asof, indicators, version: opts.version });
   const dateAxis = buildDateAxis(opts.start, opts.asof);
   const transformed: Record<string, number[]> = {};
   const ages: Record<string, number[]> = {};
   const lastRaw: PreparedRegimeInputs["lastRaw"] = {};
   indicators.forEach((ind, k) => {
     const policy = policies[k]!;
-    const s = raw[ind.id] ?? [];
-    lastRaw[ind.id] = s.length ? s[s.length - 1]! : null;
+    const s = known[ind.id]!;
+    const last = s.length ? s[s.length - 1]! : null;
+    lastRaw[ind.id] = last ? { date: last.period, value: last.value } : null;
     if (policy.kind === "zero") {
       transformed[ind.id] = applyTransform(ind.transform, alignDailyZeroFill(s, dateAxis));
       return;
@@ -74,7 +101,8 @@ export function prepareRegimeInputs(
 
 export interface MissingIndicator {
   id: string;
-  // Date of the indicator's last real observation on or before the day.
+  // Period date of the indicator's last real observation known on or before
+  // the day (issue 1733: its age counts from the day it was known).
   lastObserved: string;
 }
 
@@ -84,25 +112,27 @@ const dayNumber = (iso: string) => Date.parse(`${iso}T00:00:00Z`) / DAY_MS;
 // Per indicator, the ascending finite observation dates. An indicator with no
 // observation on or before a day (a series that has not started) does not make
 // that day incomplete: it is excluded with weight 0, as before.
-function observedDates(raw: RawIndicatorHistory, indicators: readonly Indicator[]) {
-  const out: { id: string; maxAge: number; dates: string[] }[] = [];
+// Under knowledge time (issue 1733) an observation is dated the day it was known.
+function observedDates(raw: RawIndicatorHistory, indicators: readonly Indicator[], version?: RegimeVersion) {
+  const out: { id: string; maxAge: number; dates: string[]; periods: string[] }[] = [];
+  const known = knowledgeTimeHistory(raw, { indicators, version });
   for (const ind of indicators) {
     const maxAge = fillMaxAgeDays(fillPolicyOf(ind));
-    const dates = (raw[ind.id] ?? []).filter((p) => Number.isFinite(p.value)).map((p) => p.date).sort();
-    if (dates.length) out.push({ id: ind.id, maxAge, dates });
+    const rows = known[ind.id]!.filter((p) => Number.isFinite(p.value)).sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+    if (rows.length) out.push({ id: ind.id, maxAge, dates: rows.map((p) => p.date), periods: rows.map((p) => p.period) });
   }
   return out;
 }
 
-// Last element <= day, by binary search over ascending ISO dates.
-function lastOnOrBefore(dates: string[], day: string): string | null {
+// Index of the last element <= day, by binary search over ascending ISO dates (-1: none).
+function lastOnOrBefore(dates: string[], day: string): number {
   let lo = 0;
   let hi = dates.length - 1;
-  let found: string | null = null;
+  let found = -1;
   while (lo <= hi) {
     const mid = (lo + hi) >> 1;
     if (dates[mid]! <= day) {
-      found = dates[mid]!;
+      found = mid;
       lo = mid + 1;
     } else hi = mid - 1;
   }
@@ -115,8 +145,8 @@ function missingFrom(obs: ReturnType<typeof observedDates>, day: string): Missin
   for (const o of obs) {
     // Before an indicator's first observation it does not exist yet: not missing.
     if (o.dates[0]! > day) continue;
-    const last = lastOnOrBefore(o.dates, day)!;
-    if (d - dayNumber(last) > o.maxAge) missing.push({ id: o.id, lastObserved: last });
+    const k = lastOnOrBefore(o.dates, day);
+    if (d - dayNumber(o.dates[k]!) > o.maxAge) missing.push({ id: o.id, lastObserved: o.periods[k]! });
   }
   return missing;
 }
@@ -130,8 +160,9 @@ export function missingOnDay(
   raw: RawIndicatorHistory,
   day: string,
   indicators: readonly Indicator[] = INDICATORS,
+  version?: RegimeVersion,
 ): MissingIndicator[] {
-  return missingFrom(observedDates(raw, indicators), day);
+  return missingFrom(observedDates(raw, indicators, version), day);
 }
 
 /**
@@ -143,9 +174,9 @@ export function missingOnDay(
  */
 export function latestCompleteDay(
   raw: RawIndicatorHistory,
-  opts: { notAfter?: string; notBefore?: string; indicators?: readonly Indicator[] } = {},
+  opts: { notAfter?: string; notBefore?: string; indicators?: readonly Indicator[]; version?: RegimeVersion } = {},
 ): string | null {
-  const obs = observedDates(raw, opts.indicators ?? INDICATORS);
+  const obs = observedDates(raw, opts.indicators ?? INDICATORS, opts.version);
   if (obs.length === 0) return null;
   let newest = opts.notAfter ?? null;
   if (newest === null) for (const o of obs) if (newest === null || o.dates.at(-1)! > newest) newest = o.dates.at(-1)!;

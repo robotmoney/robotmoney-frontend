@@ -9,7 +9,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { FillPolicyError, INDICATORS, fillMaxAgeDays, fillPolicyOf, type FillPolicy, type Indicator } from "../src/analyze/indicators.ts";
 import { computeRegime } from "../src/analyze/compute.ts";
-import { prepareRegimeInputs } from "../src/prepare.ts";
+import { knowledgeTimeHistory, prepareRegimeInputs } from "../src/prepare.ts";
 import { BACKFILL_START, requireComplete, runRegime } from "../src/run.ts";
 import { MAX_FORWARD_FILL_DAYS, alignDailyForwardFill, forwardFillAge } from "../src/transform/math.ts";
 import { applyTransform } from "../src/transform/transforms.ts";
@@ -18,7 +18,7 @@ import { ratiosFromLegs } from "../src/transform/ratios.ts";
 import { resolveInputHistory } from "../src/series-ids.ts";
 
 const mk = (id: string, fill: unknown, fillReason: unknown): Indicator =>
-  ({ id, name: id, panel: "macro", source: "test", sign: 1, transform: "level", unit: "x", fill, fillReason }) as Indicator;
+  ({ id, name: id, panel: "macro", source: "test", sign: 1, transform: "level", unit: "x", fill, fillReason, publication: { kind: "same-day" } }) as Indicator;
 const START = "2024-01-01";
 const ASOF = "2024-01-10";
 // Real observations on Jan 2 and Jan 3 only.
@@ -192,8 +192,10 @@ describe("computeRegime with ages and maxForwardFillDays, as on main", () => {
     const asof = "2026-08-14";
     const prepared = prepareRegimeInputs(raw, { start: BACKFILL_START, asof });
     const axis = prepared.dateAxis;
+    // Both paths read the series by knowledge time (issue 1733).
+    const known = knowledgeTimeHistory(raw, { asof });
     const unmasked: Record<string, number[]> = {};
-    for (const ind of INDICATORS) unmasked[ind.id] = applyTransform(ind.transform, alignDailyForwardFill(raw[ind.id] ?? [], axis));
+    for (const ind of INDICATORS) unmasked[ind.id] = applyTransform(ind.transform, alignDailyForwardFill(known[ind.id] ?? [], axis));
     // Not vacuous: the policy masked some HY_OAS days the unmasked series still carries.
     const maskedDays = prepared.transformed.HY_OAS!.filter((v, i) => Number.isNaN(v) && Number.isFinite(unmasked.HY_OAS![i]!)).length;
     expect(maskedDays).toBeGreaterThan(30);

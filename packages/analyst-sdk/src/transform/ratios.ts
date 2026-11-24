@@ -22,6 +22,19 @@ import type { Point, RawIndicatorHistory } from "../types.ts";
 import { INDICATORS, isRatioIndicator, type Indicator } from "../analyze/indicators.ts";
 import { AmbiguousInputSeriesError, MissingRatioLegError, indicatorConsumer, olderAdjustedLegNames, ratioLegSourceId } from "../series-ids.ts";
 import { mergeRatioSeries } from "./grid.ts";
+import { REGIME_KNOWLEDGE_TIME, type RegimeVersion } from "../analyze/regime-versions.ts";
+
+/**
+ * The ratio declarations a methodology version reads (issue 1733). A version
+ * that reads by knowledge time reads the registry as declared (the equity
+ * ratios from raw closes, so a later dividend never changes a past ratio).
+ * Any other version (v3) reads every ratio as it was declared before:
+ * ratioInput "stored", ratioClose "adjusted", so its runs replay byte for byte.
+ */
+export function ratioDeclarationsFor(version: RegimeVersion, indicators: readonly Indicator[] = INDICATORS): readonly Indicator[] {
+  if (REGIME_KNOWLEDGE_TIME[version]) return indicators;
+  return indicators.map((ind) => (isRatioIndicator(ind) ? { ...ind, ratioInput: "stored" as const, ratioClose: "adjusted" as const } : ind));
+}
 
 // One selected leg of a ratio: its `.close`/`.adjclose` id and, for an
 // adjusted leg, its older names.

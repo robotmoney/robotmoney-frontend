@@ -147,7 +147,8 @@ test("issue 1653: fetchAll with its default list requests fredgraph.csv?id=BAA10
   expect(points.find((p) => p.date === "2026-11-11")).toBeUndefined();
   expect(points.at(-1)).toEqual({ date: "2026-11-17", value: 1.53 });
   // Every registry indicator is still fetched, and keyed as before.
-  for (const ind of INDICATORS) expect(ind.id in out || ind.id === "DEFI_GROWTH" || ind.id === "STABLES_GROWTH").toBe(true);
+  // A ratio declared ratioInput "legs" (issue 1733) is not stored: its legs are.
+  for (const ind of INDICATORS) expect(ind.id in out || ind.id === "DEFI_GROWTH" || ind.id === "STABLES_GROWTH" || ind.ratioInput === "legs").toBe(true);
 });
 
 test("issue 1653: a failed BAA10Y fetch is a warning on its own key; a failed registry fetch stays an error", async () => {
@@ -241,7 +242,7 @@ test("issue 1514: fetchAll with a memo requests each Yahoo symbol and DefiLlama 
 const SYMBOLS = ["BTC-USD", "ETH-USD", "GC=F", "HG=F", "IWD", "IWF", "IWM", "MTUM", "SPHB", "SPLV", "SPY", "XLP", "XLU", "XLY"];
 const LEG_KEYS = SYMBOLS.flatMap((s) => [`yahoo:${s}.adjclose`, `yahoo:${s}.close`]).sort();
 
-test("issue 1644: fetchAll over the eight ratios records the 28 leg keys once each, both closes, and each stored ratio as before", async () => {
+test("issue 1644: fetchAll over the eight ratios records the 28 leg keys once each, both closes, and each ratio declared stored as before", async () => {
   const counts = new Map<string, number>();
   configureHttp({ fetch: countingYahoo(counts) });
   const ratios = INDICATORS.filter((i) => i.source === "yahoo" && Array.isArray(i.series));
@@ -263,14 +264,21 @@ test("issue 1644: fetchAll over the eight ratios records the 28 leg keys once ea
     if (!raw) expect(points).toEqual(await memo.yahoo(meta.sourceKey.slice(6, -9), 0));
   }
   for (const sym of ["IWM", "SPHB", "SPLV", "MTUM", "IWF", "IWD", "XLU", "XLP", "XLY"]) expect(recorded.some((r) => r.meta.sourceKey === `yahoo:${sym}`)).toBe(false);
+  // Declared ratioInput "legs" (issue 1733, the six equity ratios): nothing stores the ratio.
+  const stored = ratios.filter((i) => i.ratioInput === "stored");
+  expect(stored.map((i) => i.id).sort()).toEqual(["BTC_ETH", "COPPER_GOLD"]);
+  for (const ind of ratios.filter((i) => i.ratioInput === "legs")) {
+    expect(recorded.some((r) => r.meta.sourceKey === `raw_indicator_history:${ind.id}`)).toBe(false);
+    expect(ind.id in out).toBe(false);
+  }
   // Declared ratioInput "stored": each ratio is stored and returned as on main, mergeRatioSeries of the two fetchYahoo series.
-  for (const ind of ratios) {
+  for (const ind of stored) {
     const [n, d] = ind.series as [string, string];
     const ratio = JSON.stringify(mergeRatioSeries(await memo.yahoo(n, 0), await memo.yahoo(d, 0)));
     expect({ id: ind.id, stored: JSON.stringify(recorded.find((r) => r.meta.sourceKey === `raw_indicator_history:${ind.id}`)!.points) }).toEqual({ id: ind.id, stored: ratio });
     expect(JSON.stringify(out[ind.id])).toBe(ratio);
   }
-  expect(Object.keys(out).sort()).toEqual([...LEG_KEYS, ...RATIO_IDS].sort());
+  expect(Object.keys(out).sort()).toEqual([...LEG_KEYS, ...stored.map((i) => i.id)].sort());
   for (const [sym, n] of counts) expect({ sym, n }).toEqual({ sym, n: 1 });
 });
 

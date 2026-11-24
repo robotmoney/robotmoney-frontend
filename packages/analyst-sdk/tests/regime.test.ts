@@ -339,12 +339,9 @@ describe("v4: labels are cut on the composite and the panel indices (issue 1652)
   test("the regime label equals smoothRegimes(composite, bucketFn) on the fixture; v3 keeps the rank cut", () => {
     expect(run.result.regime).toEqual(smoothRegimes(run.result.composite, bucketFn));
     expect(v3.result.regime).toEqual(smoothRegimes(v3.result.compositePercentile, bucketFn));
-    // The numbers do not depend on the version, except where v3's last-day refit
-    // changes the weights (issue 1739): the final day.
-    const last = run.dateAxis.length - 1;
-    expect(v3.result.composite.slice(0, last)).toEqual(run.result.composite.slice(0, last));
-    expect(v3.result.compositePercentile.slice(0, last)).toEqual(run.result.compositePercentile.slice(0, last));
-    expect(v3.result.panelIndices.macro!.slice(0, last)).toEqual(run.result.panelIndices.macro!.slice(0, last));
+    // The numbers differ by version: v3 refits on the last day (issue 1739) and
+    // reads by period date with adjusted stored ratios; v4 reads by knowledge
+    // time with raw-close equity ratios (issue 1733). The label cut is pinned above.
     expect(v3.result.regime).not.toEqual(run.result.regime);
   });
 
@@ -567,7 +564,7 @@ describe("collected series: BAA10Y is stored, not scored (issue 1653)", () => {
   // A trial macro entry: the collected fields plus scoring fields, no registry edit.
   const promoted: Indicator = {
     ...entry, panel: "macro", sign: -1, transform: "level",
-    fill: { kind: "forward", maxAgeDays: MAX_FORWARD_FILL_DAYS }, fillReason: "test: a trial promotion",
+    fill: { kind: "forward", maxAgeDays: MAX_FORWARD_FILL_DAYS }, fillReason: "test: a trial promotion", publication: { kind: "same-day" },
   };
   const trial = [...INDICATORS, promoted];
 

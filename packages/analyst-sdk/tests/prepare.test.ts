@@ -9,7 +9,7 @@ import type { FillPolicy, Indicator } from "../src/analyze/indicators.ts";
 const ZERO: FillPolicy = { kind: "zero" };
 const FORWARD: FillPolicy = { kind: "forward", maxAgeDays: 120 };
 const mk = (id: string, transform: string, fill: FillPolicy = FORWARD): Indicator => ({
-  id, name: id, panel: "macro", source: "test", sign: 1, transform, unit: "x", fill, fillReason: "test",
+  id, name: id, panel: "macro", source: "test", sign: 1, transform, unit: "x", fill, fillReason: "test", publication: { kind: "same-day" },
 });
 const TRANSFORMS = ["level", "change30", "change90", "sma4", "sma7", "trend_50_200", "rolling_sum_7"];
 const START = "2024-01-01";
@@ -29,14 +29,22 @@ describe("prepareRegimeInputs", () => {
     expect(p.ages.F).toEqual([NaN, NaN, 0, 1, 2, 0, 1, 2, 3, 4]);
   });
 
-  test("lastRaw is each series' last row as given (even after asof) and null when empty or absent", () => {
+  // Issue 1733, finding P1: lastRaw is cut at the as-of day like every field.
+  test("lastRaw is each series' last row known on or before asof, never one dated after it, and null when empty or absent", () => {
     const p = prepareRegimeInputs(
       { A: [{ date: "2024-01-02", value: 1 }, { date: "2024-01-20", value: 9 }], E: [] },
       { start: START, asof: ASOF, indicators: [mk("A", "level"), mk("E", "level"), mk("M", "level")] },
     );
-    expect(p.lastRaw.A).toEqual({ date: "2024-01-20", value: 9 });
+    expect(p.lastRaw.A).toEqual({ date: "2024-01-02", value: 1 });
+    for (const r of Object.values(p.lastRaw)) if (r) expect(r.date <= ASOF).toBe(true);
     expect(p.lastRaw.E).toBeNull();
     expect(p.lastRaw.M).toBeNull();
+    // A row published after asof (here a next-business-day series) is not lastRaw either.
+    const late = prepareRegimeInputs(
+      { B: [{ date: "2024-01-05", value: 2 }, { date: "2024-01-10", value: 3 }] },
+      { start: START, asof: ASOF, indicators: [{ ...mk("B", "level"), publication: { kind: "business-days", days: 1 } }] },
+    );
+    expect(late.lastRaw.B).toEqual({ date: "2024-01-05", value: 2 });
     // The row after asof never reaches the axis.
     expect(p.transformed.A!.length).toBe(10);
     expect(p.transformed.A![9]).toBe(1);
@@ -65,7 +73,8 @@ import * as sdk from "../src/index.ts";
 import { mergeRatioSeries } from "../src/transform/grid.ts";
 import { mergeRatioSeries as fetchRatio } from "../src/extract/sources.ts";
 import { resolveInputHistory } from "../src/series-ids.ts";
-import { ratiosFromLegs } from "../src/transform/ratios.ts";
+import { ratioDeclarationsFor, ratiosFromLegs } from "../src/transform/ratios.ts";
+const V3_RATIOS = ratioDeclarationsFor("v3");
 import { buildReport, runRegime as runRegimeOutcome, requireComplete, type RunResult } from "../src/run.ts";
 // Each run here scores a complete day (issue 1655): an IncompleteDay fails the test.
 const runRegime = (...a: Parameters<typeof runRegimeOutcome>) => requireComplete(runRegimeOutcome(...a));
@@ -78,8 +87,10 @@ describe("ratios from legs (SDK-10)", () => {
   let storedRun: RunResult;
   let sourceOnlyRun: RunResult;
   beforeAll(() => {
-    storedRun = runRegime(stored);
-    sourceOnlyRun = runRegime(sourceOnly);
+    // Issue 1733: v4 reads the equity ratios from raw-close legs; these pin the
+    // stored and adjusted declarations, which v3 keeps.
+    storedRun = runRegime(stored, { version: "v3" });
+    sourceOnlyRun = runRegime(sourceOnly, { version: "v3" });
   }, 120_000);
 
   // Issue 1644: the committed fixture carries the stored ratios and both
@@ -102,7 +113,7 @@ describe("ratios from legs (SDK-10)", () => {
     const iwm = dates.map((date, i) => ({ date, value: 200 + i }));
     const spy = dates.map((date, i) => ({ date, value: 470 + i }));
     const storedIwmSpy = dates.map((date) => ({ date, value: 0.1 }));
-    const run = (h: RawIndicatorHistory) => ratiosFromLegs(h, resolveInputHistory(h));
+    const run = (h: RawIndicatorHistory) => ratiosFromLegs(h, resolveInputHistory(h), V3_RATIOS);
     // SPY is also MTUM_SPY's and XLU_SPY's denominator, so their numerators come along.
     const adjusted: RawIndicatorHistory = { "yahoo:IWM.adjclose": iwm, "yahoo:SPY.adjclose": spy, "yahoo:MTUM.adjclose": iwm, "yahoo:XLU.adjclose": iwm };
     const older: RawIndicatorHistory = { "yahoo:IWM": iwm, "research:SPY": spy, "yahoo:MTUM": iwm, "yahoo:XLU": iwm };
@@ -117,7 +128,7 @@ describe("ratios from legs (SDK-10)", () => {
 
   test("each of the eight ratios is mergeRatioSeries(legs) byte for byte, and the report equals the stored-ratio report", () => {
     expect(RATIOS.length).toBe(8);
-    const resolved = ratiosFromLegs(sourceOnly, resolveInputHistory(sourceOnly));
+    const resolved = ratiosFromLegs(sourceOnly, resolveInputHistory(sourceOnly), V3_RATIOS);
     for (const ratio of RATIOS) {
       const [num, den] = legsOf(ratio);
       expect(JSON.stringify(resolved[ratio]), ratio).toBe(JSON.stringify(mergeRatioSeries(legs[num]!, legs[den]!)));
@@ -131,9 +142,9 @@ describe("ratios from legs (SDK-10)", () => {
     // Legs that would give a different ratio: the stored one must win.
     const other: Point[] = legs["yahoo:GC=F"]!.map((p) => ({ date: p.date, value: p.value * 2 }));
     const replay: RawIndicatorHistory = { ...stored, "yahoo:HG=F": legs["yahoo:HG=F"]!, "yahoo:GC=F": other };
-    expect(ratiosFromLegs(replay, resolveInputHistory(replay)).COPPER_GOLD).toBe(stored.COPPER_GOLD!);
+    expect(ratiosFromLegs(replay, resolveInputHistory(replay), V3_RATIOS).COPPER_GOLD).toBe(stored.COPPER_GOLD!);
     const canon = (run: RunResult) => JSON.stringify(buildReport(run));
-    expect(canon(runRegime(replay))).toBe(canon(storedRun));
+    expect(canon(runRegime(replay, { version: "v3" }))).toBe(canon(storedRun));
   }, 120_000);
 
   test("one ratio function: ratioByDate is gone, and the fetch uses the same mergeRatioSeries", () => {

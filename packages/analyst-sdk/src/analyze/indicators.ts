@@ -14,6 +14,8 @@
 // carried. Since issue 1655 it is the value every registry indicator declares in
 // its own fill policy below. Defined here, in the pure registry, so a reader of
 // the registry imports no calculation code; transform/math.ts re-exports it.
+import type { PublicationRule } from "../transform/knowledge-time.ts";
+
 export const MAX_FORWARD_FILL_DAYS = 120;
 
 export type Panel = "macro" | "onchain" | "factor";
@@ -47,6 +49,9 @@ export interface Indicator {
   fill: FillPolicy;
   // Why this indicator has its policy, in a short phrase.
   fillReason: string;
+  // When the source publishes the value for a period date (issue 1733).
+  // Required: the loader refuses an indicator without one (PublicationRuleError).
+  publication: PublicationRule;
   unit: string;
   source_url?: string;
   description?: string;
@@ -69,6 +74,16 @@ export type FillPolicy = { kind: "none" } | { kind: "forward"; maxAgeDays: numbe
 // the one the SDK computed before per-indicator policies existed.
 const DECLARED_FILL: FillPolicy = { kind: "forward", maxAgeDays: MAX_FORWARD_FILL_DAYS };
 const DECLARED_FILL_REASON = "Carried forward up to the former global cap";
+
+// Publication rules (issue 1733, docs/technical/regime-engine.md section 8.1.2).
+// A value is read from the day it was published, never its period date.
+// FRED dailies (T10Y2Y, DFII10, T5YIE, BAMLH0A0HYM2) publish the next business
+// day; DTWEXBGS (H.10) the Monday after; ICSA the Thursday after its
+// week-ending Saturday; the multpl/Shiller monthly CAPE averages the whole
+// month, so it is known from the 1st of the next month. Market closes and the
+// on-chain dailies are known on their own UTC day.
+const SAME_DAY: PublicationRule = { kind: "same-day" };
+const NEXT_BUSINESS_DAY: PublicationRule = { kind: "business-days", days: 1 };
 
 // Raised when an indicator has no valid declared fill policy. Names it.
 export class FillPolicyError extends Error {
@@ -120,6 +135,7 @@ export const INDICATORS: Indicator[] = [
     unit: "percent",
     fill: DECLARED_FILL,
     fillReason: DECLARED_FILL_REASON,
+    publication: NEXT_BUSINESS_DAY,
     source_url: "https://fred.stlouisfed.org/series/T10Y2Y",
     description:
       "The difference between 10-year and 2-year US Treasury yields. When negative (\"inverted\"), short-dated bonds yield more than long-dated ones — a configuration that has historically preceded every US recession since 1955.",
@@ -139,6 +155,7 @@ export const INDICATORS: Indicator[] = [
     unit: "percent",
     fill: DECLARED_FILL,
     fillReason: DECLARED_FILL_REASON,
+    publication: NEXT_BUSINESS_DAY,
     source_url: "https://fred.stlouisfed.org/series/DFII10",
     description:
       "The yield on 10-year Treasury Inflation-Protected Securities (TIPS) — the \"real\" interest rate after stripping out inflation expectations. The pure cost of capital that policymakers actually care about.",
@@ -157,6 +174,7 @@ export const INDICATORS: Indicator[] = [
     unit: "percent",
     fill: DECLARED_FILL,
     fillReason: DECLARED_FILL_REASON,
+    publication: NEXT_BUSINESS_DAY,
     source_url: "https://fred.stlouisfed.org/series/T5YIE",
     description:
       "The bond market's implied forecast for average inflation over the next 5 years. Computed as the spread between nominal 5-year Treasury yield and 5-year TIPS yield.",
@@ -176,6 +194,7 @@ export const INDICATORS: Indicator[] = [
     unit: "percent",
     fill: DECLARED_FILL,
     fillReason: DECLARED_FILL_REASON,
+    publication: NEXT_BUSINESS_DAY,
     source_url: "https://fred.stlouisfed.org/series/BAMLH0A0HYM2",
     description:
       "ICE BofA US High Yield Option-Adjusted Spread. The yield premium that investors demand to hold US junk-rated corporate bonds over Treasuries. A direct, real-time measure of credit risk appetite.",
@@ -195,6 +214,7 @@ export const INDICATORS: Indicator[] = [
     unit: "index",
     fill: DECLARED_FILL,
     fillReason: DECLARED_FILL_REASON,
+    publication: { kind: "next-weekday", weekday: 1 },
     source_url: "https://fred.stlouisfed.org/series/DTWEXBGS",
     description:
       "A broad trade-weighted index of the US dollar against the currencies of major US trading partners. Measures dollar strength globally, not just against the major reserve currencies.",
@@ -214,6 +234,7 @@ export const INDICATORS: Indicator[] = [
     unit: "count",
     fill: DECLARED_FILL,
     fillReason: DECLARED_FILL_REASON,
+    publication: { kind: "next-weekday", weekday: 4 },
     source_url: "https://fred.stlouisfed.org/series/ICSA",
     description:
       "The number of new claims filed for US unemployment insurance benefits in the most recent week. The cleanest high-frequency read on labor market health.",
@@ -233,6 +254,7 @@ export const INDICATORS: Indicator[] = [
     unit: "index",
     fill: DECLARED_FILL,
     fillReason: DECLARED_FILL_REASON,
+    publication: SAME_DAY,
     source_url: "https://finance.yahoo.com/quote/%5EVIX",
     description:
       "CBOE Volatility Index. The market's expected 30-day volatility of the S&P 500, derived from the prices of out-of-the-money S&P options. Universally known as the \"fear gauge.\"",
@@ -254,6 +276,7 @@ export const INDICATORS: Indicator[] = [
     unit: "ratio4",
     fill: DECLARED_FILL,
     fillReason: DECLARED_FILL_REASON,
+    publication: SAME_DAY,
     source_url: "https://finance.yahoo.com/quote/HG=F",
     description:
       "Price of copper futures divided by price of gold futures. Copper is an industrial-demand proxy (used heavily in construction, electronics, manufacturing); gold is a defensive store of value. The ratio captures whether the commodity complex is leaning cyclical or defensive.",
@@ -273,6 +296,7 @@ export const INDICATORS: Indicator[] = [
     unit: "index",
     fill: DECLARED_FILL,
     fillReason: DECLARED_FILL_REASON,
+    publication: SAME_DAY,
     source_url: "https://finance.yahoo.com/quote/%5EGSPC",
     description:
       "Ratio of the S&P 500's 50-day simple moving average to its 200-day simple moving average. The classic \"golden cross / death cross\" trend indicator on the broadest equity benchmark.",
@@ -287,13 +311,14 @@ export const INDICATORS: Indicator[] = [
     panel: "factor",
     source: "yahoo",
     series: ["IWM", "SPY"],
-    ratioInput: "stored",
-    ratioClose: "adjusted",
+    ratioInput: "legs",
+    ratioClose: "raw",
     sign: +1,
     transform: "level",
     unit: "ratio4",
     fill: DECLARED_FILL,
     fillReason: DECLARED_FILL_REASON,
+    publication: SAME_DAY,
     source_url: "https://finance.yahoo.com/quote/IWM",
     description:
       "Ratio of the Russell 2000 small-cap ETF (IWM) to the S&P 500 ETF (SPY). A measure of market breadth — whether small-caps are participating in the rally or just the mega-cap leaders.",
@@ -313,6 +338,7 @@ export const INDICATORS: Indicator[] = [
     unit: "usd",
     fill: DECLARED_FILL,
     fillReason: DECLARED_FILL_REASON,
+    publication: SAME_DAY,
     source_url: "https://defillama.com/",
     description:
       "Total dollar value of crypto assets locked across all DeFi protocols — lending, automated market makers, liquid staking, restaking, yield aggregators. The aggregate measure of capital deployment into permissionless finance.",
@@ -331,6 +357,7 @@ export const INDICATORS: Indicator[] = [
     unit: "usd",
     fill: DECLARED_FILL,
     fillReason: DECLARED_FILL_REASON,
+    publication: SAME_DAY,
     source_url: "https://defillama.com/stablecoins",
     description:
       "Total outstanding supply of USD-pegged stablecoins (USDT, USDC, DAI, and others) across all chains. Approximates the dollar liquidity sitting on crypto rails.",
@@ -349,6 +376,7 @@ export const INDICATORS: Indicator[] = [
     unit: "count",
     fill: DECLARED_FILL,
     fillReason: DECLARED_FILL_REASON,
+    publication: SAME_DAY,
     source_url: "https://www.blockchain.com/explorer/charts/n-unique-addresses",
     description:
       "Number of unique Bitcoin addresses that participated in transactions on a given day. A proxy for organic network usage and on-chain engagement.",
@@ -367,6 +395,7 @@ export const INDICATORS: Indicator[] = [
     unit: "count",
     fill: DECLARED_FILL,
     fillReason: DECLARED_FILL_REASON,
+    publication: SAME_DAY,
     source_url: "https://charts.coinmetrics.io/network-data/eth/AdrActCnt",
     description:
       "Number of unique Ethereum addresses that transacted on a given day. Equivalent to the BTC measure, for ETH mainnet specifically.",
@@ -385,6 +414,7 @@ export const INDICATORS: Indicator[] = [
     unit: "ratio2",
     fill: DECLARED_FILL,
     fillReason: DECLARED_FILL_REASON,
+    publication: SAME_DAY,
     source_url: "https://charts.coinmetrics.io/network-data/btc/CapMVRVCur",
     description:
       "Market Value to Realized Value ratio. Divides BTC market capitalization by its \"realized cap\" — the sum of (price-at-last-move × amount) across all UTXOs. Represents how big a paper gain or loss the average bitcoin holder is sitting on.",
@@ -406,6 +436,7 @@ export const INDICATORS: Indicator[] = [
     unit: "ratio2",
     fill: DECLARED_FILL,
     fillReason: DECLARED_FILL_REASON,
+    publication: SAME_DAY,
     source_url: "https://finance.yahoo.com/quote/BTC-USD",
     description:
       "BTC price divided by ETH price. A proxy for \"crypto risk preference\" — when capital flies to the safest crypto asset (BTC) over the higher-beta major (ETH), risk-off is happening within crypto.",
@@ -425,6 +456,7 @@ export const INDICATORS: Indicator[] = [
     unit: "index",
     fill: DECLARED_FILL,
     fillReason: DECLARED_FILL_REASON,
+    publication: SAME_DAY,
     source_url: "https://finance.yahoo.com/quote/ETH-USD",
     description:
       "Ratio of ETH's 50-day simple moving average to its 200-day SMA. The ETH-specific equivalent of SPX_TREND.",
@@ -442,6 +474,7 @@ export const INDICATORS: Indicator[] = [
     unit: "count",
     fill: DECLARED_FILL,
     fillReason: DECLARED_FILL_REASON,
+    publication: SAME_DAY,
     source_url: "https://www.geckoterminal.com/new-pools",
     description:
       "Count of new DEX liquidity pools (≈ new token launches) observed across all networks in the trailing 24 hours. A real-time measure of crypto speculation intensity.",
@@ -460,6 +493,7 @@ export const INDICATORS: Indicator[] = [
     unit: "percent_change",
     fill: DECLARED_FILL,
     fillReason: DECLARED_FILL_REASON,
+    publication: SAME_DAY,
     source_url: "https://defillama.com/",
     description:
       "The 90-day percent change in total DeFi TVL. Captures flow — whether capital is actively expanding or contracting the on-chain ecosystem — independent of where the absolute level happens to be.",
@@ -478,6 +512,7 @@ export const INDICATORS: Indicator[] = [
     unit: "percent_change",
     fill: DECLARED_FILL,
     fillReason: DECLARED_FILL_REASON,
+    publication: SAME_DAY,
     source_url: "https://defillama.com/stablecoins",
     description:
       "The 90-day percent change in total stablecoin float. Captures whether dollar liquidity on crypto rails is expanding or shrinking — a leading indicator of imminent risk-asset deployment or withdrawal.",
@@ -494,13 +529,14 @@ export const INDICATORS: Indicator[] = [
     panel: "factor",
     source: "yahoo",
     series: ["SPHB", "SPLV"],
-    ratioInput: "stored",
-    ratioClose: "adjusted",
+    ratioInput: "legs",
+    ratioClose: "raw",
     sign: +1,
     transform: "level",
     unit: "ratio4",
     fill: DECLARED_FILL,
     fillReason: DECLARED_FILL_REASON,
+    publication: SAME_DAY,
     source_url: "https://finance.yahoo.com/quote/SPHB",
     description:
       "Ratio of the Invesco S&P 500 High Beta ETF (SPHB) to the Invesco S&P 500 Low Volatility ETF (SPLV). Both are S&P 500 subsets, so the ratio isolates the risk-axis directly without cross-cap or sector confounds.",
@@ -514,13 +550,14 @@ export const INDICATORS: Indicator[] = [
     panel: "factor",
     source: "yahoo",
     series: ["MTUM", "SPY"],
-    ratioInput: "stored",
-    ratioClose: "adjusted",
+    ratioInput: "legs",
+    ratioClose: "raw",
     sign: +1,
     transform: "level",
     unit: "ratio4",
     fill: DECLARED_FILL,
     fillReason: DECLARED_FILL_REASON,
+    publication: SAME_DAY,
     source_url: "https://finance.yahoo.com/quote/MTUM",
     description:
       "Ratio of the iShares MSCI USA Momentum Factor ETF (MTUM) to the S&P 500 ETF (SPY). Captures whether cross-sectional momentum — buying recent winners — is working in the current market.",
@@ -534,13 +571,14 @@ export const INDICATORS: Indicator[] = [
     panel: "factor",
     source: "yahoo",
     series: ["IWF", "IWD"],
-    ratioInput: "stored",
-    ratioClose: "adjusted",
+    ratioInput: "legs",
+    ratioClose: "raw",
     sign: +1,
     transform: "level",
     unit: "ratio4",
     fill: DECLARED_FILL,
     fillReason: DECLARED_FILL_REASON,
+    publication: SAME_DAY,
     source_url: "https://finance.yahoo.com/quote/IWF",
     description:
       "Ratio of the iShares Russell 1000 Growth ETF (IWF) to the iShares Russell 1000 Value ETF (IWD). Captures the high-duration / risk-asset side of the equity style axis.",
@@ -554,13 +592,14 @@ export const INDICATORS: Indicator[] = [
     panel: "factor",
     source: "yahoo",
     series: ["XLU", "SPY"],
-    ratioInput: "stored",
-    ratioClose: "adjusted",
+    ratioInput: "legs",
+    ratioClose: "raw",
     sign: -1,
     transform: "level",
     unit: "ratio4",
     fill: DECLARED_FILL,
     fillReason: DECLARED_FILL_REASON,
+    publication: SAME_DAY,
     source_url: "https://finance.yahoo.com/quote/XLU",
     description:
       "Ratio of the SPDR Utilities Select Sector ETF (XLU) to the S&P 500 ETF (SPY). Utilities are the canonical defensive / bond-proxy sector.",
@@ -574,13 +613,14 @@ export const INDICATORS: Indicator[] = [
     panel: "factor",
     source: "yahoo",
     series: ["XLP", "XLY"],
-    ratioInput: "stored",
-    ratioClose: "adjusted",
+    ratioInput: "legs",
+    ratioClose: "raw",
     sign: -1,
     transform: "level",
     unit: "ratio4",
     fill: DECLARED_FILL,
     fillReason: DECLARED_FILL_REASON,
+    publication: SAME_DAY,
     source_url: "https://finance.yahoo.com/quote/XLP",
     description:
       "Ratio of the SPDR Consumer Staples ETF (XLP) to the SPDR Consumer Discretionary ETF (XLY). Direct read on consumer-driven cyclical vs defensive rotation.",
@@ -598,6 +638,7 @@ export const INDICATORS: Indicator[] = [
     unit: "ratio2",
     fill: DECLARED_FILL,
     fillReason: DECLARED_FILL_REASON,
+    publication: { kind: "months-later", months: 1 },
     source_url: "https://www.multpl.com/shiller-pe",
     description:
       "Robert Shiller's Cyclically Adjusted Price-to-Earnings ratio for the S&P 500 — current real price divided by the 10-year average of real earnings. Smooths the earnings cycle so the multiple is comparable across business cycles, unlike raw trailing P/E which spikes mechanically in recessions.",
