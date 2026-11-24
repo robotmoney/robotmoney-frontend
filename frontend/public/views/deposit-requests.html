@@ -130,7 +130,7 @@
           </div>
           <div class="dp__tablewrap">
             <table class="dp__tbl dp__reqs">
-              <thead><tr><th scope="col">Request</th><th scope="col" class="n">Amount</th><th scope="col" class="n">Filled</th><th scope="col">Stage</th><th scope="col" class="n">Next</th><th scope="col"><span class="dp__sr">Actions</span></th></tr></thead>
+              <thead><tr><th scope="col">Request</th><th scope="col" class="n">Amount</th><th scope="col" class="n">Filled</th><th scope="col">Stage<span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="About stages">i</button><span class="rm-tip__bub" role="tooltip" x-text="stagesTip()"></span></span></th><th scope="col" class="n">Next</th><th scope="col"><span class="dp__sr">Actions</span></th></tr></thead>
               <tbody>
                 <!-- Holds one row's height while the list loads, so the stage guide and the footer do not jump when it arrives. -->
                 <template x-if="!dataReady()">
@@ -144,7 +144,7 @@
                     <td><a :href="r.href" x-text="r.kind"></a><span class="dp__sub" x-text="r.created"></span></td>
                     <td class="n" x-text="r.amount"></td>
                     <td class="n" data-k="Filled"><span :class="r.tone === 'off' && r.pct === 0 ? 'dp__muted' : ''" x-text="r.filled"></span><template x-if="r.out"><span class="dp__sub" x-text="`→ ${r.out}`"></span></template><template x-if="r.tone === 'filling'"><span class="dp__bar" aria-hidden="true"><i :style="`width:${r.pct}%`"></i></span></template></td>
-                    <td><span class="dp__stage" :class="`is-${r.tone}`"><i aria-hidden="true"></i><span x-text="r.stage"></span></span><span class="rm-tip"><button class="rm-tip__btn" type="button" :aria-label="`About ${r.stage}`">i</button><span class="rm-tip__bub" role="tooltip" x-text="r.help"></span></span><template x-if="r.sub"><span class="dp__sub"><span x-text="r.sub"></span><template x-if="r.tip"><span class="rm-tip"><button class="rm-tip__btn" type="button" :aria-label="`About ${r.stage}`">i</button><span class="rm-tip__bub" role="tooltip" x-text="r.tip"></span></span></template></span></template></td>
+                    <td><span class="rm-tip rm-tip--label"><button type="button" class="rm-tip__btn dp__stage dp__pill" :class="`is-${r.tone}`"><svg class="dp__tick" x-show="r.claimed" width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M1.5 5.25 4 7.75 8.75 2.5" fill="none" stroke="currentColor" stroke-width="1.5"></path></svg><i x-show="!r.claimed" aria-hidden="true"></i><span x-text="r.stage"></span></button><span class="rm-tip__bub" role="tooltip" x-text="r.help"></span></span><template x-if="r.sub"><span class="dp__sub"><span x-text="r.sub"></span><template x-if="r.tip"><span class="rm-tip"><button class="rm-tip__btn" type="button" :aria-label="`About ${r.stage}`">i</button><span class="rm-tip__bub" role="tooltip" x-text="r.tip"></span></span></template></span></template></td>
                     <td class="n" data-k="Next"><span :class="r.next ? '' : 'dp__muted'" x-text="r.next || '—'"></span><template x-if="r.nextIn"><span class="dp__sub" x-text="r.nextIn"></span></template></td>
                     <td class="dp__acts">
                       <template x-if="r.canCancel && asking !== r.id"><button type="button" class="dp__txt" :disabled="!!busy" @click="asking = r.id" x-text="r.filledShort ? 'Cancel unfilled' : 'Cancel'"></button></template>

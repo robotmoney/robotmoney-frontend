@@ -282,7 +282,6 @@
 
 /* Your requests and a request's status page */
 .dp__wrap--page { display: flex; flex-direction: column; gap: 2rem; }
-.dp__wrap--narrow { max-width: 50rem; display: flex; flex-direction: column; gap: 2rem; }
 .dp__stack--loose { gap: 2rem; }
 .dp__pagehead { display: flex; justify-content: space-between; align-items: flex-end; gap: 1.5rem; flex-wrap: wrap; }
 .dp__title--page { font-size: clamp(2.25rem, 5vw, 3.5rem); }
@@ -317,7 +316,17 @@
 .dp__stage.is-act i { background: var(--color-beacon); }
 .dp__stage.is-off { color: var(--color-text-muted); }
 .dp__stage.is-off i { background: var(--color-border-light); }
-.dp__stage--big { font-family: var(--font-sans); font-size: 1.125rem; font-weight: 500; }
+/* A stage as a chip, in the site's status chip shape (.rm-status, components.css):
+   mono caps in a hairline box, the hue only in its 7px dot, never the label or
+   the box. The chip is the tooltip's trigger, so hovering, tapping or focusing it
+   explains the stage; the Stage header's (i) explains the path (David, 23 Nov). */
+.rm-tip__btn.dp__pill { width: auto; height: auto; display: inline-flex; align-items: center; gap: 0.42rem; padding: 0.24rem 0.6rem; border: 1px solid var(--color-border-light); border-radius: 0; background: none; color: var(--color-text); font-family: var(--font-mono); font-size: 0.6875rem; line-height: 1.2; letter-spacing: 0.12em; text-transform: uppercase; white-space: nowrap; cursor: default; transition: border-color 0.14s ease; }
+.rm-tip__btn.dp__pill:hover, .rm-tip__btn.dp__pill[aria-expanded="true"] { border-color: var(--color-text-muted); color: var(--color-text); }
+.rm-tip__btn.dp__pill.is-ready { color: var(--color-text); }
+.rm-tip__btn.dp__pill.is-off { color: var(--color-text-muted); }
+/* A border-coloured dot vanishes inside a bordered chip (components.css, .rm-status--pending). */
+.dp__pill.is-off i { background: var(--color-text-muted); }
+.dp__pill .dp__tick { width: 9px; height: 9px; color: var(--color-text-soft); }
 .dp__acts { text-align: right; white-space: nowrap; }
 .dp__acts > * + * { margin-left: 0.75rem; }
 .dp__err--cell { margin-top: 0.375rem; white-space: normal; }

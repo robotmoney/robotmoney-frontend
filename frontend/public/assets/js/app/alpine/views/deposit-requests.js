@@ -13,7 +13,7 @@
 import { session } from "../../lib/deposit/session.js";
 import { MANIFEST } from "../../lib/deposit/manifest.js";
 import { buildCancel, buildWithdrawCredit, buildWithdrawExpired, buildClaimShares, buildClaimUsdc, buildGiveNotice, buildTakeBackNotice, buildReleaseWindDown } from "../../lib/deposit/builder.js";
-import { rowOf, stopOf, stageHelp, LIFECYCLE } from "../../lib/deposit/describe.js";
+import { rowOf, stopOf, stageHelp, LIFECYCLE, STAGES_TIP } from "../../lib/deposit/describe.js";
 import { claimableFills, liveRemaining, nextBatchFor } from "../../lib/deposit/stages.js";
 import { fmtDuration, fmtClock } from "../../lib/deposit/schedule.js";
 import { fmtUsdc, fmtShares, fmtRm, fmtWhen, shortAddr, shortHash } from "../../lib/deposit/format.js";
@@ -133,6 +133,7 @@ export function registerDepositRequestsView(Alpine) {
     pending() { this.rev; return session.pending(); },
     pendingUrl() { const p = this.pending(); return p?.hash && /^0x[0-9a-f]{64}$/i.test(p.hash) ? `${MANIFEST.explorer}/tx/${p.hash}` : null; },
 
+    stagesTip() { return STAGES_TIP; },
     /**
      * The stage guide, read as a stepper: a step is done once every request on
      * this path is past it (the last one, Claimed, the moment one reaches it),

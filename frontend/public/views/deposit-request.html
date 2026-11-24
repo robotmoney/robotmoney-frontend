@@ -7,7 +7,7 @@
      (alpine/views/deposit-request.js). Never indexed (seo.js). -->
 
 <section class="dp" x-data="depositRequestView()">
-  <div class="dp__wrap dp__wrap--narrow">
+  <div class="dp__wrap dp__wrap--page">
     <nav class="dp__lbl dp__crumbs" aria-label="Breadcrumb"><a href="/deposit">Deposit</a><span aria-hidden="true">/</span><a href="/deposit/requests">Your position</a><span aria-hidden="true">/</span><span aria-current="page" x-text="`Request ${id}`"></span></nav>
 
     <p class="dp__err" x-show="loadError" x-text="loadError" x-cloak></p>
@@ -43,8 +43,8 @@
 
         <div class="dp__facts dp__facts--grid">
           <template x-for="f in facts()" :key="f.key">
-            <div class="dp__fact"><span class="dp__lbl" x-text="f.label"></span>
-              <template x-if="f.stage"><b class="dp__stage dp__stage--big" :class="`is-${tone()}`"><i aria-hidden="true"></i><span x-text="f.value"></span><span class="rm-tip"><button class="rm-tip__btn" type="button" :aria-label="`About ${f.value}`">i</button><span class="rm-tip__bub" role="tooltip" x-text="f.tip"></span></span></b></template>
+            <div class="dp__fact"><span class="dp__lbl"><span x-text="f.label"></span><template x-if="f.labelTip"><span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="About stages">i</button><span class="rm-tip__bub" role="tooltip" x-text="f.labelTip"></span></span></template></span>
+              <template x-if="f.stage"><span><span class="rm-tip rm-tip--label"><button type="button" class="rm-tip__btn dp__stage dp__pill" :class="`is-${tone()}`"><svg class="dp__tick" x-show="f.claimed" width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M1.5 5.25 4 7.75 8.75 2.5" fill="none" stroke="currentColor" stroke-width="1.5"></path></svg><i x-show="!f.claimed" aria-hidden="true"></i><span x-text="f.value"></span></button><span class="rm-tip__bub" role="tooltip" x-text="f.tip"></span></span></span></template>
               <template x-if="!f.stage"><b x-text="f.value"></b></template>
             </div>
           </template>
