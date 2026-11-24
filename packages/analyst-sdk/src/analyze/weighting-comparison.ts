@@ -108,7 +108,7 @@ export function computeWeightingComparison(input: WeightingComparisonInput): Wei
     }
   }
   // The axis, alignment and transform come from the shared seam (D59).
-  const { dateAxis, transformed } = prepareRegimeInputs(raw, { start: "2018-01-01", asof: maxDate, indicators: INDICATORS });
+  const { dateAxis, transformed } = prepareRegimeInputs(raw, { start: "2018-01-01", asof: maxDate, indicators: INDICATORS, observationDays: false });
 
   // ── load + prepare sign-aligned percentile ranks (shared by all 3 methods) ──
   const signed: Record<string, number[]> = {};

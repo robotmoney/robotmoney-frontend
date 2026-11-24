@@ -1,0 +1,88 @@
+{
+  "days": 3149,
+  "daysChanged": 1595,
+  "labelsChanged": 68,
+  "largestCompositeChange": {
+    "date": "2022-07-20",
+    "before": 0.285442,
+    "after": 0.341193,
+    "abs": 0.055752
+  },
+  "firstCompositeDay": {
+    "before": "2022-04-04",
+    "after": "2022-05-16"
+  },
+  "weightFloorMoves": [],
+  "firstRankedDayMoves": [
+    {
+      "id": "T10Y2Y",
+      "before": "2022-02-02",
+      "after": "2022-02-15"
+    },
+    {
+      "id": "DFII10",
+      "before": "2022-02-02",
+      "after": "2022-02-15"
+    },
+    {
+      "id": "T5YIE",
+      "before": "2022-02-02",
+      "after": "2022-02-15"
+    },
+    {
+      "id": "HY_OAS",
+      "before": "2023-06-29",
+      "after": "2023-07-11"
+    },
+    {
+      "id": "DXY",
+      "before": "2022-02-08",
+      "after": "2022-08-01"
+    },
+    {
+      "id": "VIX",
+      "before": "2022-02-01",
+      "after": "2022-02-14"
+    },
+    {
+      "id": "COPPER_GOLD",
+      "before": "2022-02-01",
+      "after": "2022-02-14"
+    },
+    {
+      "id": "SPX_TREND",
+      "before": "2022-05-11",
+      "after": "2022-11-29"
+    },
+    {
+      "id": "IWM_SPY",
+      "before": "2022-02-01",
+      "after": "2022-02-14"
+    },
+    {
+      "id": "SPHB_SPLV",
+      "before": "2022-02-01",
+      "after": "2022-02-14"
+    },
+    {
+      "id": "MTUM_SPY",
+      "before": "2022-02-01",
+      "after": "2022-02-14"
+    },
+    {
+      "id": "IWF_IWD",
+      "before": "2022-02-01",
+      "after": "2022-02-14"
+    },
+    {
+      "id": "XLU_SPY",
+      "before": "2022-02-01",
+      "after": "2022-02-14"
+    },
+    {
+      "id": "XLP_XLY",
+      "before": "2022-02-01",
+      "after": "2022-02-14"
+    }
+  ]
+}

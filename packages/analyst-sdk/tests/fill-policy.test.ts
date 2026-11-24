@@ -18,7 +18,7 @@ import { ratiosFromLegs } from "../src/transform/ratios.ts";
 import { resolveInputHistory } from "../src/series-ids.ts";
 
 const mk = (id: string, fill: unknown, fillReason: unknown): Indicator =>
-  ({ id, name: id, panel: "macro", source: "test", sign: 1, transform: "level", unit: "x", fill, fillReason, publication: { kind: "same-day" } }) as Indicator;
+  ({ id, name: id, panel: "macro", source: "test", sign: 1, transform: "level", unit: "x", fill, fillReason, calendar: "daily", publication: { kind: "same-day" } }) as Indicator;
 const START = "2024-01-01";
 const ASOF = "2024-01-10";
 // Real observations on Jan 2 and Jan 3 only.
@@ -169,10 +169,10 @@ describe("a changed policy takes effect exactly as it says, on the fixture", () 
       // Every other indicator is untouched.
       for (const ind of INDICATORS) if (ind.id !== "VIX") expect(JSON.stringify(changed.transformed[ind.id])).toBe(JSON.stringify(declared.transformed[ind.id]));
       // The composite is exactly the composite over the declared inputs with VIX replaced by the expected series.
-      const composite = computeRegime(changed.transformed, axis).composite;
-      const byHand = computeRegime({ ...declared.transformed, VIX: want }, axis).composite;
+      const composite = computeRegime(changed.transformed, axis, undefined, undefined, undefined, undefined, undefined, undefined, undefined, changed.carried).composite;
+      const byHand = computeRegime({ ...declared.transformed, VIX: want }, axis, undefined, undefined, undefined, undefined, undefined, undefined, undefined, { ...declared.carried, VIX: changed.carried.VIX! }).composite;
       expect(JSON.stringify(composite)).toBe(JSON.stringify(byHand));
-      expect(JSON.stringify(composite)).not.toBe(JSON.stringify(computeRegime(declared.transformed, axis).composite));
+      expect(JSON.stringify(composite)).not.toBe(JSON.stringify(computeRegime(declared.transformed, axis, undefined, undefined, undefined, undefined, undefined, undefined, undefined, declared.carried).composite));
       // Through runRegime, with the registry row changed.
       const viaRun = withPolicy("VIX", fill, () => requireComplete(runRegime(history, { asof: ASOF_F })));
       expect(JSON.stringify(viaRun.result.composite)).toBe(JSON.stringify(composite));
@@ -190,7 +190,8 @@ describe("computeRegime with ages and maxForwardFillDays, as on main", () => {
     const raw = ratiosFromLegs(history, resolveInputHistory(history));
     raw.HY_OAS = raw.HY_OAS!.filter((r) => r.date <= "2026-01-15");
     const asof = "2026-08-14";
-    const prepared = prepareRegimeInputs(raw, { start: BACKFILL_START, asof });
+    // Forward-filled windows (the rule of main): this test pins the ages and cap arguments, not issue 1741.
+    const prepared = prepareRegimeInputs(raw, { start: BACKFILL_START, asof, observationDays: false });
     const axis = prepared.dateAxis;
     // Both paths read the series by knowledge time (issue 1733).
     const known = knowledgeTimeHistory(raw, { asof });
@@ -206,9 +207,10 @@ describe("computeRegime with ages and maxForwardFillDays, as on main", () => {
       expect(JSON.stringify(now)).toBe(JSON.stringify(main));
       expect(JSON.stringify(nowNoAges)).toBe(JSON.stringify(main));
     }
-    // And runRegime (shipped values) gives those figures.
+    // And runRegime (shipped values) gives those figures, counting observation days (issue 1741).
+    const real = prepareRegimeInputs(raw, { start: BACKFILL_START, asof });
     expect(JSON.stringify(requireComplete(runRegime(history.HY_OAS ? { ...history, HY_OAS: raw.HY_OAS } : history, { asof })).result)).toBe(
-      JSON.stringify(computeRegime(unmasked, axis, undefined, prepared.ages, MAX_FORWARD_FILL_DAYS)),
+      JSON.stringify(computeRegime(real.transformed, axis, undefined, real.ages, MAX_FORWARD_FILL_DAYS, undefined, undefined, undefined, undefined, real.carried)),
     );
   }, 120_000);
 });

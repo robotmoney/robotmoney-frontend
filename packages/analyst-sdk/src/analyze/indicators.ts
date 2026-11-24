@@ -61,6 +61,9 @@ export interface Indicator {
   fill: FillPolicy;
   // Why this indicator has its policy, in a short phrase.
   fillReason: string;
+  // The days the source observes the series (issue 1741). Required: the loader
+  // refuses a row without a valid value (CalendarError). See Calendar below.
+  calendar: Calendar;
   // When the source publishes the value for a period date (issue 1733).
   // Required: the loader refuses an indicator without one (PublicationRuleError).
   publication: PublicationRule;
@@ -96,6 +99,34 @@ const DECLARED_FILL_REASON = "Carried forward up to the former global cap";
 // on-chain dailies are known on their own UTC day.
 const SAME_DAY: PublicationRule = { kind: "same-day" };
 const NEXT_BUSINESS_DAY: PublicationRule = { kind: "business-days", days: 1 };
+
+// Calendar (issue 1741, docs/technical/regime-engine.md section 3). The days a
+// series has a real observation:
+//   daily:    every day, 24/7 (crypto and on-chain).
+//   exchange: business or trading days. Under a version that counts observation
+//             days, the transform, the rank and the weight fit count each real
+//             observation once, never the days a close is carried over a weekend.
+//   periodic: a weekly or monthly release. Its carried rows keep counting.
+export type Calendar = "daily" | "exchange" | "periodic";
+export const CALENDARS: readonly Calendar[] = ["daily", "exchange", "periodic"];
+
+// Raised when an indicator has no valid declared calendar. Names it.
+export class CalendarError extends Error {
+  constructor(readonly indicatorId: string, detail: string) {
+    super(`indicator ${indicatorId}: ${detail} (declare calendar as "daily", "exchange" or "periodic")`);
+    this.name = "CalendarError";
+  }
+}
+
+/** The indicator's declared calendar. Throws CalendarError when it is missing or unknown. */
+export function calendarOf(ind: { id: string; calendar?: unknown }): Calendar {
+  const c = ind.calendar;
+  if (c === undefined || c === null) throw new CalendarError(ind.id, "no calendar declared");
+  if (typeof c !== "string" || !(CALENDARS as readonly string[]).includes(c)) {
+    throw new CalendarError(ind.id, `unknown calendar ${JSON.stringify(c)}`);
+  }
+  return c as Calendar;
+}
 
 // Raised when an indicator has no valid declared fill policy. Names it.
 export class FillPolicyError extends Error {
@@ -146,6 +177,7 @@ export const INDICATORS: Indicator[] = [
     transform: "level",
     unit: "percent",
     fill: DECLARED_FILL,
+    calendar: "exchange",
     fillReason: DECLARED_FILL_REASON,
     publication: NEXT_BUSINESS_DAY,
     source_url: "https://fred.stlouisfed.org/series/T10Y2Y",
@@ -166,6 +198,7 @@ export const INDICATORS: Indicator[] = [
     transform: "level",
     unit: "percent",
     fill: DECLARED_FILL,
+    calendar: "exchange",
     fillReason: DECLARED_FILL_REASON,
     publication: NEXT_BUSINESS_DAY,
     source_url: "https://fred.stlouisfed.org/series/DFII10",
@@ -185,6 +218,7 @@ export const INDICATORS: Indicator[] = [
     transform: "level",
     unit: "percent",
     fill: DECLARED_FILL,
+    calendar: "exchange",
     fillReason: DECLARED_FILL_REASON,
     publication: NEXT_BUSINESS_DAY,
     source_url: "https://fred.stlouisfed.org/series/T5YIE",
@@ -205,6 +239,7 @@ export const INDICATORS: Indicator[] = [
     transform: "level",
     unit: "percent",
     fill: DECLARED_FILL,
+    calendar: "exchange",
     fillReason: DECLARED_FILL_REASON,
     publication: NEXT_BUSINESS_DAY,
     source_url: "https://fred.stlouisfed.org/series/BAMLH0A0HYM2",
@@ -225,6 +260,7 @@ export const INDICATORS: Indicator[] = [
     transform: "level",
     unit: "index",
     fill: DECLARED_FILL,
+    calendar: "exchange",
     fillReason: DECLARED_FILL_REASON,
     publication: { kind: "next-weekday", weekday: 1 },
     source_url: "https://fred.stlouisfed.org/series/DTWEXBGS",
@@ -245,6 +281,7 @@ export const INDICATORS: Indicator[] = [
     transform: "level",
     unit: "count",
     fill: DECLARED_FILL,
+    calendar: "periodic",
     fillReason: DECLARED_FILL_REASON,
     publication: { kind: "next-weekday", weekday: 4 },
     source_url: "https://fred.stlouisfed.org/series/ICSA",
@@ -265,6 +302,7 @@ export const INDICATORS: Indicator[] = [
     transform: "level",
     unit: "index",
     fill: DECLARED_FILL,
+    calendar: "exchange",
     fillReason: DECLARED_FILL_REASON,
     publication: SAME_DAY,
     source_url: "https://finance.yahoo.com/quote/%5EVIX",
@@ -287,6 +325,7 @@ export const INDICATORS: Indicator[] = [
     transform: "level",
     unit: "ratio4",
     fill: DECLARED_FILL,
+    calendar: "exchange",
     fillReason: DECLARED_FILL_REASON,
     publication: SAME_DAY,
     source_url: "https://finance.yahoo.com/quote/HG=F",
@@ -307,6 +346,7 @@ export const INDICATORS: Indicator[] = [
     transform: "trend_50_200",
     unit: "index",
     fill: DECLARED_FILL,
+    calendar: "exchange",
     fillReason: DECLARED_FILL_REASON,
     publication: SAME_DAY,
     source_url: "https://finance.yahoo.com/quote/%5EGSPC",
@@ -329,6 +369,7 @@ export const INDICATORS: Indicator[] = [
     transform: "level",
     unit: "ratio4",
     fill: DECLARED_FILL,
+    calendar: "exchange",
     fillReason: DECLARED_FILL_REASON,
     publication: SAME_DAY,
     source_url: "https://finance.yahoo.com/quote/IWM",
@@ -349,6 +390,7 @@ export const INDICATORS: Indicator[] = [
     transform: "level",
     unit: "usd",
     fill: DECLARED_FILL,
+    calendar: "daily",
     fillReason: DECLARED_FILL_REASON,
     publication: SAME_DAY,
     source_url: "https://defillama.com/",
@@ -368,6 +410,7 @@ export const INDICATORS: Indicator[] = [
     transform: "level",
     unit: "usd",
     fill: DECLARED_FILL,
+    calendar: "daily",
     fillReason: DECLARED_FILL_REASON,
     publication: SAME_DAY,
     source_url: "https://defillama.com/stablecoins",
@@ -387,6 +430,7 @@ export const INDICATORS: Indicator[] = [
     transform: "level",
     unit: "count",
     fill: DECLARED_FILL,
+    calendar: "daily",
     fillReason: DECLARED_FILL_REASON,
     publication: SAME_DAY,
     source_url: "https://www.blockchain.com/explorer/charts/n-unique-addresses",
@@ -406,6 +450,7 @@ export const INDICATORS: Indicator[] = [
     transform: "level",
     unit: "count",
     fill: DECLARED_FILL,
+    calendar: "daily",
     fillReason: DECLARED_FILL_REASON,
     publication: SAME_DAY,
     source_url: "https://charts.coinmetrics.io/network-data/eth/AdrActCnt",
@@ -425,6 +470,7 @@ export const INDICATORS: Indicator[] = [
     transform: "level",
     unit: "ratio2",
     fill: DECLARED_FILL,
+    calendar: "daily",
     fillReason: DECLARED_FILL_REASON,
     publication: SAME_DAY,
     source_url: "https://charts.coinmetrics.io/network-data/btc/CapMVRVCur",
@@ -447,6 +493,7 @@ export const INDICATORS: Indicator[] = [
     transform: "level",
     unit: "ratio2",
     fill: DECLARED_FILL,
+    calendar: "daily",
     fillReason: DECLARED_FILL_REASON,
     publication: SAME_DAY,
     source_url: "https://finance.yahoo.com/quote/BTC-USD",
@@ -467,6 +514,7 @@ export const INDICATORS: Indicator[] = [
     transform: "trend_50_200",
     unit: "index",
     fill: DECLARED_FILL,
+    calendar: "daily",
     fillReason: DECLARED_FILL_REASON,
     publication: SAME_DAY,
     source_url: "https://finance.yahoo.com/quote/ETH-USD",
@@ -485,6 +533,7 @@ export const INDICATORS: Indicator[] = [
     transform: "level",
     unit: "count",
     fill: DECLARED_FILL,
+    calendar: "daily",
     fillReason: DECLARED_FILL_REASON,
     publication: SAME_DAY,
     source_url: "https://www.geckoterminal.com/new-pools",
@@ -504,6 +553,7 @@ export const INDICATORS: Indicator[] = [
     transform: "change90",
     unit: "percent_change",
     fill: DECLARED_FILL,
+    calendar: "daily",
     fillReason: DECLARED_FILL_REASON,
     publication: SAME_DAY,
     source_url: "https://defillama.com/",
@@ -523,6 +573,7 @@ export const INDICATORS: Indicator[] = [
     transform: "change90",
     unit: "percent_change",
     fill: DECLARED_FILL,
+    calendar: "daily",
     fillReason: DECLARED_FILL_REASON,
     publication: SAME_DAY,
     source_url: "https://defillama.com/stablecoins",
@@ -547,6 +598,7 @@ export const INDICATORS: Indicator[] = [
     transform: "level",
     unit: "ratio4",
     fill: DECLARED_FILL,
+    calendar: "exchange",
     fillReason: DECLARED_FILL_REASON,
     publication: SAME_DAY,
     source_url: "https://finance.yahoo.com/quote/SPHB",
@@ -568,6 +620,7 @@ export const INDICATORS: Indicator[] = [
     transform: "level",
     unit: "ratio4",
     fill: DECLARED_FILL,
+    calendar: "exchange",
     fillReason: DECLARED_FILL_REASON,
     publication: SAME_DAY,
     source_url: "https://finance.yahoo.com/quote/MTUM",
@@ -589,6 +642,7 @@ export const INDICATORS: Indicator[] = [
     transform: "level",
     unit: "ratio4",
     fill: DECLARED_FILL,
+    calendar: "exchange",
     fillReason: DECLARED_FILL_REASON,
     publication: SAME_DAY,
     source_url: "https://finance.yahoo.com/quote/IWF",
@@ -610,6 +664,7 @@ export const INDICATORS: Indicator[] = [
     transform: "level",
     unit: "ratio4",
     fill: DECLARED_FILL,
+    calendar: "exchange",
     fillReason: DECLARED_FILL_REASON,
     publication: SAME_DAY,
     source_url: "https://finance.yahoo.com/quote/XLU",
@@ -631,6 +686,7 @@ export const INDICATORS: Indicator[] = [
     transform: "level",
     unit: "ratio4",
     fill: DECLARED_FILL,
+    calendar: "exchange",
     fillReason: DECLARED_FILL_REASON,
     publication: SAME_DAY,
     source_url: "https://finance.yahoo.com/quote/XLP",
@@ -649,6 +705,7 @@ export const INDICATORS: Indicator[] = [
     transform: "level",
     unit: "ratio2",
     fill: DECLARED_FILL,
+    calendar: "periodic",
     fillReason: DECLARED_FILL_REASON,
     publication: { kind: "months-later", months: 1 },
     source_url: "https://www.multpl.com/shiller-pe",

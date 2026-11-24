@@ -564,7 +564,7 @@ describe("collected series: BAA10Y is stored, not scored (issue 1653)", () => {
   // A trial macro entry: the collected fields plus scoring fields, no registry edit.
   const promoted: Indicator = {
     ...entry, panel: "macro", sign: -1, transform: "level",
-    fill: { kind: "forward", maxAgeDays: MAX_FORWARD_FILL_DAYS }, fillReason: "test: a trial promotion", publication: { kind: "same-day" },
+    fill: { kind: "forward", maxAgeDays: MAX_FORWARD_FILL_DAYS }, fillReason: "test: a trial promotion", calendar: "daily", publication: { kind: "same-day" },
   };
   const trial = [...INDICATORS, promoted];
 
@@ -640,14 +640,17 @@ describe("the composite averages every included panel at 1/n", () => {
     expect(checked).toBeGreaterThan(100);
   });
 
-  test("with a panel NaN, the composite is the mean of the finite panels", () => {
+  test("with a panel NaN, v4 has a NaN composite (issue 1741) and v3 the mean of the finite panels", () => {
     // Blank every factor series after transform, so the factor index is NaN on every day.
     const p = prepareRegimeInputs(history, { start: "2018-01-01", asof: run.dateAxis[run.dateAxis.length - 1]! });
     for (const x of INDICATORS) if (x.panel === "factor") p.transformed[x.id] = p.transformed[x.id]!.map(() => NaN);
-    const nf = computeRegime(p.transformed, p.dateAxis, PANELS, p.ages);
+    const nf = computeRegime(p.transformed, p.dateAxis, PANELS, p.ages, undefined, "v3");
+    const v4 = computeRegime(p.transformed, p.dateAxis, PANELS, p.ages, undefined, "v4", undefined, undefined, undefined, p.carried);
     let checked = 0;
     for (let i = 0; i < nf.composite.length; i++) {
       expect(Number.isNaN(nf.factorIndex![i]!)).toBe(true);
+      expect(v4.composite[i]!).toBeNaN();
+      expect(v4.regime[i]).toBeNull();
       const m = nf.macroIndex![i]!, o = nf.onchainIndex![i]!;
       if (!Number.isFinite(m) || !Number.isFinite(o)) continue;
       expect(nf.composite[i]!).toBeCloseTo((m + o) / 2, 12);

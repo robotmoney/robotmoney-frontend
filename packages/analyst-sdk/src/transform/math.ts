@@ -218,7 +218,24 @@ export function pearson(xs: number[], ys: number[]): number {
 // O(n log n) for every window: the distinct finite values are ranked once, and
 // the window's finite values sit in a Fenwick tree of integer counts over those
 // ranks, so below, equal and n are exact and the division is the plain one.
-export function rollingPercentileRank(xs: number[], window: number): number[] {
+//
+// Observation days (issue 1741): with a `carried` mask, a carried row counts for
+// nothing. Each real row is ranked among the real rows inside the calendar
+// window, and a carried row takes the rank of its last real row. Without a mask
+// every row counts, as before.
+export function rollingPercentileRank(xs: number[], window: number, carried?: readonly boolean[]): number[] {
+  if (carried) {
+    const real = xs.map((v, i) => (carried[i] ? NaN : v));
+    const r = rollingPercentileRank(real, window);
+    let lastReal = NaN;
+    return r.map((v, i) => {
+      if (!carried[i]) {
+        lastReal = v;
+        return v;
+      }
+      return Number.isFinite(xs[i]) ? lastReal : NaN;
+    });
+  }
   const n = xs.length;
   const out = new Array(n).fill(NaN);
   if (!(window >= 1)) return out; // the window is empty on every day
@@ -277,7 +294,19 @@ export function inverseCorrelationWeights(
   panel: Record<string, number[]>,
   minValidObs = 60,
   cap = 0.25,
+  // Observation days (issue 1741): per id, true on a carried row. A carried row
+  // counts toward neither the floor nor any correlation. An id without a mask
+  // counts every row, as before.
+  carried?: Record<string, readonly boolean[] | undefined>,
 ): Record<string, number> {
+  if (carried) {
+    const real: Record<string, number[]> = {};
+    for (const id of Object.keys(panel)) {
+      const c = carried[id];
+      real[id] = c ? panel[id].map((v, i) => (c[i] ? NaN : v)) : panel[id];
+    }
+    return inverseCorrelationWeights(real, minValidObs, cap);
+  }
   const allIds = Object.keys(panel);
   const validIds = allIds.filter((id) => {
     let n = 0;

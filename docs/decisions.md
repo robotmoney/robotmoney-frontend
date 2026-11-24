@@ -6734,3 +6734,19 @@ Panel weights refit every 21 days on a fixed calendar anchored at 2018-01-01. A 
 **Why.** An audit found slow-release series stamped with the period they describe, then forward-filled, so history showed them up to five months before release; later revisions and dividend back-adjustment reached past days. Every replay, trailing window, backtest and as-of label was biased.
 
 **Rejected.** Re-stamping stored rows at extraction (a migration of the stored floor). A new methodology tag.
+
+## D93 — Windows count observation days, and a missing panel makes a missing composite (issue 1741; amends D89 item 2; code review lucky-weight-invariant P2, T1, A2, A7)
+
+**Status:** Accepted for implementation 2026-11-24. `packages/analyst-sdk/src/prepare.ts`, `packages/analyst-sdk/src/analyze/compute.ts`, `packages/analyst-sdk/src/analyze/indicators.ts` (`calendar`), `packages/analyst-sdk/src/analyze/regime-versions.ts` (`REGIME_OBSERVATION_WINDOWS`, `REGIME_MISSING_PANEL`), `packages/analyst-sdk/src/transform/math.ts`. Methodology in [`docs/technical/regime-engine.md` §3 to §6](technical/regime-engine.md).
+
+**Decision.**
+
+1. **Calendar required.** Every registry indicator declares `calendar`: `daily` (24/7), `exchange` (business or trading days) or `periodic` (weekly or monthly release). The loader throws `CalendarError` naming a row without a valid value. `prepareRegimeInputs` returns `carried`, true where the fill age is above 0.
+2. **Observation days.** An `exchange` series is transformed, ranked and correlated over its own real observations, each counted once. The result is placed on the calendar axis: a closed day takes the transform and the rank of the last real observation, within the fill policy. Window lengths stay in calendar days. The 30 and 60 observation floors count real observations.
+3. **Unchanged.** `daily` and `periodic` series, and every `v3` run. A `periodic` series keeps counting its carried rows: a weekly or monthly release is repeated an equal number of times, so it has no Friday-style tilt, and skipping carried rows would zero `SHILLER_CAPE` and isolate `ICSA`. Another cadence rule for periodic series is a method choice for issue 1673.
+4. **Missing panel (amends D89 item 2).** The composite is NaN, and its label null, on a day any included panel has no index. It no longer re-bases onto the panels that are finite. `v3` keeps the re-based mean.
+5. **Tag.** `v4` is corrected in place (`REGIME_OBSERVATION_WINDOWS`, `REGIME_MISSING_PANEL`): it was never released (D88, D91, D92). No migration, no stored row rewritten, no frozen report or past label restated. The diff of the SDK fixture history is `packages/analyst-sdk/tests/golden/regime-diff-1741.json`.
+
+**Why.** `prepareRegimeInputs` forward-filled each series, then transformed it: `SPX_TREND` covered about 36 and 143 trading days and counted each Friday close three times. Ranks and correlations leaned toward Friday values and pulled equity-versus-crypto correlations toward zero. A missing panel re-based the composite with no market cause.
+
+**Rejected.** One cadence rule for periodic series (issue 1673). A new methodology tag.

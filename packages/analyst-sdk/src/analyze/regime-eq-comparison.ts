@@ -128,7 +128,7 @@ export function computeRegimeEqComparison(input: RegimeEqComparisonInput): Regim
     }
   }
   // The axis, alignment and transform come from the shared seam (D59).
-  const { dateAxis, transformed } = prepareRegimeInputs(raw, { start: "2018-01-01", asof: maxDate, indicators: INDICATORS });
+  const { dateAxis, transformed } = prepareRegimeInputs(raw, { start: "2018-01-01", asof: maxDate, indicators: INDICATORS, observationDays: false });
 
   // ── percentile + sign-align (shared across both arms) ──
   const signed: Record<string, number[]> = {};
