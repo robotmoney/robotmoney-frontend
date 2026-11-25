@@ -25,14 +25,23 @@ import { mergeRatioSeries } from "./grid.ts";
 import { REGIME_KNOWLEDGE_TIME, type RegimeVersion } from "../analyze/regime-versions.ts";
 
 /**
- * The ratio declarations a methodology version reads (issue 1733). A version
- * that reads by knowledge time reads the registry as declared (the equity
+ * The ratio declarations a methodology version reads (issue 1733). `by` is the
+ * version, or the rules in force (any object with their `knowledgeTime`, issue
+ * 1765): a version that runs under other rules reads the ratios its rules read.
+ * Rules that read by knowledge time read the registry as declared (the equity
  * ratios from raw closes, so a later dividend never changes a past ratio).
- * Any other version (v3) reads every ratio as it was declared before:
+ * Any other rules (v3) read every ratio as it was declared before:
  * ratioInput "stored", ratioClose "adjusted", so its runs replay byte for byte.
  */
-export function ratioDeclarationsFor(version: RegimeVersion, indicators: readonly Indicator[] = INDICATORS): readonly Indicator[] {
-  if (REGIME_KNOWLEDGE_TIME[version]) return indicators;
+export function ratioDeclarationsFor(
+  by: RegimeVersion | { readonly knowledgeTime: boolean },
+  indicators: readonly Indicator[] = INDICATORS,
+): readonly Indicator[] {
+  if (typeof by === "object" && (by === null || typeof by.knowledgeTime !== "boolean")) {
+    throw new RangeError(`ratioDeclarationsFor needs a version or rules with a boolean knowledgeTime, got ${JSON.stringify(by)}`);
+  }
+  const byKnowledge = typeof by === "object" ? by.knowledgeTime : REGIME_KNOWLEDGE_TIME[by];
+  if (byKnowledge) return indicators;
   return indicators.map((ind) => (isRatioIndicator(ind) ? { ...ind, ratioInput: "stored" as const, ratioClose: "adjusted" as const } : ind));
 }
 

@@ -82,6 +82,10 @@ function settings(opts: KeptOptions) {
   regimeRulesOf(version, rules);
   if (rules.observationWindows) throw new RangeError("the kept record counts calendar days: rules.observationWindows must be false");
   if (rules.labelCut !== "series") throw new RangeError('the kept record cuts each label on its series: rules.labelCut must be "series"');
+  // fitDay fits every day, so another refit calendar would be silently ignored (issue 1765).
+  if (rules.weightRefresh.intervalDays !== 1) {
+    throw new RangeError(`the kept record refits its weights every day: rules.weightRefresh.intervalDays must be 1, got ${JSON.stringify(rules.weightRefresh.intervalDays)}`);
+  }
   return { version, rules, indicators: opts.indicators ?? REGIME_REGISTRY[version], panels: opts.panels ?? ALL_PANELS, included: opts.included ?? PANELS };
 }
 
