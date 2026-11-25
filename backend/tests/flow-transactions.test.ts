@@ -50,7 +50,7 @@ test("fails closed for invalid input, unavailable queue, and failed quote", asyn
   const deps = { ...chain, address: "", batch: async () => [] };
   expect((await handleFlowTransactions(new Request(url), url, "invalid-flow", deps)).status).toBe(400);
   url.searchParams.set("owner", `0x${"2".repeat(40)}`);
-  expect((await handleFlowTransactions(new Request(url), url, "missing-flow", deps)).status).toBe(503);
+  expect((await handleFlowTransactions(new Request(url), url, "missing-flow", deps)).status).toBe(404);
   expect((await handleFlowTransactions(new Request(url), url, "broken-flow", { ...deps, address: `0x${"1".repeat(40)}` })).status).toBe(503);
   expect((await handleFlowTransactions(new Request(url), url, "orphan-flow", { ...deps, address: `0x${"1".repeat(40)}`, batch: async () => [{ ok: true as const, result: { hash: "0xorphan" } }] })).status).toBe(503);
 });

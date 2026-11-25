@@ -1,3 +1,4 @@
+import { flowConfigured, flowDisabled } from "./flow-config.ts";
 import { sql } from "../../db/client.ts";
 import { flowCheckpoints, flowDeployment } from "../../pipeline/stores/flow-index.ts";
 import { readFlowRequest } from "../../chain/flow-request.ts";
@@ -8,6 +9,7 @@ const reply = (status: number, body: unknown) => Response.json(body, { status, h
 export async function handleFlowRequest(req: Request, id: string, ip: string): Promise<Response> {
   if (limiter.check(ip).limited) return reply(429, { error: "rate limit exceeded" });
   if (req.method !== "GET") return reply(405, { error: "method not allowed" });
+  if (!flowConfigured()) return flowDisabled();
   if (!/^[1-9][0-9]{0,77}$/.test(id) || BigInt(id) >= (1n << 256n)) return reply(400, { error: "invalid request id" });
   const queue = process.env.FLOW_QUEUE_ADDRESS, fund = process.env.FLOW_FUND_ADDRESS;
   if (!queue || !fund) return reply(503, { error: "flow index unavailable" });

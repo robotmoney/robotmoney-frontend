@@ -1,3 +1,4 @@
+import { flowConfigured, flowDisabled } from "./flow-config.ts";
 import { sql } from "../../db/client.ts";
 import { flowCheckpoints, flowDeployment } from "../../pipeline/stores/flow-index.ts";
 import { readFlowPosition } from "../../chain/flow-position.ts";
@@ -8,6 +9,7 @@ const reply = (status: number, body: unknown) => Response.json(body, { status, h
 export async function handleFlowPosition(req: Request, owner: string, ip: string): Promise<Response> {
   if (limiter.check(ip).limited) return reply(429, { error: "rate limit exceeded" });
   if (req.method !== "GET") return reply(405, { error: "method not allowed" });
+  if (!flowConfigured()) return flowDisabled();
   if (!/^0x[0-9a-fA-F]{40}$/.test(owner)) return reply(400, { error: "invalid owner" });
   const queue = process.env.FLOW_QUEUE_ADDRESS, fund = process.env.FLOW_FUND_ADDRESS;
   if (!queue || !fund) return reply(503, { error: "flow index unavailable" });
