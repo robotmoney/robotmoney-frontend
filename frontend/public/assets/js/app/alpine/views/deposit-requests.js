@@ -13,7 +13,7 @@
 import { session } from "../../lib/deposit/session.js";
 import { MANIFEST } from "../../lib/deposit/manifest.js";
 import { buildCancel, buildWithdrawCredit, buildWithdrawExpired, buildClaimShares, buildClaimUsdc, buildGiveNotice, buildTakeBackNotice, buildReleaseWindDown } from "../../lib/deposit/builder.js";
-import { rowOf, stopOf, stageHelp, LIFECYCLE, STAGES_TIP } from "../../lib/deposit/describe.js";
+import { rowOf, stopOf, STAGES_TIP } from "../../lib/deposit/describe.js";
 import { claimableFills, liveRemaining, nextBatchFor } from "../../lib/deposit/stages.js";
 import { fmtDuration, fmtClock } from "../../lib/deposit/schedule.js";
 import { fmtUsdc, fmtShares, fmtRm, fmtWhen, shortAddr, shortHash } from "../../lib/deposit/format.js";
@@ -140,15 +140,6 @@ export function registerDepositRequestsView(Alpine) {
      * "here" where a request stands now, and not reached otherwise. Requests off
      * the path (cancelled, expired, returned) do not move it.
      */
-    lifecycle() {
-      const at = this.rows().map((r) => LIFECYCLE.findIndex((s) => s.stage === r.stage)).filter((i) => i >= 0);
-      const first = Math.min(...at), last = LIFECYCLE.length - 1;
-      return LIFECYCLE.map((s, i) => {
-        const count = at.filter((k) => k === i).length;
-        const state = !at.length ? "todo" : i < first || (i === last && count) ? "done" : count ? "here" : "todo";
-        return { ...s, help: stageHelp(s.stage, "deposit", this.flow()), count, state };
-      });
-    },
 
     // Requests (board 6)
     rows() { this.now; return this.reqs.map((r) => rowOf(r, this.now, this.flow(), { depositsStopped: !!this.vault?.depositsStopped })); },

@@ -24,7 +24,7 @@ import { nextBatchFor, stageOf, canWithdrawExpired, STAGE } from "../../lib/depo
 import { fmtUsdc, fmtUsdcFine, fmtShares, fmtRm, fmtPrice, fmtBps, fmtFee, floorTo, fmtWhen, fmtWhenShort, shortAddr, shortHash } from "../../lib/deposit/format.js";
 import { isOpen, tryCode, bodyOf } from "../../lib/deposit/access.js";
 import { stopOf } from "../../lib/deposit/describe.js";
-import { tokenIcon } from "../../lib/deposit/tokens.js";
+import { tokenIcon, BASE_MARK } from "../../lib/deposit/tokens.js";
 import { CATEGORICAL } from "../../lib/chart-theme.js";
 import { sessionSummary } from "../../lib/session-summary.js";
 import * as weightChange from "../../lib/weight-change.js";
@@ -538,7 +538,7 @@ export function registerDepositView(Alpine) {
       }).observe(inner);
     },
 
-    fmtUsdc, fmtShares, fmtRm, fmtPrice, fmtWhen, fmtWhenShort, fmtFee, shortHash, shortAddr, floorTo, tokenIcon, addrHref, copyAddr,
+    fmtUsdc, fmtShares, fmtRm, fmtPrice, fmtWhen, fmtWhenShort, fmtFee, shortHash, shortAddr, floorTo, tokenIcon, addrHref, copyAddr, BASE_MARK,
     hashUrl(h) { return h && /^0x[0-9a-f]{64}$/i.test(h) && !session.simulated ? `${MANIFEST.explorer}/tx/${h}` : null; },
 
     // ── Simulation controls ──────────────────────────────────────────────

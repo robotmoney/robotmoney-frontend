@@ -9,6 +9,15 @@
 //              (basescan.org/token/images/cbbtc_32.png). Coinbase publishes no
 //              download; replace it with a vector if Coinbase supplies one.
 // rmFUND has no icon yet: proposals are on the design canvas (board 28).
+//
+// The Base mark ("The Square") sits beside the network's name. It comes from
+// Base's own brand kit (github.com/base/brand-kit,
+// logo/TheSquare/Digital/Base_square_blue.svg), fetched 25 Nov 2026 and
+// unaltered. The kit's guide: Base Blue, white or black only, no effects, and
+// clear space of 0.3 times its size on every side.
+
+/** The Base mark, for the network's name (David, 25 Nov). */
+export const BASE_MARK = "/assets/img/brand/base-square.svg";
 
 const ICONS = Object.freeze({
   USDC: "/assets/img/tokens/usdc.svg",
