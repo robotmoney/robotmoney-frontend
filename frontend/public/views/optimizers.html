@@ -5,22 +5,19 @@
      the file's own last v5 day until the API serves it.
      Behaviour: assets/js/app/alpine/views/optimizers.js. -->
 <style>
-  /* The dial and the three bars share the top row; the two asset groups sit
-     under them, side by side, at every width that has room. The bars are the
-     point of the section, so they take every pixel the dial leaves. */
-  .op-regime { display: grid; grid-template-columns: 15rem minmax(0, 1fr); gap: 2.25rem 3rem; align-items: start; }
+  .op-regime { display: grid; grid-template-columns: 15rem minmax(0, 1fr) 17rem; gap: 2.25rem; align-items: start; }
   .op-now { display: grid; gap: 0.75rem; justify-items: start; }
   .op-now .rm-dial { width: 100%; }
   .op-scale { margin: 0; display: grid; gap: 0.5rem; align-content: start; }
   .op-scale__head, .op-scale__row { display: grid; grid-template-columns: 6.5rem 4rem minmax(0, 1fr) 4rem; align-items: center; column-gap: 0.75rem; padding: 0 1rem; }
   .op-scale__head > div { grid-column: 2 / -1; display: flex; justify-content: space-between; }
   .op-scale__row { padding-top: 0.75rem; padding-bottom: 0.75rem; border: 1px solid var(--color-border); }
-  .op-scale__row.is-today { border-color: var(--color-accent); }
+  .op-scale__row.is-today { border-color: var(--color-accent); box-shadow: inset 0 0 0 2px var(--color-accent); }
   .op-scale__name { display: grid; gap: 0.25rem; }
   .op-scale__n { margin: 0; }
   .op-scale__n:last-child { text-align: right; }
   .op-scale__row .op-bar { height: 1.25rem; }
-  .op-groups { grid-column: 1 / -1; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 1.5rem 3rem; align-content: start; }
+  .op-groups { display: grid; gap: 1.5rem; align-content: start; }
   .op-groups h3 { display: flex; align-items: center; gap: 0.5rem; }
   .op-groups h3 > i, .op-groups li > i { width: 0.5rem; height: 0.5rem; flex: none; display: inline-block; }
   .op-groups ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.375rem; }
@@ -28,7 +25,7 @@
   .op-bar { display: flex; height: 0.5rem; background: var(--color-border); }
   .op-bar > i { display: block; height: 100%; }
   .op-bar + .op-bar { margin-top: 0.375rem; }
-  .op-bar > i + i { border-left: 2px solid var(--color-void); }
+  .op-bar > i + i { box-shadow: inset 2px 0 0 var(--color-void); }
   .op-card > .rv__panel-card-head { align-items: center; }
   .op-card__title { display: flex; align-items: center; gap: 0.75rem; }
   .op-icon { width: 2.75rem; height: 2.75rem; flex: none; display: block; }
@@ -67,22 +64,18 @@
 
   .op-rings .rr-legend li { cursor: default; transition: opacity 200ms var(--ease-out-expo); }
   .op-rings .rr-legend li.is-muted { opacity: 0.45; }
-  /* Under 900px the dial stacks above the bars, at the size it has beside them. */
-  @media (max-width: 900px) {
-    .op-regime { grid-template-columns: minmax(0, 1fr); }
-    .op-now .rm-dial { max-width: 15rem; }
+  @media (max-width: 1100px) {
+    .op-regime { grid-template-columns: 15rem minmax(0, 1fr); }
+    .op-groups { grid-column: 1 / -1; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
   }
-  @media (max-width: 640px) {
-    .op-groups { grid-template-columns: minmax(0, 1fr); }
+  @media (max-width: 700px) {
+    .op-regime, .op-groups { grid-template-columns: minmax(0, 1fr); }
   }
   @media (max-width: 860px) {
     .op-cards { grid-template-columns: minmax(0, 1fr); }
   }
   @media (max-width: 520px) {
     .op-rings { grid-template-columns: minmax(0, 1fr); }
-  }
-  /* A phone: each row's name moves above its bar, so the bar keeps the width. */
-  @media (max-width: 640px) {
     .op-scale__head, .op-scale__row { grid-template-columns: 3.75rem minmax(0, 1fr) 3.75rem; }
     .op-scale__head > div { grid-column: 1 / -1; }
     .op-scale__name { grid-column: 1 / -1; display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 0.5rem; }
