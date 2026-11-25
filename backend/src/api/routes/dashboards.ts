@@ -68,18 +68,23 @@ export async function getWalletBalances() {
 
 // ?methodology=<version> (issue 1753): the line of one methodology version.
 // Absent, the main line, as before. Any value outside REGIME_VERSIONS is a
-// 400 that names the allowed values (regimeMethodologyError, checked by the
-// router before either handler below runs).
+// 400 that names the allowed values (regimeSnapshotsResponse below).
 function regimeMethodology(url: URL): RegimeVersion | undefined {
   const v = url.searchParams.get("methodology");
   return isRegimeVersion(v) ? v : undefined;
 }
 
-/** The 400 body for a `methodology` parameter that names no methodology version; null when it is absent or valid. */
-export function regimeMethodologyError(url: URL): { error: string; allowed: readonly string[] } | null {
+/**
+ * GET /api/dashboards/regime-snapshots, status and body: what the router
+ * serves. 400 for a `methodology` that names no methodology version, with the
+ * allowed values; else 200 with the summary view or the full response.
+ */
+export async function regimeSnapshotsResponse(url: URL): Promise<{ status: number; body: unknown }> {
   const v = url.searchParams.get("methodology");
-  if (v === null || isRegimeVersion(v)) return null;
-  return { error: `methodology must be one of ${REGIME_VERSIONS.join(", ")}`, allowed: [...REGIME_VERSIONS] };
+  if (v !== null && !isRegimeVersion(v)) {
+    return { status: 400, body: { error: `methodology must be one of ${REGIME_VERSIONS.join(", ")}`, allowed: [...REGIME_VERSIONS] } };
+  }
+  return { status: 200, body: url.searchParams.get("view") === "summary" ? await getRegimeSnapshotsSummary(url) : await getRegimeSnapshots(url) };
 }
 
 // GET /api/dashboards/regime-snapshots?range=<n days> → { latest, history }

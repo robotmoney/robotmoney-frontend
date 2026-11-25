@@ -4801,6 +4801,11 @@ exact command that finishes it by hand, and the boot's seed step still runs
 | `raw_indicator_history:XLP_XLY` | yahoo ratio | relative 5e-6 |
 | `raw_indicator_history:SHILLER_CAPE` | shiller_cape / multpl | exact |
 | `raw_indicator_history:BAA10Y` | fred (collected series, issue 1653) | exact |
+| `raw_indicator_history:FED_SURPLUS_MONTHLY` | fred (collected series, issue 1753; proposed with D96) | exact |
+| `raw_indicator_history:US_GDP` | fred (collected series, issue 1753; proposed with D96) | exact |
+| `raw_indicator_history:CBOE_VIX3M` | yahoo (collected series, issue 1753; proposed with D96) | relative 1e-6 |
+| `raw_indicator_history:CBOE_SKEW` | yahoo (collected series, issue 1753; proposed with D96) | relative 1e-6 |
+| `raw_indicator_history:SPX_VOLUME` | yahoo volume (collected series, issue 1753; proposed with D96) | exact |
 | `raw_indicator_history:MNA` | edgar | exact |
 | `research:BTC-USD` | yahoo | relative 1e-6 |
 | `research:QQQ` | yahoo | relative 1e-6 |
