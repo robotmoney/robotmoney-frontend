@@ -51,6 +51,7 @@ import {
   isRegimeVersion,
   regimeRulesOf,
   type LookbackWindow,
+  type MissingPanelRule,
   type RegimeLookback,
   type RegimeRules,
   type RegimeVersion,
@@ -72,6 +73,8 @@ export interface RegimeComputeResult {
   weightFitDate: string | null;
   /** Every fit of the run, only when the caller passes `recordWeightFits`. */
   weightFits?: { date: string; weights: Record<string, Record<string, number>> }[];
+  /** The mean of the panel indices, only under composite normalisation "percentile" (issue 1753): `composite` is its rank. */
+  compositeMean?: number[];
   // Legacy convenience fields, populated when the panel was computed.
   macroIndex?: number[];
   macroPercentile?: number[];
@@ -194,23 +197,24 @@ export function computeRegime(
   const weightsByPanel = curWeights;
 
   const composite = new Array(dateAxis.length).fill(NaN);
-  const nanOnMissingPanel = rules.missingPanel === "nan";
-  for (let i = 0; i < dateAxis.length; i++) {
-    const vs: number[] = [];
-    for (const p of panels) {
-      const v = panelIndices[p][i];
-      if (Number.isFinite(v)) vs.push(v);
-    }
-    // Issue 1741: a missing panel is a missing composite, never a re-based mean.
-    composite[i] = vs.length > 0 && !(nanOnMissingPanel && vs.length < panels.length) ? ddValue(ddDivD(sumDD(vs), vs.length)) : NaN;
-  }
+  for (let i = 0; i < dateAxis.length; i++) composite[i] = panelMean(panels.map((p) => panelIndices[p][i]), rules.missingPanel);
 
-  const compRank = rollingPercentileRank(composite, percentileWindow);
+  // Composite normalisation (issue 1753): under "percentile" the composite is
+  // the mid-rank of the panel mean over the percentile lookback, and no second
+  // percentile of the composite or of a panel is computed.
+  const normalised = rules.compositeNormalisation === "percentile";
+  const compositeMean = normalised ? composite.slice() : undefined;
+  if (normalised) {
+    const ranked = rollingPercentileRank(composite, percentileWindow);
+    for (let i = 0; i < ranked.length; i++) composite[i] = ranked[i];
+  }
+  const noPercentile = (): number[] => new Array(dateAxis.length).fill(NaN);
+  const compRank = normalised ? noPercentile() : rollingPercentileRank(composite, percentileWindow);
 
   const panelPercentiles: Record<string, number[]> = {};
   const panelRegimes: Record<string, (string | null)[]> = {};
   for (const p of panels) {
-    panelPercentiles[p] = rollingPercentileRank(panelIndices[p], percentileWindow);
+    panelPercentiles[p] = normalised ? noPercentile() : rollingPercentileRank(panelIndices[p], percentileWindow);
     panelRegimes[p] = regimeLabels(panelIndices[p], panelPercentiles[p], version, rules);
   }
 
@@ -229,6 +233,7 @@ export function computeRegime(
     weightFitDate,
   };
   if (opts.recordWeightFits) out.weightFits = weightFits;
+  if (compositeMean) out.compositeMean = compositeMean;
   if (panels.includes("macro")) {
     out.macroIndex = panelIndices.macro;
     out.macroPercentile = panelPercentiles.macro;
@@ -248,12 +253,24 @@ export function computeRegime(
 }
 
 /**
+ * The equal-weight mean of one day's panel indices, in panel order (the
+ * composite before any normalisation). `rebase` averages the finite ones;
+ * `nan` gives NaN when any is missing (issue 1741: a missing panel is a missing
+ * composite, never a re-based mean). NaN when none is finite.
+ */
+export function panelMean(indices: readonly number[], missingPanel: MissingPanelRule): number {
+  const vs: number[] = [];
+  for (const v of indices) if (Number.isFinite(v)) vs.push(v);
+  return vs.length > 0 && !(missingPanel === "nan" && vs.length < indices.length) ? ddValue(ddDivD(sumDD(vs), vs.length)) : NaN;
+}
+
+/**
  * The window length of one lookback window: `days` for a trailing window,
  * Infinity (the whole prefix) for an inception window. Throws RangeError naming
  * the window when it is missing, of an unknown kind, or has a `days` that is
  * not a positive integer.
  */
-function lookbackDays(lookback: RegimeLookback, name: keyof RegimeLookback): number {
+export function lookbackDays(lookback: RegimeLookback, name: keyof RegimeLookback): number {
   const w = (lookback as unknown as Record<string, LookbackWindow | undefined> | null | undefined)?.[name];
   if (w == null || typeof w !== "object") throw new RangeError(`lookback.${name} is missing`);
   if (w.kind === "inception") return Infinity;

@@ -78,6 +78,22 @@ export class DerivedSeriesError extends Error {
   }
 }
 
+/** The input series ids a declaration reads, in declaration order (issue 1753). */
+export function derivedInputIds(d: DerivedSeries): string[] {
+  switch (d.op) {
+    case "level":
+      return [d.input];
+    case "ratio":
+      return [d.numerator, d.denominator];
+    case "rolling-sum-over-known-level":
+      return [d.flow, d.level];
+    case "up-volume-share":
+      return [d.close, d.volume];
+    default:
+      throw new RangeError(`derived series ${(d as { id?: unknown }).id}: unknown op ${JSON.stringify((d as { op?: unknown }).op)}`);
+  }
+}
+
 const positiveInt = (n: unknown): boolean => typeof n === "number" && Number.isInteger(n) && n > 0;
 
 // The named input, sorted by date (stable). The caller's array is not changed.

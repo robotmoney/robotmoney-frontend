@@ -43,7 +43,7 @@
 // (UNKNOWN_LABEL_RULE).
 import type { Point } from "../types.ts";
 import { FillPolicyError, PANELS, fillMaxAgeDays, fillPolicyOf, type FillPolicy } from "./indicators.ts";
-import { CURRENT_REGIME_VERSION, adoptionDate } from "./regime-versions.ts";
+import { CURRENT_REGIME_VERSION, adoptionDate, type RegimeVersion } from "./regime-versions.ts";
 import { annualizedGrowth, Compounder, ddDiv, ddMulD, ddValue, dotDD, meanAndSampleSd, periodicRate, sharpeDD, sumDD, twoSum } from "../transform/exact.ts";
 
 export const BACKTEST_COST_PER_REBALANCE = 0.001;
@@ -1091,6 +1091,33 @@ export interface ReferenceBacktestOptions {
 }
 
 const REFERENCE_OPTION_KEYS: readonly string[] = ["splitDate", "lagSessions", "calendars", "cashBasis", "sharpeBasis"];
+
+/**
+ * The options the reference backtest of each methodology version runs with
+ * (issue 1753). runAnalytics and runRegime pass the row of the version they
+ * compute to computeBacktest.
+ *
+ * v3 and v4 declare computeBacktest's own defaults (decision D94): a label
+ * trades one session after it is known, the reference market calendars, cash
+ * at the discount-quoted bill's bond-equivalent yield, the Sharpe ratio on the
+ * return above cash, and the split on the current version's adoption date. A
+ * run with the row passed equals a run with no options.
+ *
+ * v5 declares the rule set its frozen golden was published with (decision D96,
+ * which amends D94 for v5 only): a label trades at the close of its own day,
+ * every market trades on every axis day (a closed day at its last close), cash
+ * earns the previous day's T-bill quote read as a yearly yield compounded over
+ * 365 days, the Sharpe ratio is taken on the simulator's pre-cost daily returns
+ * with no cash subtraction, and the in-sample period ends on 2024-01-31. A
+ * trade costs BACKTEST_COST_PER_REBALANCE (10 basis points) of one-sided
+ * turnover under every row. Its results are hypothetical: no real strategy
+ * could have traded at the close that set the label.
+ */
+export const REGIME_BACKTEST_RULES: Readonly<Record<RegimeVersion, Readonly<Required<ReferenceBacktestOptions>>>> = Object.freeze({
+  v3: Object.freeze({ splitDate: BACKTEST_IN_SAMPLE_END, lagSessions: 1, calendars: REFERENCE_CALENDARS, cashBasis: "discount", sharpeBasis: "excess" }),
+  v4: Object.freeze({ splitDate: BACKTEST_IN_SAMPLE_END, lagSessions: 1, calendars: REFERENCE_CALENDARS, cashBasis: "discount", sharpeBasis: "excess" }),
+  v5: Object.freeze({ splitDate: "2024-01-31", lagSessions: 0, calendars: Object.freeze({ eth: "continuous", sp500: "continuous" }), cashBasis: "yield", sharpeBasis: "returns" }),
+});
 
 // The reference backtest under REFERENCE_FILL_POLICIES.
 export function computeBacktest(dateAxis: string[], labels: BacktestLabels, extras: BacktestExtras, options: ReferenceBacktestOptions = {}): BacktestPayload {

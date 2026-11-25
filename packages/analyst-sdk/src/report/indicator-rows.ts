@@ -1,20 +1,25 @@
 // The per-indicator row detail on the asof regime row (issue 1751). Pure.
-import { INDICATORS, fillMaxAgeDays, fillPolicyOf } from "../analyze/indicators.ts";
+import { INDICATORS, fillMaxAgeDays, fillPolicyOf, type Indicator } from "../analyze/indicators.ts";
 import type { RegimeComputeResult } from "../analyze/compute.ts";
+
+/** What the row detail reads of a regime result: the ranks, the signed scores and the as-of weights. */
+export type IndicatorRowScores = Pick<RegimeComputeResult, "ranks" | "signed" | "weightsByPanel">;
 
 const nn = (v: number | undefined): number | null =>
   typeof v === "number" && Number.isFinite(v) ? v : null;
 
 export function buildRichIndicators(
   i: number,
-  r2: RegimeComputeResult,
-  r3: RegimeComputeResult,
+  r2: IndicatorRowScores,
+  r3: IndicatorRowScores,
   transformed: Record<string, number[]>,
   lastRaw: Record<string, { date: string; value: number } | null>,
   dateAxis: string[],
   ages: Record<string, number[]> = {},
+  // The scoring registry of the run (issue 1753). Default INDICATORS.
+  indicators: readonly Indicator[] = INDICATORS,
 ) {
-  return INDICATORS.map((ind) => {
+  return indicators.map((ind) => {
     const weight =
       ind.panel === "factor" ? r3.weightsByPanel.factor?.[ind.id] : r2.weightsByPanel[ind.panel]?.[ind.id];
     // #402: surface the forward-fill age/expiry alongside the existing raw_date
