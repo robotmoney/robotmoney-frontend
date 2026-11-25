@@ -236,9 +236,10 @@ test("/deposit is the deposit page, behind early access, on the simulator when a
   await page.locator("#dp-code").fill("RM-AAAAA-BBBBB");
   await expect(page.locator("#dp-code-msg")).toContainText("does not match");
   await page.locator("#dp-code").fill("RM-LOCAL-TESTS");
-  await expect(page.locator(".dp__title")).toContainText("The model portfolio");
+  await expect(page.locator(".dp__title")).toContainText("Robot Money Vault");
   await expect(page.locator(".dp__tag").first()).toHaveText("Sample data");
-  await expect(page.getByRole("button", { name: "Connect wallet" })).toBeVisible();
+  // The panel's main button on the tab in view; the balance slot carries a small text one too.
+  await expect(page.locator(".dp__panel .btn-primary:visible", { hasText: "Connect wallet" })).toBeVisible();
   await expectNoBrowserErrors(errors);
 });
 
