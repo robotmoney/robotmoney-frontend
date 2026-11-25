@@ -8,13 +8,14 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import {
+  discountToYield,
   driftedWeight,
   forwardFillDaily,
   periodStats,
   PORTFOLIO_SPECS,
   scheduleFromLabels,
-  simulateDrift,
-  simulatePortfolio,
+  simulateDrift as simulateDriftWithDefaults,
+  simulatePortfolio as simulatePortfolioWithDefaults,
   type DriftOptions,
   type Schedule,
   type Weights,
@@ -25,11 +26,19 @@ import { parseRawHistory, runRegime as runRegimeOutcome, requireComplete, toHist
 // Each run here scores a complete day (issue 1655): an IncompleteDay fails the test.
 const runRegime = (...a: Parameters<typeof runRegimeOutcome>) => requireComplete(runRegimeOutcome(...a));
 import type { Point } from "../src/types.ts";
-import { exactDot, onePlus, Q } from "./support/exact-reference.ts";
+import { exactCompound, exactDot, onePlus, Q } from "./support/exact-reference.ts";
 import { simulatorFillCases } from "./support/simulator-fill-cases.ts";
 
 setDefaultTimeout(120_000);
 const DIR = import.meta.dir;
+
+// The drift cases test the book's own arithmetic: targets held from the same
+// close, every market open (issue 1734 tests the lag and calendars in
+// backtest.test.ts). Both wrappers pass the same defaults, so the bit-for-bit
+// comparisons between the simulators still hold.
+const sameClose = (p: Record<string, Point[]>) => ({ lagSessions: 0, calendars: Object.fromEntries(Object.keys(p).map((k) => [k, "continuous" as const])) });
+const simulateDrift: typeof simulateDriftWithDefaults = (a, s, p, c, o = {}) => simulateDriftWithDefaults(a, s, p, c, { ...sameClose(p), ...o });
+const simulatePortfolio: typeof simulatePortfolioWithDefaults = (a, s, p, c, o = {}) => simulatePortfolioWithDefaults(a, s, p, c, { ...sameClose(p), ...o });
 const raw = toHistory(parseRawHistory(readFileSync(join(DIR, "fixtures/raw-indicator-history.csv"), "utf8")));
 
 const dayFrom = (start: string, i: number) => new Date(Date.parse(`${start}T00:00:00Z`) + i * 86_400_000).toISOString().slice(0, 10);
@@ -188,7 +197,7 @@ describe("committed SPX/ETH/TBILL3M fixture", () => {
     let updates = 0;
     let shortcutMisses = 0;
     for (let i = first + 1; i < axis.length; i++) {
-      const rs: Record<string, number> = { cash: periodicRate((tb[i - 1] || 0) / 100, 365) };
+      const rs: Record<string, number> = { cash: periodicRate(discountToYield(tb[i - 1] || 0) / 100, 365) };
       for (const k of ["spx", "eth"] as const) {
         const p0 = series[k][i - 1]!;
         const p1 = series[k][i]!;
@@ -236,7 +245,7 @@ describe("committed SPX/ETH/TBILL3M fixture", () => {
   test("periodStats accepts a simulateDrift result: transitions equal trades and statistics are finite", () => {
     const sim = simulateDrift(axis, axis.map(() => ({ cash: 0.2, spx: 0.4, eth: 0.4 })), prices, tbill, { costBps: 10, freq: "monthly" });
     expect(sim.trades.length).toBeGreaterThan(12);
-    const st = periodStats(sim.values, sim.startDate, sim.endDate, { returns: sim.returns, trades: sim.trades });
+    const st = periodStats(sim.values, sim.startDate, sim.endDate, { returns: sim.returns, excess: sim.excess, trades: sim.trades });
     expect(st.transitions).toBe(sim.trades.length);
     for (const v of [st.final_value, st.cagr, st.sharpe, st.max_drawdown]) expect(Number.isFinite(v)).toBe(true);
     expect(st.n_days).toBe(sim.returns.length);
@@ -285,10 +294,45 @@ describe("options and inputs", () => {
   });
 
   test("simulateDrift, periodStats and the drift types are exported from the package entry", () => {
-    expect(entry.simulateDrift).toBe(simulateDrift);
+    expect(entry.simulateDrift).toBe(simulateDriftWithDefaults);
     expect(entry.periodStats).toBe(periodStats);
     const opts: entry.DriftOptions = { freq: "weekly" as entry.RebalanceFrequency };
-    expect(entry.simulateDrift(AX, sched, DOUBLES, [], opts).values.length).toBe(5);
+    expect(entry.simulateDrift(AX, sched, DOUBLES, [], { ...sameClose(DOUBLES), ...opts }).values.length).toBe(5);
+  });
+});
+
+// Issue 1751, gap 1: the cash basis of the drifting book.
+describe("cash basis (issue 1751)", () => {
+  const axis = Array.from({ length: 30 }, (_, i) => new Date(Date.UTC(2024, 0, 1 + i)).toISOString().slice(0, 10));
+  const q = 5.25;
+  const tbill = axis.map((date) => ({ date, value: q }));
+  const allCash: Schedule = axis.map(() => ({ cash: 1 }));
+  const compound = (r: number) => exactCompound(axis.slice(1).map(() => r));
+  const asYield = periodicRate(q / 100, 365);
+  const asDiscount = periodicRate(discountToYield(q) / 100, 365);
+
+  test("cashBasis yield compounds the quote as a yearly yield; discount and no option convert it first, as 0.8.0", () => {
+    expect(asYield).not.toBe(asDiscount);
+    // Held from the same close, so the book earns cash on every later axis day.
+    const run = (o?: DriftOptions) => simulateDriftWithDefaults(axis, allCash, {}, tbill, { lagSessions: 0, ...o });
+    const end = (o?: DriftOptions) => run(o).values.at(-1)!.value;
+    expect(end({ cashBasis: "yield" })).toBe(compound(asYield));
+    expect(end({ cashBasis: "yield" })).toBeCloseTo((1 + asYield) ** (axis.length - 1), 14);
+    expect(end({ cashBasis: "discount" })).toBe(compound(asDiscount));
+    expect(end()).toBe(compound(asDiscount));
+    expect(run({ cashBasis: "discount" })).toEqual(run());
+    // Both simulators read the basis alike.
+    expect(run({ cashBasis: "yield" }).values).toEqual(simulatePortfolioWithDefaults(axis, allCash, {}, tbill, { lagSessions: 0, cashBasis: "yield" }).values);
+  });
+
+  test("a cashBasis outside discount and yield, and an unknown option key, are RangeErrors naming them", () => {
+    const bad = (o: unknown, field: RegExp) => {
+      const call = () => simulateDriftWithDefaults(axis, allCash, {}, tbill, o as DriftOptions);
+      expect(call).toThrow(RangeError);
+      expect(call).toThrow(field);
+    };
+    bad({ cashBasis: "other" }, /cashBasis/);
+    bad({ cashbasis: "yield" }, /cashbasis/);
   });
 });
 

@@ -9,6 +9,12 @@ export function fmtUsdc(n) {
   if (n == null || !Number.isFinite(n)) return "—";
   return `${n.toLocaleString("en-US", { minimumFractionDigits: 0, maximumFractionDigits: 2 })} USDC`;
 }
+/** A small amount still worth reading: "0.002 USDC" (two significant figures under 1 USDC). @param {number|null|undefined} n */
+export function fmtUsdcFine(n) {
+  if (n == null || !Number.isFinite(n)) return "—";
+  if (n > 0 && n < 0.0001) return "<0.0001 USDC";
+  return n < 1 ? `${n.toLocaleString("en-US", { maximumSignificantDigits: 2 })} USDC` : fmtUsdc(n);
+}
 /** "1,500.4210". @param {number|null|undefined} n */
 export function fmtShares(n) {
   if (n == null || !Number.isFinite(n)) return "—";

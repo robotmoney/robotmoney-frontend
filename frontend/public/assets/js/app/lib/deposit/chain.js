@@ -140,7 +140,7 @@ export function createChainSource(w, m = MANIFEST) {
       ]);
       return {
         usdc: fromUnits(usdc, m.usdcDecimals), usdbc: fromUnits(usdbc, m.usdcDecimals),
-        shares: fromUnits(shares, SHARE_DECIMALS), usdcAllowance: usdcAllow, shareAllowance: shareAllow,
+        shares: fromUnits(shares, SHARE_DECIMALS), sharesRaw: shares, usdcAllowance: usdcAllow, shareAllowance: shareAllow,
         creditUsdc: fromUnits(credit[0], m.usdcDecimals), creditShares: fromUnits(credit[1], SHARE_DECIMALS),
         queuedShares: fromUnits(queued, SHARE_DECIMALS), maxDepositUsdc: fromUnits(maxDep, m.usdcDecimals), maxDepositRaw: maxDep,
       };

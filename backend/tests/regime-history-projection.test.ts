@@ -5,7 +5,18 @@
 // (percentiles). Pure function, no DB needed.
 import { expect, test } from "bun:test";
 import { forHistory, rowToSnapshot } from "../src/analytics/report/regime-projection.ts";
-import type { RegimeSnapshot } from "@robotmoney/contract";
+import type { RegimeHistoryPoint, RegimeSnapshot } from "@robotmoney/contract";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import {
+  forHistory as sdkForHistory,
+  rowToSnapshot as sdkRowToSnapshot,
+  type RegimeHistoryPoint as SdkRegimeHistoryPoint,
+  type RegimeSnapshot as SdkRegimeSnapshot,
+} from "../../packages/analyst-sdk/src/report/regime-snapshots.ts";
+
+// True only when A and B are assignable in both directions.
+type Mutual<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
 
 function fullSnapshot(overrides: Partial<RegimeSnapshot> = {}): RegimeSnapshot {
   return {
@@ -83,4 +94,33 @@ test("forHistory is idempotent-shaped over a row that already has null/empty aso
   expect(projected).not.toHaveProperty("indicators");
   expect(projected.date).toBe("2026-09-01");
   expect(projected.composite).toBe(0.5);
+});
+
+// ── issue 1751: the projection is the SDK's ─────────────────────────────────
+// The SDK declares RegimeSnapshot and RegimeHistoryPoint itself (it installs
+// alone, so it cannot import the contract package). The assignments below
+// fail `bun run typecheck` if either shape drifts from the contract's.
+test("the SDK's RegimeSnapshot and RegimeHistoryPoint are assignable to the contract's and back (issue 1751)", () => {
+  const contractSnapshot: RegimeSnapshot = fullSnapshot();
+  const sdkSnapshot: SdkRegimeSnapshot = contractSnapshot;
+  const backSnapshot: RegimeSnapshot = sdkSnapshot;
+  const sdkPoint: SdkRegimeHistoryPoint = forHistory(contractSnapshot) satisfies RegimeHistoryPoint;
+  const backPoint: RegimeHistoryPoint = sdkPoint;
+  const mutual: [Mutual<SdkRegimeSnapshot, RegimeSnapshot>, Mutual<SdkRegimeHistoryPoint, RegimeHistoryPoint>] = [true, true];
+  expect(mutual).toEqual([true, true]);
+  expect(backSnapshot).toBe(contractSnapshot);
+  expect(backPoint).toEqual(sdkForHistory(sdkSnapshot));
+});
+
+test("the SDK's rowToSnapshot and forHistory return the committed projection fixtures, and the backend serves the same functions (issue 1751)", () => {
+  // One copy: the SDK's own test (packages/analyst-sdk/tests/report-functions.test.ts) reads this same file.
+  const fixture = JSON.parse(
+    readFileSync(join(import.meta.dir, "../../packages/analyst-sdk/tests/fixtures/report/regime-history-projection.json"), "utf8"),
+  ) as { sqlRows: unknown[]; snapshots: SdkRegimeSnapshot[]; history: SdkRegimeHistoryPoint[] };
+  expect(fixture.sqlRows.length).toBe(3);
+  const snapshots = fixture.sqlRows.map(sdkRowToSnapshot);
+  expect(snapshots).toEqual(fixture.snapshots);
+  expect(snapshots.map(sdkForHistory)).toEqual(fixture.history);
+  expect(rowToSnapshot).toBe(sdkRowToSnapshot);
+  expect(forHistory).toBe(sdkForHistory);
 });

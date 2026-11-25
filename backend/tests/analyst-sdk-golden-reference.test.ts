@@ -11,6 +11,7 @@
 // Issue 1559 starts every line of a market on the strategies' start; the
 // original JS predates it, so its backtest is compared with that rule applied
 // (packages/analyst-sdk/tests/support/issue-1559.ts) to its own daily values.
+import { shapeDiffs } from "../../packages/analyst-sdk/tests/support/shape-diff.ts";
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
@@ -155,11 +156,15 @@ describe("analyst-sdk golden equals the original JS reference", () => {
     const counter = { n: 0 };
     const out: string[] = [];
     // The golden also carries `version`, which is SDK metadata the reference has no notion of.
-    const { version: _v, ...goldenBody } = golden;
-    diff(goldenBody, ref, "report", out, counter);
+    // Issue 1734 (D94): the backtest no longer reproduces the reference's numbers (next-session
+    // execution, closed-market deferral, post-cost excess Sharpe, yield-basis cash). It keeps its shape.
+    const { version: _v, backtest: goldenBacktest, ...goldenBody } = golden;
+    const { backtest: refBacktest, ...refBody } = ref;
+    diff(goldenBody, refBody, "report", out, counter);
+    expect(shapeDiffs(goldenBacktest, refBacktest)).toEqual([]);
     expect(out.slice(0, 10)).toEqual([]);
     // The comparison actually ran over a large surface, not a lone leaf.
-    expect(counter.n).toBeGreaterThan(1000);
+    expect(counter.n).toBeGreaterThan(150);
     expect(golden.regime.label).toBe(ref.regime.label);
     expect(golden.asof).toBe(ref.asof);
     expect(Number.isFinite(golden.regime.composite)).toBe(true);
@@ -171,7 +176,8 @@ describe("analyst-sdk golden equals the original JS reference", () => {
   });
 
   test("planted violations are caught: one perturbed golden value fails the comparison", () => {
-    const { version: _v, ...base } = golden;
+    const { version: _v, backtest: _bt, ...base } = golden;
+    const { backtest: _refBt, ...refBody } = ref;
     const cases: Array<[string, (g: any) => void]> = [
       ["composite", (g) => (g.regime.composite += 1e-6)],
       ["compositePercentile", (g) => (g.regime.compositePercentile += 1e-6)],
@@ -186,12 +192,12 @@ describe("analyst-sdk golden equals the original JS reference", () => {
       const copy = JSON.parse(JSON.stringify(base));
       mutate(copy);
       const out: string[] = [];
-      diff(copy, ref, "report", out, { n: 0 });
+      diff(copy, refBody, "report", out, { n: 0 });
       expect(out.length, `perturbing ${name} must fail the comparison`).toBeGreaterThan(0);
     }
     // And the unperturbed copy passes, so the control is not failing for another reason.
     const clean: string[] = [];
-    diff(JSON.parse(JSON.stringify(base)), ref, "report", clean, { n: 0 });
+    diff(JSON.parse(JSON.stringify(base)), refBody, "report", clean, { n: 0 });
     expect(clean).toEqual([]);
   });
 });
@@ -228,7 +234,7 @@ describe("analyst-sdk report bytes are unchanged by the D74 storage mapping", ()
   // And by issue 1708 (D89, factor joins the 1/n composite; was c661b2e44fac9f1d1800160546a1b3a3f20e14efaef2b3321b6e8519f7e121ee).
   // And by issue 1742 (forward correlation cells gain n_eff; was fd512236f0b9baf9eafa35fc0b23ce88ad6030ec6ef877b0652ab126fd50de6f).
   // And by issue 1733 (knowledge time and raw-close equity ratios; was 212c205675ae6046cad5406baad3429910189b0c4a8a918de8e53b24aa392eae).
-  const GOLDEN_SHA256 = "20305498dabbef1a99fa6a39681dddd9836244ab1ffb54e8b899f8a6e461858f";
+  const GOLDEN_SHA256 = "45948f4ad4c9f6ae6dc295ed58f35bac8263f0dd31933b6c6c6e239cbf4ff2fe";
 
   test("with fetch throwing, the full serialized report equals the pre-change golden bytes", async () => {
     const { createHash } = await import("node:crypto");

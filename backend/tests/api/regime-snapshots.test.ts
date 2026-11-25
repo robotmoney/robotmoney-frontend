@@ -391,3 +391,124 @@ test("issue 1652: every row of the served regime history carries one methodology
   }
   await setReadMode("compatibility");
 });
+
+// ── Issue 1753: ?methodology= serves one methodology's line ─────────────────
+// Methodology v5 is published beside the main line. Without the parameter the
+// response is the main line, byte for byte what it was before any v5 run
+// existed. With methodology=v5 it is the v5 line, in the same shape.
+const v5Row = (date: string, composite: number | null, regime: string | null) => ({
+  date, composite, compositePercentile: null, regime,
+  macroRegime: regime, onchainRegime: regime, factorRegime: regime,
+  macroIndex: 0.41, onchainIndex: 0.52, factorIndex: 0.63,
+  macroPercentile: null, onchainPercentile: null, factorPercentile: null,
+  panelWeights: null, version: "v5", source: "fixture",
+  percentiles: { VIX: 0.4 }, indicators: [], panels: null, bucketThresholds: null,
+  backtest: null, correlations: null, extras: null,
+});
+
+test("issue 1753: with no methodology parameter the body is the pre-change body; methodology=v5 serves the v5 line", async () => {
+  const { day, publishNow, regimeRow } = await import("../support/regime-publications.ts");
+  const { regimeSnapshotsResponse } = await import("../../src/api/routes/dashboards.ts");
+  const mainRow = (date: string, composite: number) => ({ ...regimeRow(date, composite), version: "v4", indicators: freshIndicators(date) });
+  const [a, b, c] = [day(-2), day(-1), day(0)];
+  const url = (query: string) => new URL(`http://backend.test${ROUTES.dashboards.regimeSnapshots}${query}`);
+  const body = async (query: string) => JSON.stringify((await regimeSnapshotsResponse(url(query))).body);
+
+  // The main line: one v4 run that publishes three days.
+  await publishNow({ asof: c, version: "v4", regime: [mainRow(a, 0.51), mainRow(b, 0.52), mainRow(c, 0.53)] });
+  const queries = ["?range=400", "?range=400&include=backtest", "?range=2", "?view=summary", ""];
+  const before: Record<string, string> = {};
+  for (const q of queries) before[q] = await body(q);
+  const tableBefore = JSON.stringify(await sql`SELECT * FROM regime_snapshots ORDER BY date`);
+  expect(Object.keys(JSON.parse(before["?range=400"]!)).sort()).toEqual(["history", "latest", "source", "staleness"]);
+
+  // The v5 line: a first run for day b (day a has a mean and no label yet), then a run for day c.
+  const asofRow = { ...v5Row(b, 0.71, "risk_on"), indicators: freshIndicators(b), panels: ["macro", "onchain", "factor"], backtest: { eth: { composite: { cagr: 0.2 } } } };
+  await publishNow({ asof: b, version: "v5", regime: [v5Row(a, null, null), asofRow] as never });
+  const latestRow = { ...v5Row(c, 0.74, "risk_on"), indicators: freshIndicators(c), panels: ["macro", "onchain", "factor"], backtest: { eth: { composite: { cagr: 0.21 } } } };
+  await publishNow({ asof: c, version: "v5", regime: [latestRow] as never });
+
+  // No parameter: the body is byte for byte what it was, on every query, and the table holds no v5 row.
+  for (const q of queries) expect({ q, body: await body(q) }).toEqual({ q, body: before[q]! });
+  expect(JSON.stringify(await sql`SELECT * FROM regime_snapshots ORDER BY date`)).toBe(tableBefore);
+  const kinds = await sql<{ artifact_kind: string; n: number }[]>`SELECT artifact_kind, COUNT(*)::int AS n FROM analytics_output_snapshots GROUP BY artifact_kind ORDER BY artifact_kind`;
+  expect(kinds.map((k) => [k.artifact_kind, k.n])).toEqual([["regime_beside_snapshots", 2], ["regime_snapshots", 3], ["research_signals", 3]]);
+
+  // methodology=v5: the v5 line, in the same shape, every row v5, none without a label.
+  const r = await regimeSnapshotsResponse(url("?range=400&methodology=v5"));
+  expect(r.status).toBe(200);
+  const v5 = JSON.parse(JSON.stringify(r.body));
+  expect(Object.keys(v5).sort()).toEqual(["history", "latest", "methodology", "source", "staleness"]);
+  expect(v5.methodology).toBe("v5");
+  expect(v5.source).toBe("ledger");
+  expect(v5.history.map((h: any) => [h.date, h.composite, h.regime, h.version])).toEqual([[b, 0.71, "risk_on", "v5"], [c, 0.74, "risk_on", "v5"]]);
+  for (const h of v5.history) {
+    expect(h.regime).not.toBeNull();
+    expect(h.compositePercentile).toBeNull();
+    expect([h.macroPercentile, h.onchainPercentile, h.factorPercentile]).toEqual([null, null, null]);
+    for (const dropped of ["backtest", "correlations", "indicators", "percentiles"]) expect(dropped in h).toBe(false);
+  }
+  expect(v5.latest.date).toBe(c);
+  expect(v5.latest.version).toBe("v5");
+  expect(v5.latest.compositePercentile).toBeNull();
+  expect(v5.latest.indicators.length).toBe(freshIndicators(c).length);
+  // include=backtest, range and view=summary work as on the main line.
+  expect(v5.latest.backtest).toBeNull();
+  const withBacktest = JSON.parse(await body("?range=400&include=backtest&methodology=v5"));
+  expect(withBacktest.latest.backtest).toEqual({ eth: { composite: { cagr: 0.21 } } });
+  const one = JSON.parse(await body("?range=1&methodology=v5"));
+  expect(one.history.map((h: any) => h.date)).toEqual([c]);
+  const summary = JSON.parse(await body("?view=summary&methodology=v5"));
+  expect(Object.keys(summary).sort()).toEqual(["methodology", "summary"]);
+  expect(summary.methodology).toBe("v5");
+  expect(summary.summary).toMatchObject({ date: c, composite: 0.74, compositePercentile: null, regime: "risk_on", macroIndex: 0.41, onchainIndex: 0.52, factorIndex: 0.63 });
+  expect(v5.staleness.stale).toBe(false);
+
+  // methodology=v4 names the main line it serves; the rows are the main line's.
+  const v4 = JSON.parse(await body("?range=400&methodology=v4"));
+  expect(v4.methodology).toBe("v4");
+  const { methodology: _m, ...v4Rest } = v4;
+  expect(JSON.stringify(v4Rest)).toBe(before["?range=400"]!);
+  // v3 has published nothing here.
+  const v3 = JSON.parse(await body("?range=400&methodology=v3"));
+  expect([v3.latest, v3.history, v3.methodology, v3.source]).toEqual([null, [], "v3", "ledger"]);
+});
+
+test("issue 1753: methodology=v9 is a 400 that names the allowed values", async () => {
+  const { regimeSnapshotsResponse } = await import("../../src/api/routes/dashboards.ts");
+  for (const bad of ["v9", "", "V5", "experiment-lex-equity"]) {
+    for (const view of ["", "&view=summary"]) {
+      const r = await regimeSnapshotsResponse(new URL(`http://backend.test${ROUTES.dashboards.regimeSnapshots}?range=10&methodology=${bad}${view}`));
+      expect({ bad, view, status: r.status }).toEqual({ bad, view, status: 400 });
+      expect(r.body).toEqual({ error: "methodology must be one of v3, v4, v5", allowed: ["v3", "v4", "v5"] });
+    }
+  }
+  // The router serves exactly this status and body.
+  const { readFileSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  const router = readFileSync(join(import.meta.dir, "../../src/api/index.ts"), "utf8");
+  expect(router).toContain("const r = await regimeSnapshotsResponse(url);\n      return json(r.body, r.status);");
+});
+
+test("issue 1753: methodology=v5 on a database with no v5 run answers latest null and an empty history", async () => {
+  const { day, publishNow, regimeRow } = await import("../support/regime-publications.ts");
+  const { regimeSnapshotsResponse } = await import("../../src/api/routes/dashboards.ts");
+  const url = (query: string) => new URL(`http://backend.test${ROUTES.dashboards.regimeSnapshots}${query}`);
+  // An empty database.
+  const empty = JSON.parse(JSON.stringify((await regimeSnapshotsResponse(url("?range=400&methodology=v5"))).body));
+  expect(empty.latest).toBeNull();
+  expect(empty.history).toEqual([]);
+  expect(empty.methodology).toBe("v5");
+  expect(empty.staleness.stale).toBe(true);
+  // A database with a main line and no v5 run: still nothing of the main line leaks into the v5 line.
+  await publishNow({ asof: day(0), version: "v4", regime: [{ ...regimeRow(day(0), 0.5), version: "v4" }] });
+  const r = await regimeSnapshotsResponse(url("?range=400&methodology=v5"));
+  expect(r.status).toBe(200);
+  const v5 = JSON.parse(JSON.stringify(r.body));
+  expect([v5.latest, v5.history, v5.methodology, v5.source]).toEqual([null, [], "v5", "ledger"]);
+  expect(JSON.parse(JSON.stringify((await regimeSnapshotsResponse(url("?view=summary&methodology=v5"))).body))).toEqual({ summary: null, methodology: "v5" });
+  // The main line is served as ever.
+  const main = JSON.parse(JSON.stringify((await regimeSnapshotsResponse(url("?range=400"))).body));
+  expect(main.history.map((h: any) => h.date)).toEqual([day(0)]);
+  expect("methodology" in main).toBe(false);
+});

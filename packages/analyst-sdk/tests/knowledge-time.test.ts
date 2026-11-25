@@ -150,6 +150,42 @@ describe("equity ratios read raw closes", () => {
   });
 });
 
+describe("calendar-days publication (issue 1751)", () => {
+  test("the date plus n calendar days, across a month end and a weekend", () => {
+    // 2026-01-30 is a Friday: Saturday, Sunday, then Monday 2026-02-02.
+    expect(publishedOn("2026-01-30", { kind: "calendar-days", days: 3 })).toBe("2026-02-02");
+  });
+
+  test("days 1, 43 and 120 each add that many calendar days", () => {
+    expect(publishedOn("2026-01-30", { kind: "calendar-days", days: 1 })).toBe("2026-01-31");
+    // 1 day left in January, 28 in February, then 14 into March.
+    expect(publishedOn("2026-01-30", { kind: "calendar-days", days: 43 })).toBe("2026-03-14");
+    // 1 + 28 + 31 + 30 = 90 days to the end of April, then 30 into May.
+    expect(publishedOn("2026-01-30", { kind: "calendar-days", days: 120 })).toBe("2026-05-30");
+    // A leap February: 2024-01-01 plus 120 days is 2024-04-30, not 05-01.
+    expect(publishedOn("2024-01-01", { kind: "calendar-days", days: 120 })).toBe("2024-04-30");
+    expect(publishedOn("2023-12-31", { kind: "calendar-days", days: 1 })).toBe("2024-01-01");
+  });
+
+  test("publicationRuleOf accepts a positive integer count", () => {
+    expect(publicationRuleOf({ id: "X", publication: { kind: "calendar-days", days: 43 } })).toEqual({ kind: "calendar-days", days: 43 });
+  });
+
+  test("days 0, 1.5 or missing throws PublicationRuleError naming the series", () => {
+    for (const publication of [{ kind: "calendar-days", days: 0 }, { kind: "calendar-days", days: 1.5 }, { kind: "calendar-days" }, { kind: "calendar-days", days: -3 }]) {
+      expect(() => publicationRuleOf({ id: "FISCAL", publication })).toThrow(PublicationRuleError);
+      expect(() => publicationRuleOf({ id: "FISCAL", publication })).toThrow(/series FISCAL/);
+    }
+  });
+
+  test("a direct publishedOn call with days 0 or 1.5 throws PublicationRuleError naming the rule kind", () => {
+    for (const days of [0, 1.5]) {
+      expect(() => publishedOn("2026-01-30", { kind: "calendar-days", days })).toThrow(PublicationRuleError);
+      expect(() => publishedOn("2026-01-30", { kind: "calendar-days", days })).toThrow(/calendar-days rule.*days must be a positive integer/);
+    }
+  });
+});
+
 describe("partial-day capture (finding E4)", () => {
   const rows = [
     { date: "2024-03-05", value: 100, known: "2024-03-05T23:00:00Z" },
@@ -280,5 +316,61 @@ describe("prefix invariance", () => {
     const t = "2024-02-08";
     const a = rowOf(requireComplete(runRegime(leaked, { asof: t })), t);
     expect(a.signed.ICSA).not.toEqual(rowOf(full, t).signed.ICSA);
+  });
+});
+
+// Issue 1751, gap 7: an indicator's calendar and publication rule are checked
+// only when the rules in force read them. v3 reads neither (period dates,
+// forward-filled windows); v4 reads both.
+import { CalendarError, INDICATORS as REGISTRY } from "../src/analyze/indicators.ts";
+import { REGIME_RULES } from "../src/analyze/regime-versions.ts";
+import { knowledgeTimeHistory } from "../src/prepare.ts";
+
+describe("calendar and publication are validated only when the rules read them (issue 1751)", () => {
+  const raw = toHistory(parseRawHistory(readFileSync(join(import.meta.dir, "fixtures/raw-indicator-history.csv"), "utf8")));
+  const opts = { start: "2018-01-01", asof: "2026-08-15" };
+  const ID = "VIX";
+  const strip = (...fields: ("calendar" | "publication")[]) =>
+    REGISTRY.map((ind) => {
+      if (ind.id !== ID) return ind;
+      const copy: Record<string, unknown> = { ...ind };
+      for (const f of fields) delete copy[f];
+      return copy as unknown as Indicator;
+    });
+
+  test("under REGIME_RULES.v3 an indicator with no calendar and no publication is accepted, and the output is unchanged", () => {
+    const bare = strip("calendar", "publication");
+    expect("calendar" in bare.find((i) => i.id === ID)!).toBe(false);
+    const want = prepareRegimeInputs(raw, { ...opts, version: "v3" });
+    expect(prepareRegimeInputs(raw, { ...opts, indicators: bare, rules: REGIME_RULES.v3 })).toEqual(want);
+    expect(prepareRegimeInputs(raw, { ...opts, indicators: bare, version: "v3" })).toEqual(want);
+    expect(knowledgeTimeHistory(raw, { indicators: bare, rules: REGIME_RULES.v3 })).toEqual(knowledgeTimeHistory(raw, { version: "v3" }));
+  });
+
+  test("under REGIME_RULES.v4 it throws CalendarError or PublicationRuleError naming the indicator", () => {
+    const refuse = (indicators: Indicator[], type: typeof CalendarError | typeof PublicationRuleError) => {
+      for (const rules of [{ rules: REGIME_RULES.v4 }, { version: "v4" as const }, {}]) {
+        let err: unknown;
+        try {
+          prepareRegimeInputs(raw, { ...opts, indicators, ...rules });
+        } catch (e) {
+          err = e;
+        }
+        expect(err).toBeInstanceOf(type);
+        expect((err as Error).message).toContain(ID);
+      }
+    };
+    refuse(strip("calendar"), CalendarError);
+    refuse(strip("publication"), PublicationRuleError);
+    refuse(strip("calendar", "publication"), CalendarError);
+    expect(() => knowledgeTimeHistory(raw, { indicators: strip("publication"), rules: REGIME_RULES.v4 })).toThrow(PublicationRuleError);
+    // Each rule is checked by the rule that reads it: knowledge time alone needs
+    // no calendar, observation days alone no publication rule.
+    const datedOnly = { ...REGIME_RULES.v3, knowledgeTime: true };
+    const windowsOnly = { ...REGIME_RULES.v3, observationWindows: true };
+    expect(() => prepareRegimeInputs(raw, { ...opts, indicators: strip("calendar"), rules: datedOnly })).not.toThrow();
+    expect(() => prepareRegimeInputs(raw, { ...opts, indicators: strip("publication"), rules: datedOnly })).toThrow(PublicationRuleError);
+    expect(() => prepareRegimeInputs(raw, { ...opts, indicators: strip("publication"), rules: windowsOnly })).not.toThrow();
+    expect(() => prepareRegimeInputs(raw, { ...opts, indicators: strip("calendar"), rules: windowsOnly })).toThrow(CalendarError);
   });
 });

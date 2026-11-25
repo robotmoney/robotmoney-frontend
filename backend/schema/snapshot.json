@@ -135,7 +135,9 @@
     "0131_swarm_briefs_allocation_backfill.sql",
     "0132_flow_index.sql",
     "0133_buybacks_refresh_disabled.sql",
-    "0134_read_path_indexes.sql"
+    "0134_read_path_indexes.sql",
+    "0135_drop_vintage_members_vintage_idx.sql",
+    "0136_regime_beside_snapshots.sql"
   ],
   "exclusions": {
     "roles": [
@@ -148,7 +150,7 @@
       "plpgsql"
     ]
   },
-  "contentHash": "4ca77ee323dc8e05c8925a7751149193b765ae72e4afc2bc580eced87a79c95f",
+  "contentHash": "03397ed26d84cc3b352202739969dcd90adce7ea07d4976ebc563757a102adef",
   "fingerprint": {
     "column public.admin_credential.claimed_at": {
       "type": "timestamp with time zone",
@@ -4137,7 +4139,7 @@
       "definition": "CHECK (((tool_id <> ''::text) AND (length(tool_id) <= 64)))"
     },
     "constraint public.analytics_output_snapshots.analytics_output_snapshots_artifact_kind_check": {
-      "definition": "CHECK ((artifact_kind = ANY (ARRAY['regime_snapshots'::text, 'research_signals'::text, 'warnings'::text, 'logs'::text, 'exceptions'::text])))"
+      "definition": "CHECK ((artifact_kind = ANY (ARRAY['regime_snapshots'::text, 'regime_beside_snapshots'::text, 'research_signals'::text, 'warnings'::text, 'logs'::text, 'exceptions'::text])))"
     },
     "constraint public.analytics_output_snapshots.analytics_output_snapshots_check": {
       "definition": "CHECK ((encode(public.digest(payload_bytes, 'sha256'::text), 'hex'::text) = checksum))"
@@ -5100,7 +5102,7 @@
     },
     "function public.rm_analytics_output_natural_keys(text,bytea)": {
       "owner": "rm_owner",
-      "definition": "CREATE OR REPLACE FUNCTION public.rm_analytics_output_natural_keys(artifact_kind text, payload_bytes bytea)\n RETURNS text[]\n LANGUAGE plpgsql\n IMMUTABLE PARALLEL SAFE\n SET search_path TO 'pg_catalog', 'pg_temp'\nAS $function$\nDECLARE\n  doc jsonb;\nBEGIN\n  IF artifact_kind NOT IN ('regime_snapshots', 'research_signals') THEN\n    RETURN NULL;\n  END IF;\n  doc := convert_from(payload_bytes, 'UTF8')::jsonb;\n  IF jsonb_typeof(doc) <> 'array' THEN\n    RETURN '{}'::text[];\n  END IF;\n  IF artifact_kind = 'regime_snapshots' THEN\n    RETURN ARRAY(\n      SELECT coalesce(e.elem ->> 'date', '')\n        FROM jsonb_array_elements(doc) WITH ORDINALITY AS e(elem, ord)\n       ORDER BY e.ord);\n  END IF;\n  RETURN ARRAY(\n    SELECT coalesce(e.elem ->> 'date', '') || chr(31) || coalesce(e.elem ->> 'key', '') || chr(31)\n           || coalesce(jsonb_hash_extended(e.elem -> 'payload', 0)::text, '')\n      FROM jsonb_array_elements(doc) WITH ORDINALITY AS e(elem, ord)\n     ORDER BY e.ord);\nEXCEPTION WHEN others THEN\n  RETURN NULL;\nEND;\n$function$\n"
+      "definition": "CREATE OR REPLACE FUNCTION public.rm_analytics_output_natural_keys(artifact_kind text, payload_bytes bytea)\n RETURNS text[]\n LANGUAGE plpgsql\n IMMUTABLE PARALLEL SAFE\n SET search_path TO 'pg_catalog', 'pg_temp'\nAS $function$\nDECLARE\n  doc jsonb;\nBEGIN\n  IF artifact_kind NOT IN ('regime_snapshots', 'regime_beside_snapshots', 'research_signals') THEN\n    RETURN NULL;\n  END IF;\n  doc := convert_from(payload_bytes, 'UTF8')::jsonb;\n  IF jsonb_typeof(doc) <> 'array' THEN\n    RETURN '{}'::text[];\n  END IF;\n  IF artifact_kind IN ('regime_snapshots', 'regime_beside_snapshots') THEN\n    RETURN ARRAY(\n      SELECT coalesce(e.elem ->> 'date', '')\n        FROM jsonb_array_elements(doc) WITH ORDINALITY AS e(elem, ord)\n       ORDER BY e.ord);\n  END IF;\n  RETURN ARRAY(\n    SELECT coalesce(e.elem ->> 'date', '') || chr(31) || coalesce(e.elem ->> 'key', '') || chr(31)\n           || coalesce(jsonb_hash_extended(e.elem -> 'payload', 0)::text, '')\n      FROM jsonb_array_elements(doc) WITH ORDINALITY AS e(elem, ord)\n     ORDER BY e.ord);\nEXCEPTION WHEN others THEN\n  RETURN NULL;\nEND;\n$function$\n"
     },
     "function public.rm_analytics_overwrite_event_immutable()": {
       "owner": "rm_owner",
@@ -5328,9 +5330,6 @@
     },
     "index public.analytics_vintage_members_vintage_id_source_value_version_i_key": {
       "definition": "CREATE UNIQUE INDEX analytics_vintage_members_vintage_id_source_value_version_i_key ON public.analytics_vintage_members USING btree (vintage_id, source_value_version_id)"
-    },
-    "index public.analytics_vintage_members_vintage_idx": {
-      "definition": "CREATE INDEX analytics_vintage_members_vintage_idx ON public.analytics_vintage_members USING btree (vintage_id)"
     },
     "index public.asset_price_floors_pkey": {
       "definition": "CREATE UNIQUE INDEX asset_price_floors_pkey ON public.asset_price_floors USING btree (symbol)"

@@ -149,6 +149,21 @@ Package paths are relative to `packages/analyst-sdk/`. csvb paths are relative t
 | Canonical input generation preserves stored values, dates and vintage membership, including historical replay inputs. | csvb `tests/rerun-vintage.test.ts` |
 | Identical pinned inputs and options produce byte-identical report payloads through backend and SDK, and payloads published before D78 replay up to rounding, including all backtest statistics; daily simulation values also match. | `tests/regime.test.ts`, `tests/backtest.test.ts` |
 | A rerun with the original effective inputs produces the published report byte for byte when it was computed with the D78 arithmetic, and up to rounding when it was published before D78. Backend and SDK use the same committed observations; ingestion tolerances provide no downstream exception. | csvb `tests/rerun-vintage.test.ts` |
+| `cashBasis` on both simulators compounds the quote as a yearly yield or converts a discount quote first (the default); `sharpeBasis` on `periodStats` reads `excess`, the post-cost returns minus cash (the default), or `returns`, the simulation's pre-cost daily returns with no cash subtraction, for the whole window and both sample blocks, and adds no series to `SimulationResult`; the reference backtest passes `lagSessions`, `calendars`, `cashBasis` and `sharpeBasis` to every line; an unknown option key throws `RangeError` naming it (D95). | `tests/backtest.test.ts`, `tests/backtest-drift.test.ts` |
+| A `RegimeRules` object states every engine rule; `REGIME_RULES.v3` and `REGIME_RULES.v4` equal the runs of those versions; one changed rule changes only what it decides; `runRegime` `inSampleEnd` follows the version computed only when asked (D95). | `tests/regime-rules.test.ts` |
+| `fitPanelWeights` and `weightedMeanOnDay` reproduce every weight fit and panel index of a full run exactly, from scores computed once (D95). | `tests/panel-fit.test.ts`, `tests/exports.test.ts` |
+| `computeCorrelations` accepts just the composite, the panel indices and the panel list (D95). | `tests/correlations-n-eff.test.ts` |
+| The publication rule, canonical JSON, the regime-snapshots shaping and the per-indicator rows are pure SDK functions, and the backend holds no second copy (D95). | `tests/report-functions.test.ts`, `scripts/tests/unit/analyst-sdk-report-one-copy.test.ts`, backend `tests/regime-history-projection.test.ts` |
+| A `calendar-days` publication rule adds calendar days; `deriveSeries` computes a level, a ratio, a rolling sum over the latest public level and an up-volume share from supplementary series, exactly as doubles; a calendar or publication rule is checked only when the rules in force read it (D95). | `tests/derived-series.test.ts`, `tests/knowledge-time.test.ts` |
+| `fetchSupplementary` and `bun run fetch` store a Yahoo `close` or `volume` as its own series; the default adjusted close is unchanged (D95). | `tests/supplementary.test.ts` |
+| `collectRunInputs` reads the vintage member files one at a time, keeps the run's rows, and returns the same inputs (D95). | `tests/archive-reader.test.ts` |
+| A ratio calculated from legs whose input carries only the stored ratio is listed in `droppedRatios`, and throws `StoredRatioOnlyError` only under `storedOnlyRatio: "error"` (D95). | `tests/ratio-close.test.ts` |
+| Methodology `v5` is declared beside the main line: `REGIME_VERSIONS` is `v3`, `v4`, `v5`, `CURRENT_REGIME_VERSION` is `v4` and is the last version declared `main`, and every per-version table has a `v5` row (D96). | `tests/regime-versions.test.ts` |
+| The `v5` registry has 30 indicators with VIX in the factor panel, and `INDICATORS` is unchanged; each derived declaration computes its series with its publication lag, and a day reads no derived value dated after it (D96). | `tests/regime-v5.test.ts` |
+| The kept record scores a day, fits its weights on the day, and derives the composite mean, the since-inception composite and the labels from kept days; a day computed alone equals the same day inside a longer walk-forward; the module holds no private copy of an SDK function (D96). | `tests/regime-v5.test.ts` |
+| `runRegime` and `bun run regime --methodology v5` compute `v5`, and equal `computeRegime` under `REGIME_RULES.v5` day for day (D96). | `tests/regime-v5.test.ts` |
+| Methodology `v5` reproduces the downstream golden byte for byte from the committed fixture: 3,124 days, 30 indicator series, the backtest block under `REGIME_BACKTEST_RULES.v5`, with negative controls (D96). | `tests/regime-v5-golden.test.ts` |
+| The five raw series of the `v5` derived indicators are collected series; `SPX_VOLUME` reads the volume field; no main-line reader includes them (D96). | `tests/collected-series.test.ts` |
 
 ## 9. Open decisions
 
@@ -159,4 +174,4 @@ None beyond those in the analytics requirements.
 - [`../definitions.md`](../definitions.md)
 - [`analytics-requirements.md`](analytics-requirements.md)
 - `packages/analyst-sdk/README.md`
-- Decisions D57 (the package as a shared seam), D58 (data terms), D72 (archive format 1), D73 (the public analytics API serves the record), D74 (one source id), D79 (supported and supplementary series, two directories)
+- Decisions D57 (the package as a shared seam), D58 (data terms), D72 (archive format 1), D73 (the public analytics API serves the record), D74 (one source id), D79 (supported and supplementary series, two directories), D95 (engine rules and backtest choices as options with 0.8.0 defaults), D96 (methodology `v5`, computed and published beside the main line)

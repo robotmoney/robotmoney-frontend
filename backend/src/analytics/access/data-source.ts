@@ -189,8 +189,15 @@ export function liveYahooPlan(stages: RunStages): Record<string, number> {
  */
 function createLiveDataSource(memo: FetchMemo | null): AnalyticsDataSource {
   const yahoo = (symbol: string, startUnix: number) => (memo ? memo.yahoo(symbol, startUnix) : fetchYahoo(symbol, startUnix));
+  // Issue 1753: the runs of one producer tick share the memo, so a FRED series
+  // or an inventory series is requested once per tick, not once per run.
+  const fred = (symbol: string) => (memo ? memo.once(`fred:${symbol}`, () => fetchFred(symbol)) : fetchFred(symbol));
   const inventorySeries = (entry: InventorySeries) =>
-    memo && entry.provider === "yahoo" ? memo.yahoo(entry.symbol, unix(entry.requestedStart)) : fetchInventorySeries(entry);
+    memo && entry.provider === "yahoo"
+      ? memo.yahoo(entry.symbol, unix(entry.requestedStart))
+      : memo
+        ? memo.once(`inventory:${entry.storageKey}`, () => fetchInventorySeries(entry))
+        : fetchInventorySeries(entry);
   return {
     forRun(stages) {
       return createLiveDataSource(createFetchMemo(liveYahooPlan(stages)));
@@ -238,8 +245,8 @@ function createLiveDataSource(memo: FetchMemo | null): AnalyticsDataSource {
       const persistedMna = edgarCtx?.persistedMna ?? [];
       const deadlineAt = edgarCtx?.deadlineAt ?? Date.now() + defaultEdgarRefreshDeadlineMs(selectEdgarRefreshTier(asof));
       const [margin, conf, mnaRefresh] = await Promise.all([
-        safe("FRED BOGZ1FL663067003Q", () => acquire("fred", "research:MARGIN", "BOGZ1FL663067003Q", () => fetchFred("BOGZ1FL663067003Q")), logger),
-        safe("FRED UMCSENT", () => acquire("fred", "research:CONF", "UMCSENT", () => fetchFred("UMCSENT")), logger),
+        safe("FRED BOGZ1FL663067003Q", () => acquire("fred", "research:MARGIN", "BOGZ1FL663067003Q", () => fred("BOGZ1FL663067003Q")), logger),
+        safe("FRED UMCSENT", () => acquire("fred", "research:CONF", "UMCSENT", () => fred("UMCSENT")), logger),
         captureSourceAcquisition({ provider: "edgar", sourceKey: "raw_indicator_history:MNA", parserVersion: "edgar:1", cacheIdentity: `${asof}:${selectEdgarRefreshTier(asof)}`, requestedByRunId, points: (result: EdgarRefreshOutcome) => result.newRows }, acquisitionSink, () =>
           refreshEdgarWithTierFallback({
           asOf: asof,
@@ -268,7 +275,7 @@ function createLiveDataSource(memo: FetchMemo | null): AnalyticsDataSource {
       const [spx, eth, tbill3m] = await Promise.all([
         safe(X.spx.symbol, () => acquire("yahoo", W.spx, `${X.spx.symbol}:${EXTRAS_START}`, () => yahoo(X.spx.symbol, unix(EXTRAS_START))), logger),
         safe(X.eth.symbol, () => acquire("yahoo", W.eth, `${X.eth.symbol}:${EXTRAS_START}`, () => yahoo(X.eth.symbol, unix(EXTRAS_START))), logger),
-        safe(`FRED ${X.tbill3m.symbol}`, () => acquire("fred", W.tbill3m, X.tbill3m.symbol, () => fetchFred(X.tbill3m.symbol)), logger),
+        safe(`FRED ${X.tbill3m.symbol}`, () => acquire("fred", W.tbill3m, X.tbill3m.symbol, () => fred(X.tbill3m.symbol)), logger),
       ]);
       return { spx, eth, tbill3m };
     },

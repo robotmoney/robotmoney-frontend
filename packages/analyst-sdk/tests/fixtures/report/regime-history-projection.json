@@ -1,0 +1,803 @@
+{
+  "recorded": "By backend/src/analytics/report/regime-projection.ts (rowToSnapshot, forHistory, computeRegimeSnapshotStaleness) and the pure tail of fetchRegimeSnapshots in report/projections.ts at commit ba5d541b9, before issue 1751 moved them into the SDK. sqlRows are regime_snapshots rows, oldest first.",
+  "sqlRows": [
+    {
+      "date": "2026-09-01",
+      "composite": "0.5",
+      "composite_percentile": "60",
+      "regime": "neutral",
+      "macro_regime": "neutral",
+      "onchain_regime": null,
+      "factor_regime": null,
+      "percentiles": {
+        "test_indicator": 61
+      },
+      "indicators": null,
+      "backtest": null,
+      "correlations": null
+    },
+    {
+      "date": "2026-09-02",
+      "composite": "0.52",
+      "composite_percentile": "62.5",
+      "regime": "neutral",
+      "macro_regime": "neutral",
+      "onchain_regime": "risk_on",
+      "factor_regime": "risk_off",
+      "macro_index": "0.41",
+      "onchain_index": "0.63",
+      "factor_index": "0.2",
+      "macro_percentile": "56",
+      "onchain_percentile": "66",
+      "factor_percentile": "21",
+      "panel_weights": null,
+      "version": "v2",
+      "source": "live",
+      "percentiles": {
+        "T10Y2Y": 0.61,
+        "MVRV": 0.4
+      },
+      "indicators": [],
+      "panels": null,
+      "bucket_thresholds": null,
+      "backtest": null,
+      "correlations": null,
+      "extras": null
+    },
+    {
+      "date": "2026-09-03",
+      "composite": "0.71",
+      "composite_percentile": "80",
+      "regime": "risk_on",
+      "macro_regime": "neutral",
+      "onchain_regime": "risk_on",
+      "factor_regime": null,
+      "macro_index": "0.44",
+      "onchain_index": "0.98",
+      "factor_index": null,
+      "macro_percentile": "58",
+      "onchain_percentile": "97",
+      "factor_percentile": null,
+      "panel_weights": {
+        "macro": {
+          "T10Y2Y": 1
+        },
+        "onchain": {
+          "MVRV": 0.5,
+          "NUPL": 0.5
+        }
+      },
+      "version": "v2",
+      "source": "live",
+      "percentiles": {
+        "T10Y2Y": 0.62,
+        "MVRV": 0.9,
+        "NUPL": 0.95
+      },
+      "indicators": [
+        {
+          "id": "T10Y2Y",
+          "panel": "macro",
+          "raw_date": "2026-09-02",
+          "raw_value": 0.55,
+          "percentile": 0.62
+        },
+        {
+          "id": "MVRV",
+          "panel": "onchain",
+          "raw_date": "2026-09-03",
+          "raw_value": 2.1,
+          "percentile": 0.9
+        },
+        {
+          "id": "NUPL",
+          "panel": "onchain",
+          "raw_date": "2026-08-30",
+          "raw_value": 0.5,
+          "percentile": 0.95
+        },
+        {
+          "id": "BAD",
+          "panel": "macro",
+          "raw_date": "not-a-date"
+        }
+      ],
+      "panels": [
+        "macro",
+        "onchain"
+      ],
+      "bucket_thresholds": {
+        "risk_off": 0.3,
+        "risk_on": 0.7
+      },
+      "backtest": {
+        "eth": {
+          "composite": {
+            "final_value": 2.5,
+            "transitions": 4
+          }
+        }
+      },
+      "correlations": {
+        "forward": {
+          "composite": {
+            "spx_30d": {
+              "rho": 0.1,
+              "n": 400,
+              "n_eff": 13
+            }
+          }
+        },
+        "concurrent": {
+          "composite": {
+            "spx": {
+              "rho": null,
+              "n": 3
+            }
+          }
+        }
+      },
+      "extras": {
+        "some_series": [
+          {
+            "date": "2026-09-03",
+            "value": 1
+          }
+        ]
+      }
+    }
+  ],
+  "today": "2026-09-08",
+  "snapshots": [
+    {
+      "date": "2026-09-01",
+      "composite": 0.5,
+      "compositePercentile": 60,
+      "regime": "neutral",
+      "macroRegime": "neutral",
+      "onchainRegime": null,
+      "factorRegime": null,
+      "macroIndex": null,
+      "onchainIndex": null,
+      "factorIndex": null,
+      "macroPercentile": null,
+      "onchainPercentile": null,
+      "factorPercentile": null,
+      "panelWeights": null,
+      "version": null,
+      "source": null,
+      "percentiles": {
+        "test_indicator": 61
+      },
+      "indicators": [],
+      "panels": null,
+      "bucketThresholds": null,
+      "backtest": null,
+      "correlations": null,
+      "extras": null
+    },
+    {
+      "date": "2026-09-02",
+      "composite": 0.52,
+      "compositePercentile": 62.5,
+      "regime": "neutral",
+      "macroRegime": "neutral",
+      "onchainRegime": "risk_on",
+      "factorRegime": "risk_off",
+      "macroIndex": 0.41,
+      "onchainIndex": 0.63,
+      "factorIndex": 0.2,
+      "macroPercentile": 56,
+      "onchainPercentile": 66,
+      "factorPercentile": 21,
+      "panelWeights": null,
+      "version": "v2",
+      "source": "live",
+      "percentiles": {
+        "T10Y2Y": 0.61,
+        "MVRV": 0.4
+      },
+      "indicators": [],
+      "panels": null,
+      "bucketThresholds": null,
+      "backtest": null,
+      "correlations": null,
+      "extras": null
+    },
+    {
+      "date": "2026-09-03",
+      "composite": 0.71,
+      "compositePercentile": 80,
+      "regime": "risk_on",
+      "macroRegime": "neutral",
+      "onchainRegime": "risk_on",
+      "factorRegime": null,
+      "macroIndex": 0.44,
+      "onchainIndex": 0.98,
+      "factorIndex": null,
+      "macroPercentile": 58,
+      "onchainPercentile": 97,
+      "factorPercentile": null,
+      "panelWeights": {
+        "macro": {
+          "T10Y2Y": 1
+        },
+        "onchain": {
+          "MVRV": 0.5,
+          "NUPL": 0.5
+        }
+      },
+      "version": "v2",
+      "source": "live",
+      "percentiles": {
+        "T10Y2Y": 0.62,
+        "MVRV": 0.9,
+        "NUPL": 0.95
+      },
+      "indicators": [
+        {
+          "id": "T10Y2Y",
+          "panel": "macro",
+          "raw_date": "2026-09-02",
+          "raw_value": 0.55,
+          "percentile": 0.62
+        },
+        {
+          "id": "MVRV",
+          "panel": "onchain",
+          "raw_date": "2026-09-03",
+          "raw_value": 2.1,
+          "percentile": 0.9
+        },
+        {
+          "id": "NUPL",
+          "panel": "onchain",
+          "raw_date": "2026-08-30",
+          "raw_value": 0.5,
+          "percentile": 0.95
+        },
+        {
+          "id": "BAD",
+          "panel": "macro",
+          "raw_date": "not-a-date"
+        }
+      ],
+      "panels": [
+        "macro",
+        "onchain"
+      ],
+      "bucketThresholds": {
+        "risk_off": 0.3,
+        "risk_on": 0.7
+      },
+      "backtest": {
+        "eth": {
+          "composite": {
+            "final_value": 2.5,
+            "transitions": 4
+          }
+        }
+      },
+      "correlations": {
+        "forward": {
+          "composite": {
+            "spx_30d": {
+              "rho": 0.1,
+              "n": 400,
+              "n_eff": 13
+            }
+          }
+        },
+        "concurrent": {
+          "composite": {
+            "spx": {
+              "rho": null,
+              "n": 3
+            }
+          }
+        }
+      },
+      "extras": {
+        "some_series": [
+          {
+            "date": "2026-09-03",
+            "value": 1
+          }
+        ]
+      }
+    }
+  ],
+  "history": [
+    {
+      "date": "2026-09-01",
+      "composite": 0.5,
+      "compositePercentile": 60,
+      "regime": "neutral",
+      "macroRegime": "neutral",
+      "onchainRegime": null,
+      "factorRegime": null,
+      "macroIndex": null,
+      "onchainIndex": null,
+      "factorIndex": null,
+      "macroPercentile": null,
+      "onchainPercentile": null,
+      "factorPercentile": null,
+      "panelWeights": null,
+      "version": null,
+      "source": null,
+      "panels": null,
+      "bucketThresholds": null,
+      "extras": null
+    },
+    {
+      "date": "2026-09-02",
+      "composite": 0.52,
+      "compositePercentile": 62.5,
+      "regime": "neutral",
+      "macroRegime": "neutral",
+      "onchainRegime": "risk_on",
+      "factorRegime": "risk_off",
+      "macroIndex": 0.41,
+      "onchainIndex": 0.63,
+      "factorIndex": 0.2,
+      "macroPercentile": 56,
+      "onchainPercentile": 66,
+      "factorPercentile": 21,
+      "panelWeights": null,
+      "version": "v2",
+      "source": "live",
+      "panels": null,
+      "bucketThresholds": null,
+      "extras": null
+    },
+    {
+      "date": "2026-09-03",
+      "composite": 0.71,
+      "compositePercentile": 80,
+      "regime": "risk_on",
+      "macroRegime": "neutral",
+      "onchainRegime": "risk_on",
+      "factorRegime": null,
+      "macroIndex": 0.44,
+      "onchainIndex": 0.98,
+      "factorIndex": null,
+      "macroPercentile": 58,
+      "onchainPercentile": 97,
+      "factorPercentile": null,
+      "panelWeights": {
+        "macro": {
+          "T10Y2Y": 1
+        },
+        "onchain": {
+          "MVRV": 0.5,
+          "NUPL": 0.5
+        }
+      },
+      "version": "v2",
+      "source": "live",
+      "panels": [
+        "macro",
+        "onchain"
+      ],
+      "bucketThresholds": {
+        "risk_off": 0.3,
+        "risk_on": 0.7
+      },
+      "extras": {
+        "some_series": [
+          {
+            "date": "2026-09-03",
+            "value": 1
+          }
+        ]
+      }
+    }
+  ],
+  "response": {
+    "latest": {
+      "date": "2026-09-03",
+      "composite": 0.71,
+      "compositePercentile": 80,
+      "regime": "risk_on",
+      "macroRegime": "neutral",
+      "onchainRegime": "risk_on",
+      "factorRegime": null,
+      "macroIndex": 0.44,
+      "onchainIndex": 0.98,
+      "factorIndex": null,
+      "macroPercentile": 58,
+      "onchainPercentile": 97,
+      "factorPercentile": null,
+      "panelWeights": {
+        "macro": {
+          "T10Y2Y": 1
+        },
+        "onchain": {
+          "MVRV": 0.5,
+          "NUPL": 0.5
+        }
+      },
+      "version": "v2",
+      "source": "live",
+      "percentiles": {
+        "T10Y2Y": 0.62,
+        "MVRV": 0.9,
+        "NUPL": 0.95
+      },
+      "indicators": [
+        {
+          "id": "T10Y2Y",
+          "panel": "macro",
+          "raw_date": "2026-09-02",
+          "raw_value": 0.55,
+          "percentile": 0.62
+        },
+        {
+          "id": "MVRV",
+          "panel": "onchain",
+          "raw_date": "2026-09-03",
+          "raw_value": 2.1,
+          "percentile": 0.9
+        },
+        {
+          "id": "NUPL",
+          "panel": "onchain",
+          "raw_date": "2026-08-30",
+          "raw_value": 0.5,
+          "percentile": 0.95
+        },
+        {
+          "id": "BAD",
+          "panel": "macro",
+          "raw_date": "not-a-date"
+        }
+      ],
+      "panels": [
+        "macro",
+        "onchain"
+      ],
+      "bucketThresholds": {
+        "risk_off": 0.3,
+        "risk_on": 0.7
+      },
+      "backtest": null,
+      "correlations": {
+        "forward": {
+          "composite": {
+            "spx_30d": {
+              "rho": 0.1,
+              "n": 400,
+              "n_eff": 13
+            }
+          }
+        },
+        "concurrent": {
+          "composite": {
+            "spx": {
+              "rho": null,
+              "n": 3
+            }
+          }
+        }
+      },
+      "extras": {
+        "some_series": [
+          {
+            "date": "2026-09-03",
+            "value": 1
+          }
+        ]
+      }
+    },
+    "history": [
+      {
+        "date": "2026-09-01",
+        "composite": 0.5,
+        "compositePercentile": 60,
+        "regime": "neutral",
+        "macroRegime": "neutral",
+        "onchainRegime": null,
+        "factorRegime": null,
+        "macroIndex": null,
+        "onchainIndex": null,
+        "factorIndex": null,
+        "macroPercentile": null,
+        "onchainPercentile": null,
+        "factorPercentile": null,
+        "panelWeights": null,
+        "version": null,
+        "source": null,
+        "panels": null,
+        "bucketThresholds": null,
+        "extras": null
+      },
+      {
+        "date": "2026-09-02",
+        "composite": 0.52,
+        "compositePercentile": 62.5,
+        "regime": "neutral",
+        "macroRegime": "neutral",
+        "onchainRegime": "risk_on",
+        "factorRegime": "risk_off",
+        "macroIndex": 0.41,
+        "onchainIndex": 0.63,
+        "factorIndex": 0.2,
+        "macroPercentile": 56,
+        "onchainPercentile": 66,
+        "factorPercentile": 21,
+        "panelWeights": null,
+        "version": "v2",
+        "source": "live",
+        "panels": null,
+        "bucketThresholds": null,
+        "extras": null
+      },
+      {
+        "date": "2026-09-03",
+        "composite": 0.71,
+        "compositePercentile": 80,
+        "regime": "risk_on",
+        "macroRegime": "neutral",
+        "onchainRegime": "risk_on",
+        "factorRegime": null,
+        "macroIndex": 0.44,
+        "onchainIndex": 0.98,
+        "factorIndex": null,
+        "macroPercentile": 58,
+        "onchainPercentile": 97,
+        "factorPercentile": null,
+        "panelWeights": {
+          "macro": {
+            "T10Y2Y": 1
+          },
+          "onchain": {
+            "MVRV": 0.5,
+            "NUPL": 0.5
+          }
+        },
+        "version": "v2",
+        "source": "live",
+        "panels": [
+          "macro",
+          "onchain"
+        ],
+        "bucketThresholds": {
+          "risk_off": 0.3,
+          "risk_on": 0.7
+        },
+        "extras": {
+          "some_series": [
+            {
+              "date": "2026-09-03",
+              "value": 1
+            }
+          ]
+        }
+      }
+    ],
+    "staleness": {
+      "asof": "2026-09-02",
+      "serverDate": "2026-09-08",
+      "ageDays": 6,
+      "stale": true,
+      "thresholdDays": 3,
+      "panelObservationDates": {
+        "macro": "2026-09-02",
+        "onchain": "2026-09-03"
+      }
+    }
+  },
+  "responseWithBacktest": {
+    "latest": {
+      "date": "2026-09-03",
+      "composite": 0.71,
+      "compositePercentile": 80,
+      "regime": "risk_on",
+      "macroRegime": "neutral",
+      "onchainRegime": "risk_on",
+      "factorRegime": null,
+      "macroIndex": 0.44,
+      "onchainIndex": 0.98,
+      "factorIndex": null,
+      "macroPercentile": 58,
+      "onchainPercentile": 97,
+      "factorPercentile": null,
+      "panelWeights": {
+        "macro": {
+          "T10Y2Y": 1
+        },
+        "onchain": {
+          "MVRV": 0.5,
+          "NUPL": 0.5
+        }
+      },
+      "version": "v2",
+      "source": "live",
+      "percentiles": {
+        "T10Y2Y": 0.62,
+        "MVRV": 0.9,
+        "NUPL": 0.95
+      },
+      "indicators": [
+        {
+          "id": "T10Y2Y",
+          "panel": "macro",
+          "raw_date": "2026-09-02",
+          "raw_value": 0.55,
+          "percentile": 0.62
+        },
+        {
+          "id": "MVRV",
+          "panel": "onchain",
+          "raw_date": "2026-09-03",
+          "raw_value": 2.1,
+          "percentile": 0.9
+        },
+        {
+          "id": "NUPL",
+          "panel": "onchain",
+          "raw_date": "2026-08-30",
+          "raw_value": 0.5,
+          "percentile": 0.95
+        },
+        {
+          "id": "BAD",
+          "panel": "macro",
+          "raw_date": "not-a-date"
+        }
+      ],
+      "panels": [
+        "macro",
+        "onchain"
+      ],
+      "bucketThresholds": {
+        "risk_off": 0.3,
+        "risk_on": 0.7
+      },
+      "backtest": {
+        "eth": {
+          "composite": {
+            "final_value": 2.5,
+            "transitions": 4
+          }
+        }
+      },
+      "correlations": {
+        "forward": {
+          "composite": {
+            "spx_30d": {
+              "rho": 0.1,
+              "n": 400,
+              "n_eff": 13
+            }
+          }
+        },
+        "concurrent": {
+          "composite": {
+            "spx": {
+              "rho": null,
+              "n": 3
+            }
+          }
+        }
+      },
+      "extras": {
+        "some_series": [
+          {
+            "date": "2026-09-03",
+            "value": 1
+          }
+        ]
+      }
+    },
+    "history": [
+      {
+        "date": "2026-09-01",
+        "composite": 0.5,
+        "compositePercentile": 60,
+        "regime": "neutral",
+        "macroRegime": "neutral",
+        "onchainRegime": null,
+        "factorRegime": null,
+        "macroIndex": null,
+        "onchainIndex": null,
+        "factorIndex": null,
+        "macroPercentile": null,
+        "onchainPercentile": null,
+        "factorPercentile": null,
+        "panelWeights": null,
+        "version": null,
+        "source": null,
+        "panels": null,
+        "bucketThresholds": null,
+        "extras": null
+      },
+      {
+        "date": "2026-09-02",
+        "composite": 0.52,
+        "compositePercentile": 62.5,
+        "regime": "neutral",
+        "macroRegime": "neutral",
+        "onchainRegime": "risk_on",
+        "factorRegime": "risk_off",
+        "macroIndex": 0.41,
+        "onchainIndex": 0.63,
+        "factorIndex": 0.2,
+        "macroPercentile": 56,
+        "onchainPercentile": 66,
+        "factorPercentile": 21,
+        "panelWeights": null,
+        "version": "v2",
+        "source": "live",
+        "panels": null,
+        "bucketThresholds": null,
+        "extras": null
+      },
+      {
+        "date": "2026-09-03",
+        "composite": 0.71,
+        "compositePercentile": 80,
+        "regime": "risk_on",
+        "macroRegime": "neutral",
+        "onchainRegime": "risk_on",
+        "factorRegime": null,
+        "macroIndex": 0.44,
+        "onchainIndex": 0.98,
+        "factorIndex": null,
+        "macroPercentile": 58,
+        "onchainPercentile": 97,
+        "factorPercentile": null,
+        "panelWeights": {
+          "macro": {
+            "T10Y2Y": 1
+          },
+          "onchain": {
+            "MVRV": 0.5,
+            "NUPL": 0.5
+          }
+        },
+        "version": "v2",
+        "source": "live",
+        "panels": [
+          "macro",
+          "onchain"
+        ],
+        "bucketThresholds": {
+          "risk_off": 0.3,
+          "risk_on": 0.7
+        },
+        "extras": {
+          "some_series": [
+            {
+              "date": "2026-09-03",
+              "value": 1
+            }
+          ]
+        }
+      }
+    ],
+    "staleness": {
+      "asof": "2026-09-02",
+      "serverDate": "2026-09-08",
+      "ageDays": 6,
+      "stale": true,
+      "thresholdDays": 3,
+      "panelObservationDates": {
+        "macro": "2026-09-02",
+        "onchain": "2026-09-03"
+      }
+    }
+  },
+  "empty": {
+    "latest": null,
+    "history": [],
+    "staleness": {
+      "asof": null,
+      "serverDate": "2026-09-08",
+      "ageDays": null,
+      "stale": true,
+      "thresholdDays": 3,
+      "panelObservationDates": {}
+    }
+  }
+}

@@ -1,7 +1,9 @@
 // Issue 1742 (R1): forward correlations over overlapping 30, 90 and 180-day
 // windows carry n_eff = floor(n / horizon) beside n. Concurrent cells carry none.
 import { describe, expect, test } from "bun:test";
-import { addDaysIso, CORR_ASSETS, CORR_HORIZONS_DAYS, computeCorrelations } from "../src/analyze/correlations.ts";
+import { join } from "node:path";
+import { addDaysIso, CORR_ASSETS, CORR_HORIZONS_DAYS, computeCorrelations, type CorrelationInput } from "../src/analyze/correlations.ts";
+import { parseRawHistory, requireComplete, runRegime, toHistory } from "../src/index.ts";
 import type { RegimeComputeResult } from "../src/analyze/compute.ts";
 
 function fixture(days: number) {
@@ -53,4 +55,26 @@ describe("forward correlation effective sample size", () => {
       }
     }
   });
+});
+
+// Issue 1751, gap 5: computeCorrelations reads only the composite, the panel
+// indices and the panel list, so that is all a caller has to supply. The calls
+// below carry no cast: `bunx tsc --noEmit` checks the narrow input type.
+describe("narrow correlations input (issue 1751)", () => {
+  test("{ composite, panelIndices, panels } copied from a computeRegime result equals the call with the whole result", async () => {
+    const raw = toHistory(parseRawHistory(await Bun.file(join(import.meta.dir, "fixtures/raw-indicator-history.json")).text()));
+    const run = requireComplete(runRegime(raw));
+    const extras = { spx: raw.SPX!, eth: raw.ETH! };
+    const whole = computeCorrelations(run.dateAxis, run.result, extras);
+    const narrow: CorrelationInput = { composite: [...run.result.composite], panelIndices: { ...run.result.panelIndices }, panels: [...run.result.panels] };
+    expect(computeCorrelations(run.dateAxis, narrow, extras)).toEqual(whole);
+    expect(whole).toEqual(run.correlations!);
+    expect(Object.keys(whole.forward)).toEqual(["composite", ...run.result.panels]);
+    expect(whole.forward.composite!.spx_30d!.n).toBeGreaterThan(100);
+    // Without `panels` the included panels are read, the same set here.
+    expect(computeCorrelations(run.dateAxis, { composite: narrow.composite, panelIndices: narrow.panelIndices }, extras)).toEqual(whole);
+    // A changed composite changes the cell, so the equality is not vacuous.
+    const moved = computeCorrelations(run.dateAxis, { ...narrow, composite: narrow.composite.map((v, i) => v * Math.sin(i)) }, extras);
+    expect(moved.forward.composite).not.toEqual(whole.forward.composite);
+  }, 120_000);
 });

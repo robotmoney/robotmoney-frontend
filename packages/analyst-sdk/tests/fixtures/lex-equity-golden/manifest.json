@@ -1,0 +1,88 @@
+{
+  "model": "experiment-lex-equity",
+  "deployed": false,
+  "sdk": {
+    "repository": "https://github.com/robotmoney/robotmoney-frontend",
+    "commit": "3ad538f5f12a4c4b2ff67416b2cc65ad4c3c14c7",
+    "version": "0.7.0"
+  },
+  "csv_backups": {
+    "repository": "https://github.com/robotmoney/csv-backups",
+    "commit": "92b93077bbf8c32b664ef375bb29b18412976288",
+    "backup": "2026-11-17T000000Z",
+    "backup_json_sha256": "51074a768861d8680602c33942078d6cf420a4213ae8652b9b9cde6575d1c7c7"
+  },
+  "supplementary": [
+    {
+      "path": "fred/GDP.csv",
+      "sha256": "ecd46804bd463972978f7141f4ad4bd66b50e8fec4d6061ce95e17cd9e50691a"
+    },
+    {
+      "path": "fred/GDP.manifest.json",
+      "sha256": "6d3e8e96881ad2729e7cbb3fed72b1407dc69a292b40f199dd913daa179061fb"
+    },
+    {
+      "path": "fred/MTSDS133FMS.csv",
+      "sha256": "5e703e5157d252db53ef2bf9edace5db08e3015c5cb66756145fa1194bbb7e8e"
+    },
+    {
+      "path": "fred/MTSDS133FMS.manifest.json",
+      "sha256": "01c5fb26f8ec0ad413274e8658e70ba43fdf9555703ed8a396aea29b6c94eadf"
+    },
+    {
+      "path": "yahoo-volume/%5EGSPC.csv",
+      "sha256": "6ae01f507d717ebc8fd05dda25e3ae2e53d9444e6a8f3e727fea34f533d80041"
+    },
+    {
+      "path": "yahoo-volume/%5EGSPC.manifest.json",
+      "sha256": "286ff34624059156162b85fc037b3a4c008787f2c428ce8a38944ab393993e98"
+    },
+    {
+      "path": "yahoo/%5ESKEW.csv",
+      "sha256": "9658342a3363ff1d661b600a614cf1effadc8b6adf98c9ba5224be8b4428848c"
+    },
+    {
+      "path": "yahoo/%5ESKEW.manifest.json",
+      "sha256": "cec425b85ac78787e81a2c28e39f36c40a6e2c72a6bb47de916e1670d55672e0"
+    },
+    {
+      "path": "yahoo/%5EVIX.csv",
+      "sha256": "7d235a9c6ef1dcf7a5b4f890b9bb5753fd830f0054e9ebf292abe914173c014c"
+    },
+    {
+      "path": "yahoo/%5EVIX.manifest.json",
+      "sha256": "c9ac84d0d3ceb72cd45bffa243f7dbc9787702efd4567672e641f4eafa46dcb6"
+    },
+    {
+      "path": "yahoo/%5EVIX3M.csv",
+      "sha256": "acff8edbab9bc3c8223bd3eef874f884a3bd2f20c3ef5c49eded7ca618e69944"
+    },
+    {
+      "path": "yahoo/%5EVIX3M.manifest.json",
+      "sha256": "3b1878c05dbf7554521d18548283341fdef6b5d36eabef4028484d3f1b2c6073"
+    }
+  ],
+  "build": {
+    "ledger_start": "2026-09-21",
+    "serving_runs": 57,
+    "newest_run": "1163",
+    "server_date": "2026-11-16",
+    "production_builds": [
+      "pkg:0.1.0+bun:1.3.5",
+      "pkg:0.1.0+bun:1.4.4",
+      "8c2690bac11440a8d8ef86733a567066afaea116",
+      "c2c9a0770e227ee7d4b0d9216bdce15819436699",
+      "e5e6ea767a1d7b5fd2300d43d9e3e294f46ae6e8",
+      "fe89c5ac49b00ed0b5a7fc1d7b3becfb925ed964",
+      "5c79f796578cf39bf7f131c5bbb0c6406b01a6a1",
+      "b5e54ee25108284ef6cc57d95cfbefb5db9acefa"
+    ]
+  },
+  "outputs": {
+    "file": "outputs.json",
+    "sha256": "03b9633d2127b0eb1daad39d8d33a850a8c9f4b32ae10b6a4fbdb0faa2a25fae",
+    "days": 3124,
+    "first_day": "2018-04-28",
+    "last_day": "2026-11-16"
+  }
+}

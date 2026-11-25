@@ -1,4 +1,5 @@
-import { ROLLING_WINDOW_DAYS } from "./indicators.ts";
+import { INDICATORS, ROLLING_WINDOW_DAYS, V5_INDICATORS, type Indicator } from "./indicators.ts";
+import { V5_DERIVED_SERIES, type DerivedSeries } from "../transform/derived.ts";
 
 // Methodology version tag stamped on every persisted regime snapshot row —
 // mirrors agentjuno/robotmoney data/regime/regime-versions.json `current`.
@@ -22,12 +23,39 @@ import { ROLLING_WINDOW_DAYS } from "./indicators.ts";
 // Issue 1739 corrected v4 in place: its panel weights refit on a fixed 21-day
 // calendar (REGIME_WEIGHT_REFRESH), never on the run's last day, which v3 keeps.
 //
+// v5 (issue 1753, decision D96): the model ported from the downstream
+// experiment-lex-equity. It is computed and published beside the served line
+// (REGIME_LINE), never on it. Its registry is REGIME_REGISTRY.v5 (V5_INDICATORS
+// in analyze/indicators.ts): VIX in the factor panel and four derived indicators.
+// Every day is computed on the day and kept (analyze/kept-regime.ts): weights
+// are refit every day, the composite is the mid-rank of the equal-weight panel
+// mean within every kept mean to date, and a later run never changes a kept day.
+//
 // Tags increase by one with no gaps (D88). The frozen, versioned publication
 // model (docs/technical/regime-engine.md section 11.8.3, PD10) takes the next
 // unused tag when it is built.
-export const REGIME_VERSIONS = ["v3", "v4"] as const;
+export const REGIME_VERSIONS = ["v3", "v4", "v5"] as const;
 export type RegimeVersion = (typeof REGIME_VERSIONS)[number];
+
+/**
+ * Where a version is published (issue 1753, decision D96). `main`: the served
+ * line (regime_snapshots, every reader of the main line). `beside`: its own
+ * labelled line, read only by a request that names the version.
+ */
+export type RegimeLine = "main" | "beside";
+export const REGIME_LINE: Readonly<Record<RegimeVersion, RegimeLine>> = Object.freeze({ v3: "main", v4: "main", v5: "beside" });
+
+/** The versions published beside the main line, in tag order. */
+export const BESIDE_REGIME_VERSIONS: readonly RegimeVersion[] = Object.freeze(REGIME_VERSIONS.filter((v) => REGIME_LINE[v] === "beside"));
+
+// The served methodology: the last version declared main (D88 item 2 as D96 amends it).
 export const CURRENT_REGIME_VERSION: RegimeVersion = "v4";
+
+/** The scoring registry of each methodology version (issue 1753). v3 and v4 read INDICATORS itself. */
+export const REGIME_REGISTRY: Readonly<Record<RegimeVersion, readonly Indicator[]>> = Object.freeze({ v3: INDICATORS, v4: INDICATORS, v5: V5_INDICATORS });
+
+/** The derived series each methodology version computes from raw inputs (none for v3 and v4). */
+export const REGIME_DERIVED_SERIES: Readonly<Record<RegimeVersion, readonly DerivedSeries[]>> = Object.freeze({ v3: [], v4: [], v5: V5_DERIVED_SERIES });
 
 /** True for a methodology version this engine can compute (and so replay). */
 export function isRegimeVersion(v: unknown): v is RegimeVersion {
@@ -58,6 +86,8 @@ const TRAILING_3Y: LookbackWindow = Object.freeze({ kind: "trailing", days: ROLL
 export const REGIME_LOOKBACK: Readonly<Record<RegimeVersion, RegimeLookback>> = Object.freeze({
   v3: Object.freeze({ rank: TRAILING_3Y, weight: TRAILING_3Y, percentile: TRAILING_3Y }),
   v4: Object.freeze({ rank: TRAILING_3Y, weight: TRAILING_3Y, percentile: TRAILING_3Y }),
+  // v5: the composite is ranked within every kept mean since inception.
+  v5: Object.freeze({ rank: TRAILING_3Y, weight: TRAILING_3Y, percentile: Object.freeze({ kind: "inception" }) }),
 });
 
 /**
@@ -78,6 +108,8 @@ export const WEIGHT_REFRESH_ANCHOR = "2018-01-01";
 export const REGIME_WEIGHT_REFRESH: Readonly<Record<RegimeVersion, WeightRefresh>> = Object.freeze({
   v3: Object.freeze({ intervalDays: 21, anchor: WEIGHT_REFRESH_ANCHOR, refitOnLastDay: true }),
   v4: Object.freeze({ intervalDays: 21, anchor: WEIGHT_REFRESH_ANCHOR, refitOnLastDay: false }),
+  // v5 refits every day, so every day is a refresh date and none depends on the run's last day.
+  v5: Object.freeze({ intervalDays: 1, anchor: WEIGHT_REFRESH_ANCHOR, refitOnLastDay: false }),
 });
 
 /**
@@ -86,7 +118,9 @@ export const REGIME_WEIGHT_REFRESH: Readonly<Record<RegimeVersion, WeightRefresh
  * published, at the version known then. v4 is corrected in place; v3 keeps
  * reading by period date, so its published runs replay byte for byte.
  */
-export const REGIME_KNOWLEDGE_TIME: Readonly<Record<RegimeVersion, boolean>> = Object.freeze({ v3: false, v4: true });
+// v5 reads the registry's own series by period date; only its derived series
+// are lagged, on their DerivedSeries declarations (issue 1753).
+export const REGIME_KNOWLEDGE_TIME: Readonly<Record<RegimeVersion, boolean>> = Object.freeze({ v3: false, v4: true, v5: false });
 
 /**
  * Whether a version counts observation days (issue 1741, decision D93): an
@@ -94,7 +128,7 @@ export const REGIME_KNOWLEDGE_TIME: Readonly<Record<RegimeVersion, boolean>> = O
  * observations, each counted once, and the result is placed on the calendar
  * axis. v3 keeps the forward-filled rows in every window.
  */
-export const REGIME_OBSERVATION_WINDOWS: Readonly<Record<RegimeVersion, boolean>> = Object.freeze({ v3: false, v4: true });
+export const REGIME_OBSERVATION_WINDOWS: Readonly<Record<RegimeVersion, boolean>> = Object.freeze({ v3: false, v4: true, v5: false });
 
 /**
  * The composite rule when an included panel has no index on a day (issue 1741):
@@ -102,7 +136,24 @@ export const REGIME_OBSERVATION_WINDOWS: Readonly<Record<RegimeVersion, boolean>
  * NaN and the label null (v4).
  */
 export type MissingPanelRule = "rebase" | "nan";
-export const REGIME_MISSING_PANEL: Readonly<Record<RegimeVersion, MissingPanelRule>> = Object.freeze({ v3: "rebase", v4: "nan" });
+export const REGIME_MISSING_PANEL: Readonly<Record<RegimeVersion, MissingPanelRule>> = Object.freeze({ v3: "rebase", v4: "nan", v5: "rebase" });
+
+/**
+ * How the composite is normalised (issue 1753). `none`: the composite is the
+ * mean of the panel indices (v3, v4). `percentile`: the composite is the
+ * mid-rank of that mean over the percentile lookback (v5: since inception), and
+ * no second percentile of the composite or of a panel is computed.
+ */
+export type CompositeNormalisation = "none" | "percentile";
+export const REGIME_COMPOSITE_NORMALISATION: Readonly<Record<RegimeVersion, CompositeNormalisation>> = Object.freeze({ v3: "none", v4: "none", v5: "percentile" });
+
+/**
+ * Whether a version keeps its history (issue 1753). false: every run recomputes
+ * every day from its own inputs (v3, v4). true: a day is computed once, on the
+ * day, and kept; a later run computes only its own day and derives the
+ * composite and the labels from the kept days (analyze/kept-regime.ts).
+ */
+export const REGIME_KEPT_HISTORY: Readonly<Record<RegimeVersion, boolean>> = Object.freeze({ v3: false, v4: false, v5: true });
 
 const MS_PER_DAY = 86_400_000;
 const dayNumber = (day: string): number => Math.floor(Date.parse(`${day}T00:00:00Z`) / MS_PER_DAY);
@@ -119,4 +170,106 @@ export function refreshDateOn(day: string, refresh: WeightRefresh): string | nul
 /** True when `day` is a refresh date of the calendar. */
 export function isRefreshDate(day: string, refresh: WeightRefresh): boolean {
   return refreshDateOn(day, refresh) === day;
+}
+
+/**
+ * The day each methodology version was adopted (issue 1734, decision D94).
+ * Every backtest statistic before it is in-sample (the version was tuned on
+ * that data), after it out-of-sample.
+ */
+export const REGIME_ADOPTION_DATE: Readonly<Record<string, string>> = Object.freeze({
+  v3: "2026-07-01",
+  v4: "2026-11-17",
+  // The day the model was chosen. It is not v5's backtest split (REGIME_BACKTEST_RULES.v5).
+  v5: "2026-11-23",
+});
+
+/** Thrown by adoptionDate for a version with no declared adoption date. */
+export class AdoptionDateError extends Error {
+  constructor(version: string) {
+    super(`regime methodology version ${JSON.stringify(version)} declares no adoption date (REGIME_ADOPTION_DATE)`);
+    this.name = "AdoptionDateError";
+  }
+}
+
+/** The adoption date (YYYY-MM-DD) of a methodology version; throws AdoptionDateError when there is none. */
+export function adoptionDate(version: string): string {
+  const d = Object.hasOwn(REGIME_ADOPTION_DATE, version) ? REGIME_ADOPTION_DATE[version] : undefined;
+  if (typeof d !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(d)) throw new AdoptionDateError(version);
+  return d;
+}
+
+/**
+ * What a label is cut on (issue 1751): `series` is the composite or panel index
+ * itself (v4, issue 1652), `percentile` its rolling percentile over the
+ * percentile lookback (v3).
+ */
+export type LabelCut = "series" | "percentile";
+export const REGIME_LABEL_CUT: Readonly<Record<RegimeVersion, LabelCut>> = Object.freeze({ v3: "percentile", v4: "series", v5: "series" });
+
+/**
+ * Every rule of the engine, stated as one object (issue 1751). A caller passes
+ * its own `rules` to prepareRegimeInputs, knowledgeTimeHistory,
+ * latestCompleteDay, missingOnDay, computeRegime and regimeLabels to change one
+ * rule; without it they read REGIME_RULES of the version.
+ */
+export interface RegimeRules {
+  /** Dating rule: read each value from the day it was published (REGIME_KNOWLEDGE_TIME). */
+  knowledgeTime: boolean;
+  /** Window counting: an `exchange` series counts its own observation days (REGIME_OBSERVATION_WINDOWS). */
+  observationWindows: boolean;
+  /** The weight refit calendar (REGIME_WEIGHT_REFRESH). */
+  weightRefresh: WeightRefresh;
+  /** The composite on a day an included panel has no index (REGIME_MISSING_PANEL). */
+  missingPanel: MissingPanelRule;
+  /** What each label is cut on (REGIME_LABEL_CUT). */
+  labelCut: LabelCut;
+  /** The rank, weight and percentile windows (REGIME_LOOKBACK). */
+  lookback: RegimeLookback;
+  /** The in-sample end of a backtest of these rules (REGIME_ADOPTION_DATE). */
+  adoptionDate: string;
+  /** How the composite is normalised (REGIME_COMPOSITE_NORMALISATION). Absent: "none". */
+  compositeNormalisation?: CompositeNormalisation;
+  /** Whether each day is computed once and kept (REGIME_KEPT_HISTORY). Absent: false. */
+  keptHistory?: boolean;
+}
+
+const rulesOfVersion = (v: RegimeVersion): RegimeRules =>
+  Object.freeze({
+    knowledgeTime: REGIME_KNOWLEDGE_TIME[v],
+    observationWindows: REGIME_OBSERVATION_WINDOWS[v],
+    weightRefresh: REGIME_WEIGHT_REFRESH[v],
+    missingPanel: REGIME_MISSING_PANEL[v],
+    labelCut: REGIME_LABEL_CUT[v],
+    lookback: REGIME_LOOKBACK[v],
+    adoptionDate: adoptionDate(v),
+    // Stated only where a version departs from v3 and v4, so their presets keep the shape they had.
+    ...(REGIME_COMPOSITE_NORMALISATION[v] === "none" ? {} : { compositeNormalisation: REGIME_COMPOSITE_NORMALISATION[v] }),
+    ...(REGIME_KEPT_HISTORY[v] ? { keptHistory: true } : {}),
+  });
+
+/** The named presets: the rules of each methodology version, built from the per-version tables. */
+export const REGIME_RULES: Readonly<Record<RegimeVersion, RegimeRules>> = Object.freeze({ v3: rulesOfVersion("v3"), v4: rulesOfVersion("v4"), v5: rulesOfVersion("v5") });
+
+/**
+ * The rules in force: `rules` when given (checked, a RangeError names a bad
+ * field), else the preset of `version` (default the current version).
+ */
+export function regimeRulesOf(version: RegimeVersion = CURRENT_REGIME_VERSION, rules?: RegimeRules): RegimeRules {
+  if (rules === undefined) return REGIME_RULES[version];
+  if (rules === null || typeof rules !== "object") throw new RangeError("rules must be a RegimeRules object");
+  if (typeof rules.knowledgeTime !== "boolean") throw new RangeError(`rules.knowledgeTime must be a boolean, got ${JSON.stringify(rules.knowledgeTime)}`);
+  if (typeof rules.observationWindows !== "boolean") throw new RangeError(`rules.observationWindows must be a boolean, got ${JSON.stringify(rules.observationWindows)}`);
+  if (rules.missingPanel !== "rebase" && rules.missingPanel !== "nan") throw new RangeError(`rules.missingPanel must be "rebase" or "nan", got ${JSON.stringify(rules.missingPanel)}`);
+  if (rules.labelCut !== "series" && rules.labelCut !== "percentile") throw new RangeError(`rules.labelCut must be "series" or "percentile", got ${JSON.stringify(rules.labelCut)}`);
+  const r = rules.weightRefresh;
+  if (r === null || typeof r !== "object" || !Number.isInteger(r.intervalDays) || r.intervalDays <= 0 || typeof r.anchor !== "string" || typeof r.refitOnLastDay !== "boolean") {
+    throw new RangeError(`rules.weightRefresh must be { intervalDays, anchor, refitOnLastDay }, got ${JSON.stringify(r)}`);
+  }
+  if (rules.lookback === null || typeof rules.lookback !== "object") throw new RangeError("rules.lookback is missing");
+  if (typeof rules.adoptionDate !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(rules.adoptionDate)) throw new RangeError(`rules.adoptionDate must be a YYYY-MM-DD date, got ${JSON.stringify(rules.adoptionDate)}`);
+  const cn = rules.compositeNormalisation;
+  if (cn !== undefined && cn !== "none" && cn !== "percentile") throw new RangeError(`rules.compositeNormalisation must be "none" or "percentile", got ${JSON.stringify(cn)}`);
+  if (rules.keptHistory !== undefined && typeof rules.keptHistory !== "boolean") throw new RangeError(`rules.keptHistory must be a boolean, got ${JSON.stringify(rules.keptHistory)}`);
+  return rules;
 }

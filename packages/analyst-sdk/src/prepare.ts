@@ -9,7 +9,7 @@ import { INDICATORS, calendarOf, fillMaxAgeDays, fillPolicyOf, type Indicator } 
 import { alignDailyForwardFill, alignDailyZeroFill, buildDateAxis, forwardFillAge } from "./transform/math.ts";
 import { applyTransform } from "./transform/transforms.ts";
 import { knowledgeTimeSeries, publicationRuleOf } from "./transform/knowledge-time.ts";
-import { CURRENT_REGIME_VERSION, REGIME_KNOWLEDGE_TIME, REGIME_OBSERVATION_WINDOWS, type RegimeVersion } from "./analyze/regime-versions.ts";
+import { regimeRulesOf, type RegimeRules, type RegimeVersion } from "./analyze/regime-versions.ts";
 
 export interface PreparedRegimeInputs {
   dateAxis: string[];
@@ -38,18 +38,20 @@ export function cutAtAsof<T extends { date: string }>(rows: readonly T[], asof: 
 }
 
 // Knowledge time (issue 1733, docs/technical/regime-engine.md section 8.1.2).
-// Every indicator must declare a publication rule, or this throws
-// PublicationRuleError naming it. Under a version that reads by knowledge time
+// Under rules that read by knowledge time every indicator must declare a
+// publication rule, or this throws PublicationRuleError naming it; rules that
+// do not read it do not check it (issue 1751). `rules` defaults to the preset
+// of `version`. Under a version that reads by knowledge time
 // (REGIME_KNOWLEDGE_TIME) each series is re-dated to the day each value was
 // known and cut at `asof` (knowledgeTimeSeries); under any other version it is
 // cut at `asof` by period date, as before. Rows are { date, value, period }.
 export function knowledgeTimeHistory(
   raw: RawIndicatorHistory,
-  opts: { asof?: string; indicators?: readonly Indicator[]; version?: RegimeVersion } = {},
+  opts: { asof?: string; indicators?: readonly Indicator[]; version?: RegimeVersion; rules?: RegimeRules } = {},
 ): Record<string, { date: string; value: number; period: string }[]> {
   const indicators = opts.indicators ?? INDICATORS;
-  const rules = indicators.map((ind) => publicationRuleOf(ind));
-  const byKnowledge = REGIME_KNOWLEDGE_TIME[opts.version ?? CURRENT_REGIME_VERSION];
+  const byKnowledge = regimeRulesOf(opts.version, opts.rules).knowledgeTime;
+  const rules = byKnowledge ? indicators.map((ind) => publicationRuleOf(ind)) : [];
   const out: Record<string, { date: string; value: number; period: string }[]> = {};
   indicators.forEach((ind, k) => {
     const s = raw[ind.id] ?? [];
@@ -82,13 +84,18 @@ export function prepareRegimeInputs(
     // Override the version's observation-day rule (issue 1741). The research
     // comparisons pass false to keep their published, forward-filled windows.
     observationDays?: boolean;
+    // Every engine rule as one object (issue 1751). Default: the preset of
+    // `version`. A calendar is checked only when observation days are counted,
+    // a publication rule only when the rules read by knowledge time.
+    rules?: RegimeRules;
   },
 ): PreparedRegimeInputs {
   const indicators = opts.indicators ?? INDICATORS;
   const policies = indicators.map((ind) => fillPolicyOf(ind));
-  const calendars = indicators.map((ind) => calendarOf(ind));
-  const observationDays = opts.observationDays ?? REGIME_OBSERVATION_WINDOWS[opts.version ?? CURRENT_REGIME_VERSION];
-  const known = knowledgeTimeHistory(raw, { asof: opts.asof, indicators, version: opts.version });
+  const rules = regimeRulesOf(opts.version, opts.rules);
+  const observationDays = opts.observationDays ?? rules.observationWindows;
+  const calendars = observationDays ? indicators.map((ind) => calendarOf(ind)) : [];
+  const known = knowledgeTimeHistory(raw, { asof: opts.asof, indicators, rules });
   const dateAxis = buildDateAxis(opts.start, opts.asof);
   const transformed: Record<string, number[]> = {};
   const ages: Record<string, number[]> = {};
@@ -150,9 +157,9 @@ const dayNumber = (iso: string) => Date.parse(`${iso}T00:00:00Z`) / DAY_MS;
 // observation on or before a day (a series that has not started) does not make
 // that day incomplete: it is excluded with weight 0, as before.
 // Under knowledge time (issue 1733) an observation is dated the day it was known.
-function observedDates(raw: RawIndicatorHistory, indicators: readonly Indicator[], version?: RegimeVersion) {
+function observedDates(raw: RawIndicatorHistory, indicators: readonly Indicator[], version?: RegimeVersion, rules?: RegimeRules) {
   const out: { id: string; maxAge: number; dates: string[]; periods: string[] }[] = [];
-  const known = knowledgeTimeHistory(raw, { indicators, version });
+  const known = knowledgeTimeHistory(raw, { indicators, version, rules });
   for (const ind of indicators) {
     const maxAge = fillMaxAgeDays(fillPolicyOf(ind));
     const rows = known[ind.id]!.filter((p) => Number.isFinite(p.value)).sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
@@ -198,8 +205,9 @@ export function missingOnDay(
   day: string,
   indicators: readonly Indicator[] = INDICATORS,
   version?: RegimeVersion,
+  rules?: RegimeRules,
 ): MissingIndicator[] {
-  return missingFrom(observedDates(raw, indicators, version), day);
+  return missingFrom(observedDates(raw, indicators, version, rules), day);
 }
 
 /**
@@ -211,9 +219,9 @@ export function missingOnDay(
  */
 export function latestCompleteDay(
   raw: RawIndicatorHistory,
-  opts: { notAfter?: string; notBefore?: string; indicators?: readonly Indicator[]; version?: RegimeVersion } = {},
+  opts: { notAfter?: string; notBefore?: string; indicators?: readonly Indicator[]; version?: RegimeVersion; rules?: RegimeRules } = {},
 ): string | null {
-  const obs = observedDates(raw, opts.indicators ?? INDICATORS, opts.version);
+  const obs = observedDates(raw, opts.indicators ?? INDICATORS, opts.version, opts.rules);
   if (obs.length === 0) return null;
   let newest = opts.notAfter ?? null;
   if (newest === null) for (const o of obs) if (newest === null || o.dates.at(-1)! > newest) newest = o.dates.at(-1)!;

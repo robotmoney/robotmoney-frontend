@@ -187,8 +187,8 @@ describe("composite with a missing panel", () => {
 
 describe("per-version declaration and the diff note", () => {
   test("the rules are declared per version: v3 keeps forward-filled windows and the re-based composite", () => {
-    expect(REGIME_OBSERVATION_WINDOWS).toEqual({ v3: false, v4: true });
-    expect(REGIME_MISSING_PANEL).toEqual({ v3: "rebase", v4: "nan" });
+    expect(REGIME_OBSERVATION_WINDOWS).toEqual({ v3: false, v4: true, v5: false });
+    expect(REGIME_MISSING_PANEL).toEqual({ v3: "rebase", v4: "nan", v5: "rebase" });
   });
 
   test("the committed diff note equals the one recomputed from the old and new rules", () => {

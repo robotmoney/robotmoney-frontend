@@ -74,16 +74,21 @@ is not duplicated here.
 
 `COLLECTED_SERIES` in `packages/analyst-sdk/src/extract/collected-series.ts`
 declares series that are fetched, stored and served on the public raw-history
-route, but never scored. It holds one entry, `BAA10Y` (FRED `BAA10Y`, Moody's
+route, but never scored on the main line. It holds `BAA10Y` (FRED `BAA10Y`, Moody's
 seasoned Baa corporate yield minus the 10-year Treasury yield, history from
-1986-01-02). An entry has `id`, `name`, `source`, `series`, `unit`,
-`source_url` and `description`, and no scoring field. `collectionRegistry()`
+1986-01-02) and, since issue 1753, the five raw series methodology `v5` reads
+(§13): `FED_SURPLUS_MONTHLY` (FRED `MTSDS133FMS`), `US_GDP` (FRED `GDP`),
+`CBOE_VIX3M` (Yahoo `^VIX3M`), `CBOE_SKEW` (Yahoo `^SKEW`) and `SPX_VOLUME`
+(the volume of the Yahoo `^GSPC` chart response the run already requests).
+An entry has `id`, `name`, `source`, `series`, `unit`,
+`source_url` and `description`, an optional `field` (`volume`), and no scoring field. `collectionRegistry()`
 returns `INDICATORS` then `COLLECTED_SERIES`, and an id in both throws at
 module load. The fetch, merge and store of a run, the producer's gap catch-up,
 `fetchAll`'s default list, the floor-seed generator, `sourceCalendar` and the
 admin raw-series allowlist read that combined list. Every scoring reader reads
-`INDICATORS` only, so a collected series changes no figure. It is no
-`REGIME_STORAGE_KEYS` member and no run.ts `READ_IDS` member.
+`INDICATORS` only, so a collected series changes no main-line figure. It is no
+`REGIME_STORAGE_KEYS` member and no run.ts `READ_IDS` member. A `v5` run reads
+the five through its own mapping (`seriesMappingFor("v5")`), never the main-line one.
 
 To score a collected series, an analyst moves its entry from
 `COLLECTED_SERIES` into `INDICATORS` and adds `panel`, `sign`, `transform`,
@@ -608,6 +613,27 @@ The computed value is the one committed before it, for example `VIX` 15.98 (comm
 15:20:55) against 16.26 (committed 15:34:48) for the run that started at 15:30:00. The
 compute code in `analyze/` and `transform/` is the same on 2026-09-24 and 2026-09-27 as
 today apart from comments.
+
+### 8.1.3 Backtest execution and samples (issue 1734, D94)
+
+A backtest result is one a real strategy could have achieved. A label known at a
+day's close trades at the close of the next session at the earliest, and a trade
+never executes in a closed market: the S&P 500 leg of a weekend label change waits
+for the next day it printed a close. Each methodology version declares its adoption
+date (`REGIME_ADOPTION_DATE` in `regime-versions.ts`, refused by name when missing).
+Every backtest statistic reports an `in_sample` block up to and including that date
+and an `out_of_sample` block after it, because the version was tuned on the earlier
+data. Sharpe is the daily post-cost return minus the same day's cash return, and the
+cash rate is the bond-equivalent yield of the DTB3 discount quote. The rules are in
+`analytics-requirements.md` section 5. No label, composite or methodology tag changes.
+
+These rules hold for the main line (`v3`, `v4`). `REGIME_BACKTEST_RULES` in
+`analyze/backtest.ts` declares the options the reference backtest of each version
+runs with, and `runAnalytics` and `runRegime` pass the row of the version they
+compute. The `v3` and `v4` rows are the defaults above, so their backtests do not
+change. Methodology `v5` is the one exception ([D96](../decisions.md), §13.6): it is
+published beside the main line, its figures are fixed by a frozen golden, and its
+backtest keeps the rule set it was published with. Its results are hypothetical.
 
 ### 8.1.2 Knowledge time (issue 1733, D92)
 
@@ -1432,7 +1458,10 @@ correction of a published figure stays an explicit act, never an automatic rewri
 - They are **VERSIONED**, and the version is **DISPLAYED**.
 - An admin may **refresh calculations**, which computes a **next** version.
 - **Computing a next version does NOT publish it.** Publishing is a separate,
-  explicit admin action.
+  explicit admin action. Methodology `v5` (issue 1753, §13) is computed on every
+  regime tick and published on a line of its own, beside the main line. It is
+  never the main line, and the admin publish workflow of this section is not
+  what publishes it.
 - A newly computed version **identical to the prior one is a NOOP** — which is
   equivalent to a passing audit, and is the normal expected outcome.
 
@@ -2290,6 +2319,185 @@ Each finding is recorded here and is not fixed by this change. Each becomes its 
 - `brief.researchSignals`: Rows dated exactly the session date.
 - `judge.brief`: As stored; carries the brief's uncut fields.
 - The v0 archive briefs under `frontend/public/data/swarm/briefs` carried `regime.correlations.forward`. The live brief carries none.
+
+## 13. Methodology v5, published beside the main line (issue 1753, D96)
+
+`v5` is the regime model the downstream repository calls `experiment-lex-equity`.
+The platform computes, stores and serves it. It does not replace the served
+methodology: `CURRENT_REGIME_VERSION` stays `v4`, and `REGIME_LINE` in
+`regime-versions.ts` declares `v3` and `v4` `main` and `v5` `beside`. No main-line
+figure, default, stored row or frozen report changes.
+
+### 13.1 The registry
+
+`INDICATORS` is not edited. `REGIME_REGISTRY` (`regime-versions.ts`) maps each
+version to its indicator list: `v3` and `v4` to `INDICATORS`, `v5` to
+`V5_INDICATORS` (`indicators.ts`). That list is
+`INDICATORS` in order with VIX scored in the factor panel, then four derived
+indicators. It has 30 entries.
+
+| Panel | Count | Members |
+|---|---|---|
+| `macro` | 8 | `T10Y2Y`, `DFII10`, `T5YIE`, `HY_OAS`, `DXY`, `ICSA`, `COPPER_GOLD`, `FISCAL` |
+| `onchain` | 10 | unchanged |
+| `factor` | 12 | `SPX_TREND`, `IWM_SPY`, `SPHB_SPLV`, `MTUM_SPY`, `IWF_IWD`, `XLU_SPY`, `XLP_XLY`, `SHILLER_CAPE`, `VIX`, `VIX_TERM`, `SKEW`, `UPVOL_SHARE` |
+
+All three panels are included. Every `v5` indicator keeps the forward fill of at
+most 120 days. Each derived indicator is a `DerivedSeries` declaration
+(`V5_DERIVED_SERIES` in `transform/derived.ts`) computed by `deriveSeries` from raw inputs as known on the
+day, never from a stored derived series.
+
+| Indicator | Panel | Sign | Definition | Dated |
+|---|---|---|---|---|
+| `FISCAL` | macro | +1 | Minus the plain in-order sum of the last 12 monthly observations of FRED `MTSDS133FMS`, divided by 1000, divided by the latest FRED `GDP` value public on the observation date, times 100. A GDP observation is public 120 calendar days after its date. | 43 calendar days after the monthly observation |
+| `VIX_TERM` | factor | +1 | The `^VIX3M` close over the `^VIX` close, on the dates both have one. | 1 calendar day later |
+| `SKEW` | factor | -1 | The `^SKEW` close. | 1 calendar day later |
+| `UPVOL_SHARE` | factor | +1 | Over the last 20 rows that have both a `^GSPC` close and a volume above 0: the volume on rows whose close is strictly above the previous row's close, divided by the total volume. The first value needs 21 rows. | 1 calendar day later |
+
+VIX keeps sign -1, the `level` transform and its registry dating. The lags are
+declared once, on the declarations, as `calendar-days` rules.
+
+### 13.2 The day
+
+A run as of day t resolves its inputs, cuts them at t, places them on the daily
+axis from 2018-01-01, carries each forward at most 120 days and transforms it.
+This is `prepareRegimeInputs` with `REGIME_RULES.v5` and the `v5` registry. The
+registry's own series are read by period date (`REGIME_KNOWLEDGE_TIME.v5` is
+false), and ratios are read as stored, from adjusted closes.
+
+- **Score.** The mid-rank of an indicator's value within its trailing
+  1095-calendar-day window including t. Each calendar day counts once, a carried
+  day included (`REGIME_OBSERVATION_WINDOWS.v5` is false). It needs 30 values. It is
+  aligned by sign: 1 minus the rank for sign -1.
+- **Weights.** Each panel's weights are fit on t, from the scores of the window
+  ending on t (`fitPanelWeights`). An indicator needs 60 scores. Its weight is the
+  normalised inverse of its mean absolute Pearson correlation with the other
+  eligible indicators of the panel, floored at 0.05 and capped at 0.25, with the
+  excess redistributed. The cap is not applied with fewer than four eligible
+  indicators. The refit interval is 1 day on the 2018-01-01 calendar, so no fit is
+  tied to the run's last day.
+- **Panel index.** The weighted mean of the day's scores present
+  (`weightedMeanOnDay`). It is not ranked again.
+
+### 13.3 The kept record
+
+`analyze/kept-regime.ts` computes the rest from kept days. A kept day is its date,
+its panel indices and its signed scores. The module lays the kept days on one
+daily axis, where a day with no kept figure is a gap, and derives in date order:
+
+- **Composite mean** m(t): the equal-weight mean of the included panel indices
+  present on t. It is undefined when none is present.
+- **Composite** c(t): the mid-rank of m(t) within every kept mean up to and
+  including t. It needs 30 means.
+- **Labels.** The composite label is cut at 0.33 and 0.67 on c and smoothed by
+  `smoothRegimes`. Each panel label follows the same rule on its panel index.
+
+A kept day never changes, and a day published late does not change a row already
+published. `compositePercentile` and the panel percentiles are null: `v5` has no
+trailing percentile.
+
+### 13.4 The run
+
+A `v5` run is a normal analytics run: `runAnalytics` with `regimeVersion` `v5`. It
+begins a ledger run stamped `v5`, reads its committed inputs, freezes its vintage
+and submits one terminal package. No migration inserts the methodology row: the
+first run does.
+
+- **The first run** finds no kept day. It computes every day from 2018-01-01 to the
+  day before its as-of day one by one from its own vintage, each fit on that day
+  from the scores up to that day, then its own day. Its artifact carries all those
+  rows.
+- **Every later run** reads the kept days before its as-of day
+  (`persistence.loadKeptRegimeDays`: the published `v5` line, date and three panel
+  indices), computes only its own day, and derives that day's composite and labels
+  from the kept days plus its own. Its artifact carries that one row. Its report
+  names the artifacts the kept days came from, so the run replays from its
+  vintage plus those artifacts.
+
+A row is written for every kept day that has a composite mean. Its composite and
+regime are null before the 30th mean, so a later run can rebuild the record. A
+reader is served only rows that have a label. The as-of row carries the 30
+indicator details, the panel weights with their fit date, the panels, the
+correlations and the backtest.
+
+The producer's regime tick runs the main-line run first, then one run for each
+beside version. The runs share one fetch memo, so a tick makes one provider
+request per series. A failed `v5` run never fails or changes the main-line run.
+
+### 13.5 Storage, publication and serving
+
+A `v5` run's rows are frozen in `analytics_output_snapshots` under the artifact
+kind `regime_beside_snapshots` (migration 0136). The API picks the kind from the
+run's methodology label, never the client. The run's `regime_snapshots` artifact is
+the empty list, and its rows are not written to the `regime_snapshots` table. So
+the dashboards read, the parity sweep, the swarm brief's report lookup, the
+provider door and csvb's audit see exactly what they saw before.
+
+The publication selection (`cutover/ledger-current.ts`) takes the artifact kind
+and the methodology label, and applies the rule of D83 to the `v5` line unchanged.
+The days before the first `v5` artifact's as-of day come from that artifact. Each
+later day comes from the last artifact written during that day whose run has that
+as-of day. A day no run published is a gap.
+
+`GET /api/dashboards/regime-snapshots` takes `methodology`. Without it the
+response is the main line, byte for byte as before. With `v5` it is the `v5` line
+in the same shape, and the response names the line in `methodology`. An unknown
+value is a 400 that names the allowed values. A version that has published
+nothing answers `latest` null and an empty history. The regime page reads
+`?methodology=` from its own URL, passes it on both of its requests and shows
+the tag beside the title.
+
+The five raw series are collected by every regime run as collected series
+(§2.1). The committed-inputs read takes a methodology parameter, so a `v5` run
+reads, and its vintage freezes, the main-line regime keys plus the five. The
+platform stores one `yahoo:^VIX` stream (D74): the VIX indicator and the
+`VIX_TERM` denominator both read it, the denominator under its own input id.
+`UPVOL_SHARE` reads the run's own `^GSPC` closes, the backtest input `SPX`. No
+added series is required coverage: a missing one leaves its indicator missing
+under its fill policy.
+
+### 13.6 The backtest
+
+`REGIME_BACKTEST_RULES.v5` is the rule set the golden was published with:
+
+- a label trades at the close of its own day (`lagSessions` 0);
+- every market trades on every axis day, a closed day at its last close
+  (`calendars` `continuous` for both assets);
+- cash earns the previous day's T-bill quote read as a yearly yield compounded
+  over 365 days (`cashBasis` `yield`);
+- the Sharpe ratio is taken on the simulator's pre-cost daily returns with no
+  cash subtraction (`sharpeBasis` `returns`);
+- the in-sample period ends on 2024-01-31;
+- a trade costs 10 basis points of one-sided turnover.
+
+There is one rule set for `v5`. The backtest on the published as-of row and the
+backtest block of the golden are the same computation. `REGIME_ADOPTION_DATE.v5`
+is 2026-11-23, the day the model was chosen. It satisfies the adoption-date
+loader and is not the split date. D94 keeps applying to the main line unchanged.
+
+### 13.7 Exact reproduction, and the decided differences
+
+`packages/analyst-sdk/tests/fixtures/lex-equity-golden/` holds the golden's
+inputs: `runs.json.gz` (every finished regime run of csv-backups backup
+2026-11-17T000000Z that froze a vintage, and the 29 input series of the 57
+serving runs), the twelve supplementary files the golden's manifest names, and
+copies of the golden's `outputs.json` and `manifest.json`.
+`tests/regime-v5-golden.test.ts` computes the model with the SDK functions the
+backend calls and asserts the bytes equal `outputs.json` (SHA-256
+`03b9633d2127b0eb1daad39d8d33a850a8c9f4b32ae10b6a4fbdb0faa2a25fae`, 3,124 days).
+It runs in the required analyst-sdk job and needs no csv-backups access.
+`scripts/lex-golden-fixture.ts` rebuilds `runs.json.gz` from a local csv-backups
+folder, and `--check` fails when the committed file differs.
+
+- **Dating.** The downstream specification reads every series by knowledge time.
+  The golden reads the registry's own series by period date and lags only the
+  added series. The port follows the golden, because the golden is the acceptance.
+- **The denominator.** The check feeds the golden's own Yahoo `^VIX` file under
+  the denominator's input id. On the platform the denominator is the stored
+  `yahoo:^VIX` stream, whose values can differ from that file.
+- **Production history.** The platform's `v5` history starts at its first `v5`
+  run (D83 item 5). It equals the golden's rules, not the golden's days from
+  2026-09-21 on.
 
 ## See also
 

@@ -17,7 +17,11 @@
 // Rebasing and reading returns back from values move numbers by rounding only,
 // so the result is compared up to rounding (support/numeric-diff.ts).
 // No bun:test import: backend tests load this file too.
-import { BACKTEST_IN_SAMPLE_END, periodStats, PORTFOLIO_SPECS, type BacktestMetrics, type BacktestPayload } from "../../src/analyze/backtest.ts";
+import { BACKTEST_IN_SAMPLE_END, periodStats, PORTFOLIO_SPECS, type BacktestMetrics as CurrentMetrics } from "../../src/analyze/backtest.ts";
+
+// The frozen original's report shape: the current one without the issue 1734 sample blocks.
+type BacktestMetrics = Omit<CurrentMetrics, "sample_split_date" | "in_sample" | "out_of_sample">;
+type BacktestPayload = Record<string, Record<string, BacktestMetrics>>;
 import type { Point } from "../../src/types.ts";
 
 /** portfolio -> strategy -> [date, value][]: the original daily values (originals' daily-portfolio files). */
@@ -62,7 +66,7 @@ export function apply1559(original: BacktestPayload, evidence?: DailyEvidence): 
       const values = all.slice(at).map((p) => ({ date: p.date, value: p.value / base }));
       const returns = all.slice(at + 1).map((p, i) => ({ date: p.date, value: p.value / all[at + i]!.value - 1 }));
       if (m.transitions !== 0) throw new Error(`issue-1559 rule: baseline ${market}.${name} has trades`);
-      const stats = periodStats(values, start, m.end_date, { returns, trades: [], splitDate: BACKTEST_IN_SAMPLE_END });
+      const stats = periodStats(values, start, m.end_date, { returns, excess: returns, trades: [], splitDate: BACKTEST_IN_SAMPLE_END });
       // Keep the original's key order (a stored row is key-sorted JSON).
       const ordered = {} as Record<string, unknown>;
       for (const k of Object.keys(m)) ordered[k] = (stats as unknown as Record<string, unknown>)[k];

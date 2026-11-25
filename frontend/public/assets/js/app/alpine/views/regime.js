@@ -90,6 +90,11 @@ export function registerRegimeView(Alpine) {
     error: null,
     latest: null,
     history: [],
+    // The methodology line on show (issue 1753): `?methodology=<version>` on
+    // this page's own URL asks the API for that version's line (v5 is published
+    // beside the main line) and its tag is shown beside the title. With no
+    // parameter the page asks for, and shows, exactly what it always did.
+    methodology: null,
     // Freshness of the served snapshot (backend computes it). When `stale`, the
     // analytics pipeline isn't refreshing in this deployment and the charts below
     // are frozen — surfaced as a loud banner rather than served silently.
@@ -135,9 +140,15 @@ export function registerRegimeView(Alpine) {
     btAt: null,
     btFocus: null,
 
+    // The query both requests share: the methodology named on the page's URL, if any.
+    _lineQuery() {
+      return this.methodology ? { methodology: this.methodology } : {};
+    },
+
     async load() {
+      this.methodology = new URLSearchParams(location.search).get("methodology") || null;
       try {
-        const data = await api.get(ROUTES.dashboards.regimeSnapshots, { range: FIRST_PAINT_DAYS });
+        const data = await api.get(ROUTES.dashboards.regimeSnapshots, { range: FIRST_PAINT_DAYS, ...this._lineQuery() });
         this._apply(data);
         this.loading = false;
         this._openTabFromHash();
@@ -164,7 +175,7 @@ export function registerRegimeView(Alpine) {
       const target = location.hash.slice(1);
       const landed = !target || !!document.getElementById(decodeURIComponent(target));
       try {
-        const data = await api.get(ROUTES.dashboards.regimeSnapshots, { range: 4000, include: "backtest" });
+        const data = await api.get(ROUTES.dashboards.regimeSnapshots, { range: 4000, include: "backtest", ...this._lineQuery() });
         this._apply(data);
         this.fullLoaded = true;
         this.$nextTick(() => {

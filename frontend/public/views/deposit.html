@@ -50,10 +50,6 @@
           </div>
         </div>
       </header>
-      <footer class="dp__foot dpg__foot">
-        <span>Robot Money is software that builds transactions your wallet signs. Nothing here is investment advice.</span>
-        <nav aria-label="Legal"><a href="/terms">Terms</a><a href="/privacy">Privacy</a><a href="/disclaimer">Disclaimer</a><a href="/smart-contract-risks">Smart contract risks</a></nav>
-      </footer>
     </div>
   </template>
 
@@ -66,8 +62,9 @@
       <div class="dp__main">
         <header class="dp__head">
           <p class="dp__eyebrow"><span class="dp__lbl">Base</span><template x-if="sample()"><span class="dp__tag">Sample data</span></template></p>
-          <h1 class="dp__title">The model portfolio vault</h1>
-          <p class="dp__lede">Deposit USDC for shares of the model portfolio recommended by the swarm.</p>
+          <!-- The vault is one execution of the model portfolio, not the portfolio itself (David, 25 Nov): it tracks the swarm's mix with what it can hold on Base. -->
+          <h1 class="dp__title">Robot Money Vault</h1>
+          <p class="dp__lede">A vault on Base that tracks the swarm's model portfolio with the assets it can hold on chain.</p>
         </header>
 
         <p class="dp__err" x-show="loadError" x-text="loadError" x-cloak></p>
@@ -86,23 +83,30 @@
           <!-- The placeholder and the holdings share one grid cell, so nothing below moves when they land (.impeccable.md). -->
           <div class="dp__load" :class="vault ? 'is-ready' : ''">
           <div class="dp__skel dp__skel--hold" aria-hidden="true"><span class="dp__skelring"></span><span class="dp__skelrows"><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span></div>
+          <!-- The ring and its legend: the same explorer as the vault's subject page and the home page. Its centre names the largest holding; a row lights its arc. The full table (value, target, drift) belongs to the vault page (IA agreed 25 Nov). -->
           <div class="dp__hold dp__live">
-            <span class="dp__ring" x-html="ringSvg()"></span>
-            <div class="dp__tablewrap">
-              <table class="dp__tbl">
-                <thead><tr><th scope="col">Position</th><th scope="col">Venue</th><th scope="col" class="n">Target</th><th scope="col" class="n">Actual</th><th scope="col" class="n">Value</th></tr></thead>
-                <tbody>
-                  <template x-for="h in holdings()" :key="h.key">
-                    <tr>
-                      <td><i class="dp__sw" data-mark="series" :style="`background:${h.hue}`" aria-hidden="true"></i><span x-text="h.label"></span></td>
-                      <td x-text="h.venueLabel"></td>
-                      <td class="n" x-text="h.target"></td>
-                      <td class="n" x-text="h.actual"></td>
-                      <td class="n" x-text="h.value"></td>
-                    </tr>
+            <div class="rr-x dp__mix" x-data="sleeveExplorer()" @keydown.escape.window="close()" @pointerleave="leave()">
+              <div class="rr-mix">
+                <figure class="rr-ring" @pointerover="overRing($event)" @pointerout="cancelIntent()" @click="clickRing($event)">
+                  <span class="sv__wdonut-host" role="img" :aria-label="explorerLabel()" x-html="explorerSvg()" x-effect="active(); $nextTick(() => syncArcs($el))"></span>
+                  <figcaption>
+                    <b x-show="activeRow() || explorerCenter().value" x-text="activeRow() ? fmtPctTrim(activeRow().pct) : explorerCenter().value"></b>
+                    <span x-text="activeRow() ? activeRow().label : explorerCenter().label"></span>
+                  </figcaption>
+                </figure>
+                <div class="rr-legend">
+                  <template x-for="r in explorerRows()" :key="r.key">
+                    <button type="button" class="rr-legend__row" :data-sleeve-btn="r.key"
+                            :class="{ 'is-active': active() === r.key, 'is-zero': !r.pct, 'is-muted': active() && active() !== r.key }"
+                            @pointerenter="preview(r.key, $event)" @pointerleave="cancelIntent()" @focus="preview(r.key)" @blur="leave()" @click="toggle(r.key)">
+                      <i data-mark="series" :style="`background:${r.hue}`" aria-hidden="true"></i>
+                      <span class="rr-legend__l" x-text="r.label"></span>
+                      <b x-text="fmtPctTrim(r.pct)"></b>
+                    </button>
                   </template>
-                </tbody>
-              </table>
+                  <a class="dp__lbl dp__lbl--link dp__holdmore" href="/vault">All holdings</a>
+                </div>
+              </div>
             </div>
           </div>
           </div>
@@ -114,7 +118,7 @@
           <!-- The next batch's cycle as one line: it fills as the hour runs, a mark where its requests lock, the batch at the end. -->
           <div class="dp__cycle" x-show="queue()" x-transition.opacity.duration.300ms x-cloak>
             <p class="dp__countdown dp__countdown--lg" :title="`Next batch at ${fmtWhen(cycle().batch)}`"><span class="dp__lbl">Next batch in</span> <b x-text="cycle().batch > tick ? batchClock() : 'due now'"></b></p>
-            <div class="dp__cyclebar" role="img" :aria-label="`The next batch runs ${cycle().toBatch}; requests made before ${when(cycle().lock)} join it`"><i class="dp__cyclefill" :style="`width:${cycle().fill}%`"></i><i class="dp__cycletick" :style="`left:${cycle().lockAt}%`"></i></div>
+            <div class="dp__cyclebar" role="img" :aria-label="`The next batch runs ${cycle().toBatch}; requests made from ${when(cycle().lock)} still join it, but can no longer be cancelled`"><i class="dp__cyclefill" :style="`width:${cycle().fill}%`"></i><i class="dp__cycletick" :style="`left:${cycle().lockAt}%`"></i></div>
             <div class="dp__cyclelbl"><span><span x-text="cycle().locked ? 'Locked' : 'Requests lock'"></span> <b x-text="when(cycle().lock)"></b></span><span>Batch <b x-text="when(cycle().batch)"></b></span></div>
           </div>
           <div class="dp__facts dp__facts--plain">
@@ -137,17 +141,18 @@
 
         <section class="dp__sec dp__sec--last" aria-labelledby="facts-h">
           <h2 class="dp__h2" id="facts-h">Before you deposit</h2>
-          <dl class="dp__dl">
-            <dt>Custody</dt><dd>Non-custodial. Your wallet signs every step, and Robot Money never holds your keys.</dd>
-            <dt>Price</dt><dd>Set by the batch, from the vault's holdings at market prices, after requests lock. Nobody can see it when they request.</dd>
-            <dt>Getting out</dt><dd>Redeem to USDC <span x-text="redeemWaitLabel()"></span> after you request, at the price the batch sets, less the exit fee.</dd>
-            <dt>Who sets the mix</dt><dd>The swarm recommends it, a multisig applies it through a timelock, and the vault moves toward it in small steps.</dd>
-            <dt>Limits</dt><dd class="dp__mono" x-text="limits()"></dd>
-            <dt>Fees</dt><dd class="dp__mono" x-text="fees()"></dd>
-            <dt>Contracts</dt><dd class="dp__mono" x-text="contractsLabel()"></dd>
-            <dt>Audit</dt><dd>[AUDIT STATUS]</dd>
-            <dt>Risks</dt><dd>Deposits are not insured and can lose value. <a href="/disclaimer">Read the risks</a> and how <a href="/smart-contract-risks">DeFi vaults get exploited</a>.</dd>
-          </dl>
+          <!-- Closed by default (David, 25 Nov): the detail is there for whoever looks, not in everyone's way. -->
+          <div class="dp__faq">
+            <details class="dp__faqrow" id="faq-custody"><summary>Who holds my money?</summary><div class="dp__faqa">Non-custodial. Your wallet signs every step, and Robot Money never holds your keys.</div></details>
+            <details class="dp__faqrow" id="faq-price"><summary>How is the price set?</summary><div class="dp__faqa">Set by the batch, from the vault's holdings at market prices, after requests lock. Nobody can see it when they request.</div></details>
+            <details class="dp__faqrow" id="faq-getting-out"><summary>How do I get my money out?</summary><div class="dp__faqa">Redeem to USDC <span x-text="redeemWaitLabel()"></span> after you request, at the price the batch sets, less the exit fee.</div></details>
+            <details class="dp__faqrow" id="faq-mix"><summary>Who sets the mix?</summary><div class="dp__faqa">The swarm recommends it, a multisig applies it through a timelock, and the vault moves toward it in small steps.</div></details>
+            <details class="dp__faqrow" id="faq-limits"><summary>What are the limits?</summary><div class="dp__faqa dp__mono" x-text="limits()"></div></details>
+            <details class="dp__faqrow" id="faq-fees"><summary>What are the fees?</summary><div class="dp__faqa dp__mono" x-text="fees()"></div></details>
+            <details class="dp__faqrow" id="faq-contracts"><summary>Which contracts does it use?</summary><div class="dp__faqa"><template x-if="fundAddr()"><span>Vault <span class="dp__addrx"><a :href="addrHref(fundAddr())" target="_blank" rel="noopener noreferrer" x-text="shortAddr(fundAddr())"></a><button type="button" class="dp__copyi" title="Copy address" aria-label="Copy address" @click.stop="copyAddr(fundAddr(), $el)"><svg class="dp__copyi-c" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.2" aria-hidden="true"><rect x="3.6" y="3.6" width="6.8" height="6.8"></rect><path d="M8.4 1.6H1.6v6.8"></path></svg><svg class="dp__copyi-k" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M2 6.4 4.6 9 10 3.2"></path></svg></button></span> · Queue <span class="dp__addrx"><a :href="addrHref(queueAddr())" target="_blank" rel="noopener noreferrer" x-text="shortAddr(queueAddr())"></a><button type="button" class="dp__copyi" title="Copy address" aria-label="Copy address" @click.stop="copyAddr(queueAddr(), $el)"><svg class="dp__copyi-c" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.2" aria-hidden="true"><rect x="3.6" y="3.6" width="6.8" height="6.8"></rect><path d="M8.4 1.6H1.6v6.8"></path></svg><svg class="dp__copyi-k" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M2 6.4 4.6 9 10 3.2"></path></svg></button></span></span></template><template x-if="!fundAddr()"><span>Not on Base yet</span></template></div></details>
+            <details class="dp__faqrow" id="faq-audit"><summary>Is it audited?</summary><div class="dp__faqa">[AUDIT STATUS]</div></details>
+            <details class="dp__faqrow" id="faq-risks"><summary>What are the risks?</summary><div class="dp__faqa">Deposits are not insured and can lose value. <a href="/disclaimer">Read the risks</a> and how <a href="/smart-contract-risks">DeFi vaults get exploited</a>.</div></details>
+          </div>
         </section>
       </div>
 
@@ -173,7 +178,7 @@
               </div>
             </div>
           </template>
-        <div class="dp__mhead" aria-hidden="true"><span class="dp__mtitle">Deposit</span><span class="dp__mono dp__muted" x-text="vault ? `${vault.priceUsdc.toFixed(4)} USDC a share` : ''"></span></div>
+        <div class="dp__mhead" aria-hidden="true"><span class="dp__mtitle" x-text="tab === 'redeem' ? 'Redeem' : 'Deposit'">Deposit</span><span class="dp__mono dp__muted" x-text="vault ? `${vault.priceUsdc.toFixed(4)} USDC a share` : ''"></span></div>
         <div class="dp__panel">
 
           <div class="dp__tabs" role="tablist" aria-label="Action">
@@ -203,9 +208,9 @@
 
             <div class="dp__kvs" :class="dqLoading ? 'is-stale' : ''">
               <div class="dp__kv"><span>You receive (estimate)<span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="About the estimate">i</button><span class="rm-tip__bub" role="tooltip" x-text="receiveTip()"></span></span></span><b x-text="estShares()"></b></div>
-              <div class="dp__kv"><span>You can cancel until<span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="About the cancel deadline">i</button><span class="rm-tip__bub" role="tooltip" x-text="cancelTip('deposit')"></span></span></span><b x-text="when(lockAt())"></b></div>
-              <div class="dp__kv"><span>Next batch<span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="About the next batch">i</button><span class="rm-tip__bub" role="tooltip" x-text="batchTip()"></span></span></span><b x-text="nextBatch()"></b></div>
-              <div class="dp__kv"><span>Ready to claim<span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="About when you can claim">i</button><span class="rm-tip__bub" role="tooltip" x-text="arriveTip()"></span></span></span><b x-text="sharesArrive()"></b></div>
+              <div class="dp__kv"><span><span x-text="cancelKv(lockAt()).label"></span><span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="About the cancel deadline">i</button><span class="rm-tip__bub" role="tooltip" x-text="cancelTip('deposit', lockAt())"></span></span></span><b x-text="cancelKv(lockAt()).value"></b></div>
+              <div class="dp__kv"><span>Next batch in<span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="About the next batch">i</button><span class="rm-tip__bub" role="tooltip" x-text="batchTip()"></span></span></span><b x-text="soon(batchAt())"></b></div>
+              <div class="dp__kv"><span>Ready to claim in<span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="About when you can claim">i</button><span class="rm-tip__bub" role="tooltip" x-text="arriveTip()"></span></span></span><b x-text="soon(sharesAt())"></b></div>
             </div>
 
             <template x-if="!connected() && !restoring()">
@@ -248,9 +253,9 @@
               <div class="dp__stack dp__stack--tight">
                 <div class="dp__kvs">
                   <div class="dp__kv"><span>You receive (estimate)<span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="About the estimate">i</button><span class="rm-tip__bub" role="tooltip" x-text="redeemReceiveTip()"></span></span></span><b x-text="estUsdc()"></b></div>
-                  <div class="dp__kv"><span>Exit fee</span><b x-text="fmtFee(exitFeeBps())"></b></div>
-                  <div class="dp__kv"><span>You can cancel until<span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="About the cancel deadline">i</button><span class="rm-tip__bub" role="tooltip" x-text="cancelTip('redeem')"></span></span></span><b x-text="when(redeemLockAt())"></b></div>
-                  <div class="dp__kv"><span>USDC ready<span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="About when USDC is ready">i</button><span class="rm-tip__bub" role="tooltip" x-text="usdcReadyTip()"></span></span></span><b x-text="rq ? when(rq.readyAt) : nextBatch()"></b></div>
+                  <div class="dp__kv"><span>Exit fee<span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="About the exit fee">i</button><span class="rm-tip__bub" role="tooltip" x-text="exitFeeTip(sharesN(), exitFeeBps())"></span></span></span><b x-text="rq || vault ? exitFeeSays(sharesN(), exitFeeBps()) : '—'"></b></div>
+                  <div class="dp__kv"><span><span x-text="cancelKv(redeemLockAt()).label"></span><span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="About the cancel deadline">i</button><span class="rm-tip__bub" role="tooltip" x-text="cancelTip('redeem', redeemLockAt())"></span></span></span><b x-text="cancelKv(redeemLockAt()).value"></b></div>
+                  <div class="dp__kv"><span>USDC ready in<span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="About when USDC is ready">i</button><span class="rm-tip__bub" role="tooltip" x-text="usdcReadyTip()"></span></span></span><b x-text="soon(usdcAt())"></b></div>
                 </div>
               </div>
             </template>
@@ -278,18 +283,16 @@
       </aside>
     </div>
 
-    <footer class="dp__foot">
-      <span>Robot Money is software that builds transactions your wallet signs. Nothing here is investment advice.</span>
-      <nav aria-label="Legal"><a href="/terms">Terms</a><a href="/privacy">Privacy</a><a href="/disclaimer">Disclaimer</a><a href="/smart-contract-risks">Smart contract risks</a></nav>
-    </footer>
   </div>
 
   <!-- The dialog: review, then signing, then requested -->
   <div class="dp__scrim" x-show="dlg.open" x-cloak x-transition.opacity.duration.150ms @click.self="closeDialog()">
-    <div class="dp__dlg" role="dialog" aria-modal="true" aria-labelledby="dp-dlg-h">
+    <div class="dp__dlg" role="dialog" aria-modal="true" aria-labelledby="dp-dlg-h" x-init="easeDialog($el)">
+      <div class="dp__dlgin">
       <div class="dp__dlghead">
         <div class="dp__stack dp__stack--tight">
           <template x-if="dlg.phase === 'requested'"><svg width="28" height="28" viewBox="0 0 28 28" fill="none" stroke="#10b981" stroke-width="1.8" aria-hidden="true"><path d="M5 14.5l6 6L23 8"></path></svg></template>
+          <span class="dp__lbl" x-show="stepLabel()" x-text="stepLabel()"></span>
           <h2 class="dp__dlgtitle" id="dp-dlg-h" tabindex="-1" x-ref="dlgTitle" x-text="dlgTitle()"></h2>
         </div>
         <button type="button" class="dp__x" aria-label="Close" @click="closeDialog()" x-show="dlg.phase === 'review'"><svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M4 4l10 10M14 4L4 14"></path></svg></button>
@@ -299,35 +302,25 @@
       <template x-if="dlg.phase === 'review'">
         <div class="dp__dlgbody">
           <template x-if="dlg.kind === 'deposit'">
-            <div class="dp__stack dp__stack--tight"><span class="dp__lbl">You deposit</span><p class="dp__bignum" x-text="fmtUsdc(dlg.amount)"></p><p class="dp__soft">for about <b class="dp__mono dp__strong" x-text="estShares(dlg.amount)"></b></p></div>
+            <div class="dp__stack dp__stack--tight"><span class="dp__lbl">You deposit</span><p class="dp__bignum" x-text="fmtUsdc(dlg.amount)"></p><p class="dp__soft">for about <b class="dp__mono dp__strong" x-text="estShares(dlg.amount)"></b><span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="About the estimate">i</button><span class="rm-tip__bub" role="tooltip" x-text="dlgEstTip()"></span></span></p></div>
           </template>
           <template x-if="dlg.kind !== 'deposit'">
-            <div class="dp__stack dp__stack--tight"><span class="dp__lbl">You redeem</span><p class="dp__bignum" x-text="fmtRm(dlg.amount)"></p><p class="dp__soft" x-text="dlg.kind === 'redeem' ? `for about ${estUsdc(dlg.amount)} after the exit fee` : 'and receive your slice of each holding, at once'"></p></div>
+            <div class="dp__stack dp__stack--tight"><span class="dp__lbl">You redeem</span><p class="dp__bignum" x-text="fmtRm(dlg.amount)"></p>
+              <template x-if="dlg.kind === 'redeem'"><p class="dp__soft">for about <b class="dp__mono dp__strong" x-text="estUsdc(dlg.amount)"></b>, <span x-text="exitFeeWords(dlg.amount, dlg.quote?.feeBps ?? vault?.exitFeeBps)"></span><span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="About the estimate">i</button><span class="rm-tip__bub" role="tooltip" x-text="dlgEstTip()"></span></span></p></template>
+              <template x-if="dlg.kind === 'inkind'"><p class="dp__soft">and receive your slice of each holding, at once</p></template>
+            </div>
           </template>
 
           <div class="dp__kvs dp__kvs--rule">
-            <div class="dp__kv"><span>Share price now</span><b x-text="price()"></b></div>
-            <template x-if="dlg.kind !== 'inkind'"><div class="dp__kv"><span>Your price</span><b>Set by the batch</b></div></template>
-            <template x-if="dlg.kind === 'deposit'"><div class="dp__kv"><span>Entry fee</span><b x-text="fmtFee(vault?.entryFeeBps)"></b></div></template>
-            <template x-if="dlg.kind !== 'deposit'"><div class="dp__kv"><span>Exit fee</span><b x-text="fmtFee(dlg.quote?.feeBps ?? vault?.exitFeeBps)"></b></div></template>
+            <template x-if="dlg.quote && dlg.kind !== 'inkind'"><div class="dp__kv"><span><span x-text="dlg.kind === 'deposit' ? 'rmFUND ready in' : 'USDC ready in'"></span><span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="About when it is ready">i</button><span class="rm-tip__bub" role="tooltip" x-text="dlgReadyTip()"></span></span></span><b x-text="soon(dlg.quote.readyAt)"></b></div></template>
+            <template x-if="dlg.quote && dlg.kind !== 'inkind'"><div class="dp__kv"><span><span x-text="cancelKv(dlg.quote.lockAt).label"></span><span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="About the cancel deadline">i</button><span class="rm-tip__bub" role="tooltip" x-text="cancelTip(dlg.kind === 'deposit' ? 'deposit' : 'redeem', dlg.quote.lockAt)"></span></span></span><b x-text="cancelKv(dlg.quote.lockAt).value"></b></div></template>
+            <template x-if="dlg.kind === 'deposit' && vault?.entryFeeBps > 0"><div class="dp__kv"><span>Entry fee</span><b x-text="fmtFee(vault?.entryFeeBps)"></b></div></template>
             <template x-if="dlg.kind === 'inkind'"><template x-for="l in inKindSummary()" :key="`r${l.key}`"><div class="dp__kv"><span class="dp__asset"><template x-if="tokenIcon(l.label)"><img class="dp__tokimg" :src="tokenIcon(l.label)" alt="" width="24" height="24"></template><span x-text="l.label"></span></span><b x-text="l.amount"></b></div></template></template>
-            <div class="dp__kv"><span>From</span><b x-text="`${short()} on Base`"></b></div>
+            <div class="dp__kv"><span>From</span><b><span class="dp__addrx"><a :href="addrHref(address())" target="_blank" rel="noopener noreferrer" x-text="shortAddr(address())"></a><button type="button" class="dp__copyi" title="Copy address" aria-label="Copy address" @click.stop="copyAddr(address(), $el)"><svg class="dp__copyi-c" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.2" aria-hidden="true"><rect x="3.6" y="3.6" width="6.8" height="6.8"></rect><path d="M8.4 1.6H1.6v6.8"></path></svg><svg class="dp__copyi-k" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M2 6.4 4.6 9 10 3.2"></path></svg></button></span> on Base</b></div>
           </div>
 
-          <!-- What happens next: the wallet steps first, then the queue's (one list, David 17 Nov). -->
-          <div class="dp__stack">
-            <span class="dp__lbl">What happens next</span>
-            <ol class="dp__tl">
-              <template x-for="(c, i) in dlg.calls" :key="`c${i}`">
-                <li class="is-now"><span><span x-text="c.label"></span><template x-if="callTip(c)"><span class="rm-tip"><button class="rm-tip__btn" type="button" :aria-label="`About ${c.label}`">i</button><span class="rm-tip__bub" role="tooltip" x-text="callTip(c)"></span></span></template></span><span class="dp__mono">In your wallet</span></li>
-              </template>
-              <template x-if="dlg.quote"><li class="is-act"><span>Locks, and cancelling closes</span><span class="dp__mono" x-text="when(dlg.quote.lockAt)"></span></li></template>
-              <template x-if="dlg.quote"><li><span>Next batch sets the price and fills it</span><span class="dp__mono" x-text="when(dlg.quote.settlesAt)"></span></li></template>
-              <template x-if="dlg.quote && dlg.kind === 'deposit'"><li><span>Shares held</span><span class="dp__mono" x-text="holdLabel()"></span></li></template>
-              <template x-if="dlg.quote"><li class="is-money"><span x-text="dlg.kind === 'deposit' ? 'rmFUND ready to claim' : 'USDC ready to claim'"></span><span class="dp__mono" x-text="when(dlg.quote.readyAt)"></span></li></template>
-              <template x-if="dlg.quote"><li><span x-text="dlg.kind === 'deposit' ? 'Unfilled USDC can be taken back' : 'You can ask for unfilled rmFUND back'"></span><span class="dp__mono" x-text="when(expiresAt())"></span></li></template>
-            </ol>
-          </div>
+          <!-- What the wallet will ask, in one line (David, 25 Nov: the queue's workings live in the tooltips above). -->
+          <p class="dp__soft dp__small"><span x-text="walletLine()"></span><template x-if="walletTip()"><span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="About the approval">i</button><span class="rm-tip__bub" role="tooltip" x-text="walletTip()"></span></span></template></p>
 
           <!-- Checks before the wallet opens (board 22): only shown when one fails. -->
           <template x-if="failedChecks().length">
@@ -352,7 +345,7 @@
           <template x-if="needsAck()">
             <label class="dp__ack">
               <input type="checkbox" x-model="dlg.ack">
-              <span>I have read the <a href="/terms" target="_blank" rel="noopener">Terms</a> and the <a href="/disclaimer" target="_blank" rel="noopener">risks</a>. My deposit buys the model portfolio at the price its batch sets, is not insured, can lose value, and settles in batches. [ELIGIBILITY LINE, counsel]</span>
+              <span>I have read the <a href="/terms" target="_blank" rel="noopener">Terms</a> and the <a href="/disclaimer" target="_blank" rel="noopener">risks</a>. My deposit buys rmFUND at the price its batch sets, is not insured, can lose value, and settles in batches. [ELIGIBILITY LINE, counsel]</span>
             </label>
           </template>
 
@@ -400,15 +393,15 @@
         <div class="dp__dlgbody">
           <template x-if="dlg.kind === 'inkind'"><p class="dp__soft">Your slice of each holding is in your wallet.</p></template>
           <template x-if="dlg.kind !== 'inkind'">
-            <p class="dp__soft"><span x-text="dlg.kind === 'deposit' ? `${fmtUsdc(dlg.amount)} is in the queue. Your shares arrive` : `${fmtRm(dlg.amount)} is in the queue. Your USDC is ready`"></span> <b class="dp__mono dp__strong" x-text="fmtWhen(dlg.quote?.readyAt)"></b>, <span x-text="readyIn()"></span>. <span x-text="`You can cancel until ${fmtWhenShort(dlg.quote?.lockAt)} under “Your requests”.`"></span></p>
+            <ol class="dp__tl dp__tl--steps" aria-label="What happens next">
+              <template x-for="n in track()" :key="n.key"><li :class="n.cls"><span x-text="n.label"></span><span class="dp__mono" :title="n.title" x-text="n.when"></span></li></template>
+            </ol>
           </template>
-          <template x-if="dlg.kind !== 'inkind'">
-            <div class="dp__track" aria-label="Progress" :style="`grid-template-columns: repeat(${track().length}, minmax(0, 1fr))`">
-              <template x-for="n in track()" :key="n.key"><div class="dp__node" :class="[n.done ? 'is-done' : '', n.money ? 'is-money' : '']"><i aria-hidden="true"></i><b x-text="n.label"></b><span x-text="n.when"></span></div></template>
-            </div>
+          <template x-if="dlg.kind !== 'inkind' && dlg.quote?.lockAt > now">
+            <p class="dp__soft dp__small" x-text="`You can cancel for ${soon(dlg.quote.lockAt)}, from Your position.`"></p>
           </template>
-          <template x-if="dlg.kind !== 'inkind'">
-            <p class="dp__follow"><a class="dp__ext dp__ext--lg" :href="statusLink()" target="_blank" rel="noopener">Follow this request</a><button type="button" class="dp__txt" @click="copyStatus()" x-text="copied ? 'Copied' : 'Copy link'"></button></p>
+          <template x-if="dlg.kind !== 'inkind' && dlg.result?.id">
+            <p class="dp__follow"><a class="dp__ext" :href="statusLink()" target="_blank" rel="noopener" x-text="`Request #${dlg.result.id}`"></a></p>
           </template>
           <div class="dp__btnrow">
             <button type="button" class="dp__btn2" @click="closeDialog()">Done</button>
@@ -416,6 +409,7 @@
           </div>
         </div>
       </template>
+      </div>
     </div>
   </div>
 

@@ -4801,6 +4801,11 @@ exact command that finishes it by hand, and the boot's seed step still runs
 | `raw_indicator_history:XLP_XLY` | yahoo ratio | relative 5e-6 |
 | `raw_indicator_history:SHILLER_CAPE` | shiller_cape / multpl | exact |
 | `raw_indicator_history:BAA10Y` | fred (collected series, issue 1653) | exact |
+| `raw_indicator_history:FED_SURPLUS_MONTHLY` | fred (collected series, issue 1753; proposed with D96) | exact |
+| `raw_indicator_history:US_GDP` | fred (collected series, issue 1753; proposed with D96) | exact |
+| `raw_indicator_history:CBOE_VIX3M` | yahoo (collected series, issue 1753; proposed with D96) | relative 1e-6 |
+| `raw_indicator_history:CBOE_SKEW` | yahoo (collected series, issue 1753; proposed with D96) | relative 1e-6 |
+| `raw_indicator_history:SPX_VOLUME` | yahoo volume (collected series, issue 1753; proposed with D96) | exact |
 | `raw_indicator_history:MNA` | edgar | exact |
 | `research:BTC-USD` | yahoo | relative 1e-6 |
 | `research:QQQ` | yahoo | relative 1e-6 |
@@ -6750,3 +6755,69 @@ Panel weights refit every 21 days on a fixed calendar anchored at 2018-01-01. A 
 **Why.** `prepareRegimeInputs` forward-filled each series, then transformed it: `SPX_TREND` covered about 36 and 143 trading days and counted each Friday close three times. Ranks and correlations leaned toward Friday values and pulled equity-versus-crypto correlations toward zero. A missing panel re-based the composite with no market cause.
 
 **Rejected.** One cadence rule for periodic series (issue 1673). A new methodology tag.
+
+## D94 — A backtest result is one a real strategy could have achieved (issue 1734)
+
+**Status:** Accepted for implementation 2026-11-24. `packages/analyst-sdk/src/analyze/backtest.ts`, `packages/analyst-sdk/src/analyze/regime-versions.ts` (`REGIME_ADOPTION_DATE`), `packages/analyst-sdk/src/analyze/weighting-comparison.ts`, `packages/analyst-sdk/src/analyze/regime-eq-comparison.ts`, `docs/technical/analytics-requirements.md` section 5.
+
+**Decision.**
+
+1. **Execution lag.** A target set at a day's close trades at the close of the next session at the earliest (`lagSessions`, default 1). The allocation path already lagged its as-of day, so `markowitzBacktest` simulates its schedules with `lagSessions` 0.
+2. **Market calendars.** A trade that changes an asset's weight waits for that asset's next open day (`calendars`; default `observed`: the dates its own series has a value). A mixed book waits for every leg it changes. The reference backtest declares ETH `continuous` and the S&P 500 `observed`.
+3. **Adoption date.** Every methodology version declares the day it was adopted (`REGIME_ADOPTION_DATE`: v3 2026-07-01, v4 2026-11-17). The loader (`adoptionDate`) throws `AdoptionDateError` for a version without one. `BACKTEST_IN_SAMPLE_END` is the current version's adoption date, no longer a fixed 2024-01-31.
+4. **Labelled samples.** Every backtest line and every line of both research comparisons reports an `in_sample` block (up to and including the adoption date) and an `out_of_sample` block (after it).
+5. **Sharpe.** Daily post-cost returns minus that day's cash return. An all-cash portfolio scores 0. The research comparisons use the same rule over their constant cash rate.
+6. **Cash basis.** DTB3 is a discount quote. Both simulators convert it to a bond-equivalent yield, 365 d / (360 - 91 d), before compounding (finding B5).
+7. **Cost per asset.** `costBps` accepts a map of asset id to basis points. A number keeps its meaning and 10 bps stays the default (finding B6).
+8. **Daily values.** `periodStats` refuses a value series whose median gap is more than one day (`SparseSeriesError`). Drawdown is measured on daily values (finding B7).
+9. **Tag.** `v4` is corrected in place and `v3` is unchanged: this is a reporting rule, so no methodology tag, no migration and no stored row changes. No frozen published report is restated. The research comparisons lag the label by one day but do not model closed markets: they remain research generators.
+
+**Why.** The audit found the backtest traded day i's label at day i's close and earned day i+1's return, traded the S&P 500 at Friday's close on a weekend change, mixed in-sample and out-of-sample years without saying so, and scored Sharpe on pre-cost returns with no risk-free subtraction.
+
+**Rejected.** A legacy switch that keeps same-close execution: the original numbers stay in the frozen reference code only. Restating published reports.
+
+## D95 — A downstream regime model states each engine rule as an option; every default is the 0.8.0 behaviour (issue 1751)
+
+**Status:** proposed. Drafted by the agent with issue 1751 (pr 1752); the owner accepts it. `packages/analyst-sdk/src/analyze/backtest.ts`, `packages/analyst-sdk/src/analyze/regime-versions.ts` (`RegimeRules`, `REGIME_RULES`), `packages/analyst-sdk/src/analyze/compute.ts`, `packages/analyst-sdk/src/prepare.ts`, `packages/analyst-sdk/src/run.ts`, `packages/analyst-sdk/src/transform/derived.ts`, `packages/analyst-sdk/src/report/`, `docs/technical/analyst-sdk-requirements.md` section 8.
+
+**Decision.**
+
+1. **Defaults.** Every option below defaults to what analyst-sdk 0.8.0 does. No published figure moves, no golden is regenerated, no methodology tag, migration or stored row changes.
+2. **Cash basis (D94 item 6 unchanged).** `simulatePortfolio`, `simulateDrift` and the reference backtest accept `cashBasis`. `discount` (default) converts the quote with `discountToYield`. `yield` compounds the quote as a yearly yield.
+3. **Sharpe basis (D94 item 5 unchanged).** `periodStats` and the reference backtest accept `sharpeBasis`. `excess` (default) reads the post-cost returns minus cash. `returns` reads the simulation's pre-cost daily returns with no cash subtraction, which is the SDK 0.7.0 rule. The basis applies to the whole window and to both sample blocks. No series is added to `SimulationResult`.
+4. **Reference backtest options.** `computeBacktest` passes `lagSessions`, `calendars`, `cashBasis` and `sharpeBasis` to every line of its grid.
+5. **Engine rules.** `RegimeRules` states the dating rule, window counting, weight refit calendar, missing-panel rule, label cut, lookback and adoption date. `REGIME_RULES.v3` and `REGIME_RULES.v4` are built from the per-version tables. The preparation and compute functions accept `rules`, and without it read the preset of `version`. An indicator's `calendar` and `publication` are checked only when the rules in force read them.
+6. **In-sample end (D94 item 3 unchanged).** `runRegime` accepts `inSampleEnd`. `current-version` (default) is the current version's adoption date. `computed-version` is the adoption date of the version computed.
+7. **One-day fit.** `fitPanelWeights` and `weightedMeanOnDay` are exported, and `computeRegime` calls them.
+8. **Report functions (D83 unchanged).** The publication rule, the regime-snapshots shaping, the stored row shape with canonical JSON and the per-indicator rows are pure SDK functions under `src/report/`. The backend imports them and keeps the database reads. The SDK declares the response shapes itself, and a backend test holds them assignable to the contract's in both directions.
+9. **Derived series.** `PublicationRule` gains `calendar-days`. `deriveSeries` computes a declared series from supplementary series (a level, a ratio, a rolling sum over the latest public level, an up-volume share), with plain in-order summation available. No derived series joins the shipped registry.
+10. **Fetcher field.** `fetchSupplementary` and `bun run fetch` accept `field` (`adjclose`, `close`, `volume`) for Yahoo. Each field is its own series.
+11. **Vintage member read.** `collectRunInputs` reads the `analytics_vintage_members` files one at a time and keeps the rows of the run's vintage.
+12. **Stored-only ratio.** A ratio declared `ratioInput: "legs"` whose input carries only the stored ratio is still dropped with weight 0, and `runRegime` now lists it in `droppedRatios`. `storedOnlyRatio: "error"` throws `StoredRatioOnlyError`.
+
+**Why.** A downstream model that moved from 0.7.0 to 0.8.0 reproduced its frozen figures only by copying SDK logic for these ten things. The SDK requirements promise that constants are options with defaults and that building blocks are exported.
+
+**Rejected.** Changing any default: an error by default for a stored-only ratio would break v4 replays of archive runs before 2026-11-17, and an in-sample end that follows the computed version by default would move published backtest blocks. Adding `cashBasis` or `sharpeBasis` to `markowitzBacktest` and the research comparisons. A release tag or version bump in the same change.
+
+## D96 — Regime methodology `v5` is computed and published beside the main line; its figures are fixed by its frozen golden (issue 1753; amends D88 item 2; amends D94 for `v5` only)
+
+**Status:** proposed. Drafted by the agent with issue 1753 (pr 1755); the owner accepts it. `packages/analyst-sdk/src/analyze/regime-versions.ts` (`REGIME_VERSIONS`, `REGIME_LINE`, `REGIME_RULES.v5`, `REGIME_REGISTRY`), `packages/analyst-sdk/src/analyze/indicators.ts` (`V5_INDICATORS`), `packages/analyst-sdk/src/transform/derived.ts` (`V5_DERIVED_SERIES`), `packages/analyst-sdk/src/analyze/kept-regime.ts`, `packages/analyst-sdk/src/analyze/backtest.ts` (`REGIME_BACKTEST_RULES`), `packages/analyst-sdk/src/extract/collected-series.ts`, `backend/src/analytics/index.ts`, `backend/src/analytics/cutover/ledger-current.ts`, `backend/src/analytics/store/output-snapshot-store.ts`, `backend/migrations/0136_regime_beside_snapshots.sql`, `packages/analyst-sdk/tests/regime-v5-golden.test.ts`. Methodology in [`docs/technical/regime-engine.md` §13](technical/regime-engine.md#13-methodology-v5-published-beside-the-main-line-issue-1753-d96).
+
+**Decision.**
+
+1. **The tag.** The regime model the downstream repository calls `experiment-lex-equity` is methodology `v5` on the platform. Tags increase by one with no gaps and nothing is reserved (D88), and `v3` and `v4` are taken.
+2. **Beside the main line.** `v5` does not replace the served methodology. `CURRENT_REGIME_VERSION` stays `v4`. `REGIME_LINE` declares each version `main` (`v3`, `v4`) or `beside` (`v5`). A beside version is a separate, labelled line (D83 item 4): no reader of the main line sees it, and no served figure is restated (D84).
+3. **D88 item 2, amended.** `REGIME_VERSIONS` still lists the tags in order. `CURRENT_REGIME_VERSION` is the last version declared `main`, no longer the last entry: a version computed beside the served one is listed after it. D88 items 1, 3 and 4 are unchanged.
+4. **The rules.** `REGIME_RULES.v5` states every rule of the model, and every per-version table has a `v5` row. The registry's own series are read by period date. Windows are calendar days and count carried days. Ratios are read as stored, from adjusted closes. Panel weights are refit every day. The composite mean is the equal-weight mean of the panels present. The composite is the mid-rank of that mean within every kept mean to date. Each label is cut on the composite or on its panel index. Two fields join `RegimeRules`, each absent on `v3` and `v4`, where they mean what those versions already do: `compositeNormalisation` and `keptHistory`.
+5. **The registry.** `INDICATORS` is not edited. `REGIME_REGISTRY` maps each version to its indicator list. `v5` reads `INDICATORS` with VIX scored in the factor panel, plus four derived indicators: `FISCAL`, `VIX_TERM`, `SKEW` and `UPVOL_SHARE`. Each is a `DerivedSeries` declaration computed from raw inputs as known on the day. The publication lags (43, 120 and 1 calendar days) are stated once, on the declarations.
+6. **The kept record.** Each day is computed on the day and kept (D83). The first `v5` run finds no kept day and computes every day from 2018-01-01 one by one from its own vintage. Every later run reads the kept days, computes only its own day and publishes that one row. A kept day never changes, and a day published late does not change a row already published.
+7. **Storage.** A `v5` run is a normal ledger run stamped `v5`. Its rows are frozen under the artifact kind `regime_beside_snapshots` (migration 0136). The API picks the kind from the run's methodology label, never the client. The run's `regime_snapshots` artifact is the empty list, and no `v5` row is written to the `regime_snapshots` table. The publication rule of D83 is applied to the `v5` line unchanged.
+8. **Collection.** Five raw series are collected by every regime run as collected series (issue 1653): FRED `MTSDS133FMS` and `GDP`, Yahoo `^VIX3M`, `^SKEW` and the `^GSPC` volume. Nothing on the main line scores or reads them. Each has a D56 tolerance row. The platform stores one `yahoo:^VIX` stream (D74): the VIX indicator and the `VIX_TERM` denominator both read it.
+9. **The producer.** Each regime tick runs the main-line run, then one run for each beside version. The runs share one fetch memo. A failed `v5` run never fails or changes the main-line run.
+10. **Serving.** `GET /api/dashboards/regime-snapshots` takes `methodology`. Without it the response is the main line, byte for byte as before. With `v5` it is the `v5` line in the same shape, and the response names the line in `methodology`. An unknown value is a 400. The regime page shows the tag when its URL names a methodology.
+11. **D94, amended for `v5` only.** `REGIME_BACKTEST_RULES` declares the options the reference backtest of each version runs with. `v3` and `v4` declare D94's rules, so their backtests do not change. `v5` declares the rule set its golden was published with: a label trades at the close of its own day, every market trades on every axis day, cash earns the T-bill quote read as a yearly yield, the Sharpe ratio is taken on pre-cost daily returns with no cash subtraction, and the in-sample period ends on 2024-01-31. D94's rejection of same-close execution, its market calendars, its cash basis, its Sharpe rule and its adoption-date split keep applying to the main line unchanged. The `v5` results are labelled hypothetical: no real strategy could have traded at the close that set the label. `REGIME_ADOPTION_DATE.v5` is 2026-11-23, the day the model was chosen. It is not the `v5` split date.
+12. **The acceptance.** The platform implementation reproduces the downstream golden (`outputs.json`, SHA-256 `03b9633d2127b0eb1daad39d8d33a850a8c9f4b32ae10b6a4fbdb0faa2a25fae`, 3,124 days from 2018-04-28 to 2026-11-16) byte for byte from a committed fixture, in the required analyst-sdk job. Where the downstream specification and the golden differ, the port follows the golden.
+
+**Why.** The model existed only in the downstream repository. The platform now computes, stores and serves it, so that copy is no longer the only implementation. D84 says a version change restates the served history once, and the request forbids any restatement of the deployed figures, so `v5` cannot be the served line. Its published figures are fixed by a frozen golden, so its backtest keeps the rules those figures were published with.
+
+**Rejected.** Making `v5` the served line: that restates the served history (D84) and is a later, explicit decision. A second backtest constant used only by the golden check: the published `v5` backtest and the golden's backtest block are one computation. Replaying the 57 archived production runs under `v5` in production: the platform's `v5` history starts at its first `v5` run (D83 item 5), and the golden is reproduced in CI. Editing `INDICATORS`, or any change to a `v3` or `v4` figure, default, golden, stored row or frozen report.

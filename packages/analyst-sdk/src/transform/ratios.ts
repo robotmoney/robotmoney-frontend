@@ -56,9 +56,16 @@ function selectedLeg(input: RawIndicatorHistory, ind: Indicator, symbol: string)
  * ratioInput and ratioClose (`indicators`, default the registry). Legs are
  * read from `input`, since resolution renames a leg another consumer also
  * reads (backtest:ETH-USD is the backtest's ETH). Returns `resolved` itself
- * when no ratio changes.
+ * when no ratio changes. `onStoredOnly` (issue 1751) is called with the id of
+ * each ratio declared "legs" that is dropped because the input carries its
+ * stored ratio and neither selected leg.
  */
-export function ratiosFromLegs(input: RawIndicatorHistory, resolved: RawIndicatorHistory, indicators: readonly Indicator[] = INDICATORS): RawIndicatorHistory {
+export function ratiosFromLegs(
+  input: RawIndicatorHistory,
+  resolved: RawIndicatorHistory,
+  indicators: readonly Indicator[] = INDICATORS,
+  onStoredOnly?: (ratioId: string) => void,
+): RawIndicatorHistory {
   let out = resolved;
   const write = (id: string, pts: Point[] | undefined) => {
     if (out === resolved) out = { ...resolved };
@@ -81,7 +88,10 @@ export function ratiosFromLegs(input: RawIndicatorHistory, resolved: RawIndicato
       const other = (ind.series as string[]).flatMap((sym) => [ratioLegSourceId(ind.source, sym, ind.ratioClose === "raw" ? "adjclose" : "close")]).find((n) => Object.hasOwn(input, n));
       if (other !== undefined) throw new MissingRatioLegError(ind.id, num.id, other);
       // "legs" ignores a stored ratio: with no selected leg the ratio is missing.
-      if (!stored && Object.hasOwn(resolved, ind.id)) write(ind.id, undefined);
+      if (!stored && Object.hasOwn(resolved, ind.id)) {
+        onStoredOnly?.(ind.id);
+        write(ind.id, undefined);
+      }
     }
   }
   return out;

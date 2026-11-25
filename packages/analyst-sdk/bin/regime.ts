@@ -1,7 +1,9 @@
 // `bun run regime <input.csv|input.json> [--full] [--start D] [--asof D] [--factor] [--replay] [--provenance] [--methodology V] [--panels P,P]`
 // Prints the regime report as JSON on stdout. --methodology picks the regime
 // methodology version (default the current one): a published run replays under
-// the version it was stamped with, e.g. --methodology v3 (issue 1652). Reads one local file (and, with
+// the version it was stamped with, e.g. --methodology v3 (issue 1652). --methodology v5 (issue 1753) computes
+// the methodology published beside the main line: every day from its own day's inputs, walked forward from
+// this input (it reads the five raw series of its derived indicators when the input carries them). Reads one local file (and, with
 // --provenance, its manifest sidecar); no network. A relative path resolves
 // from the folder the command was run in, also under `bun run`.
 //
@@ -18,7 +20,7 @@ import type { Panel } from "../src/analyze/indicators.ts";
 import { parseArgs, resolveFromCaller, UsageError } from "./args.ts";
 
 const USAGE =
-  "usage: bun run regime <input.csv|input.json> [--full] [--start YYYY-MM-DD] [--asof YYYY-MM-DD] [--factor] [--replay] [--provenance] [--methodology v3|v4] [--panels macro,onchain,...]";
+  "usage: bun run regime <input.csv|input.json> [--full] [--start YYYY-MM-DD] [--asof YYYY-MM-DD] [--factor] [--replay] [--provenance] [--methodology v3|v4|v5] [--panels macro,onchain,...]";
 
 function fail(e: unknown, code: number): never {
   console.error(`${(e as Error).name}: ${(e as Error).message}`);

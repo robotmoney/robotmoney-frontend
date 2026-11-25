@@ -11,11 +11,30 @@
 // bytes" a real proof rather than a tautology. A report's bytes are never
 // re-serialized: they are exactly what the caller submitted, so a byte
 // comparison against the original fixture is meaningful.
-import { canonicalStringify, sha256Hex } from "./run-ledger.ts";
+import { sha256Hex } from "./run-ledger.ts";
+import { canonicalArtifactBytes, canonicalStringify } from "../../../packages/analyst-sdk/src/report/canonical.ts";
 import type { RegimeSnapshotRow } from "./report/regime-projection.ts";
 import type { ResearchPayload } from "./analyze/research.ts";
 
-export type OutputArtifactKind = "regime_snapshots" | "research_signals" | "warnings" | "logs" | "exceptions";
+// `regime_beside_snapshots` (issue 1753, migration 0136): the regime rows of a
+// run whose methodology is published beside the main line (REGIME_LINE, v5).
+// The API picks the kind from the run's methodology label, never the client:
+// such a run's `regime_snapshots` artifact is the empty list, and its rows
+// are not written to the regime_snapshots table.
+export type OutputArtifactKind = "regime_snapshots" | "regime_beside_snapshots" | "research_signals" | "warnings" | "logs" | "exceptions";
+
+/** The artifact kind the regime rows of a methodology line are frozen under. */
+export const REGIME_ARTIFACT_KIND = { main: "regime_snapshots", beside: "regime_beside_snapshots" } as const satisfies Record<string, OutputArtifactKind>;
+
+// Issue 1753: the published line of a methodology that keeps its history
+// (REGIME_KEPT_HISTORY, v5), before a run's as-of day: each kept day's date and
+// three panel indices, and the frozen artifacts they were read from, in
+// publication order (cutover/ledger-current.ts ledgerKeptRegimeDays).
+export interface KeptRegimeDays {
+  days: { date: string; macroIndex: number | null; onchainIndex: number | null; factorIndex: number | null }[];
+  /** The ids of the analytics_output_snapshots artifacts the days came from: the run's report names them. */
+  artifactIds: string[];
+}
 
 export interface ResearchSignalArtifact {
   key: string;
@@ -42,10 +61,8 @@ export interface ExceptionArtifact {
 // The canonical bytes for one artifact kind. Deterministic key order
 // (canonicalStringify, shared with the #977 run ledger) so the same logical
 // content always produces the same bytes regardless of how the caller built
-// the array in memory.
-export function canonicalArtifactBytes(rows: readonly unknown[]): Uint8Array {
-  return new TextEncoder().encode(canonicalStringify(rows));
-}
+// the array in memory. The function lives in the SDK (issue 1751).
+export { canonicalArtifactBytes };
 
 export interface OutputArtifact {
   kind: OutputArtifactKind;

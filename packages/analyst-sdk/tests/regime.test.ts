@@ -361,7 +361,7 @@ describe("v4: labels are cut on the composite and the panel indices (issue 1652)
   });
 
   test("an unknown version is rejected", () => {
-    expect(() => runRegime(toHistory(parseRawHistory(csvText)), { version: "v5" as never })).toThrow(RangeError);
+    expect(() => runRegime(toHistory(parseRawHistory(csvText)), { version: "v99" as never })).toThrow(RangeError);
   });
 });
 
@@ -429,9 +429,9 @@ describe("lookback windows are methodology parameters (issue 1659)", async () =>
     }
   });
 
-  test("the version stays v4 and the versions stay [v3, v4]", () => {
+  test("the version stays v4 and the versions are [v3, v4, v5], v5 computed beside the served line (issue 1753)", () => {
     expect(CURRENT_REGIME_VERSION).toBe("v4");
-    expect([...REGIME_VERSIONS]).toEqual(["v3", "v4"]);
+    expect([...REGIME_VERSIONS]).toEqual(["v3", "v4", "v5"]);
   });
 
   test("no lookback argument equals the version's declared lookback, field by field", () => {

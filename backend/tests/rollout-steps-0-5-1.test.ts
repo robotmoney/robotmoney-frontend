@@ -252,6 +252,8 @@ describe("v0.5.1 applies 0061 and 0063; 0062 was recorded before it", () => {
     "0132_flow_index.sql",
     "0133_buybacks_refresh_disabled.sql",
     "0134_read_path_indexes.sql",
+    "0135_drop_vintage_members_vintage_idx.sql",
+    "0136_regime_beside_snapshots.sql",
   ];
 
   test("the job ledger 0088 created is dropped by a later file, never by deleting 0088 (criterion 105)", () => {

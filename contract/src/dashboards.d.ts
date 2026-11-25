@@ -328,11 +328,22 @@ export type RegimeHistoryPoint = Omit<RegimeSnapshot, "backtest" | "correlations
 // `ledger` (the immutable run ledger, projections.ts fetchRegimeSnapshots), so
 // an auditor reading the public analytics inputs knows which one they are on.
 export type RegimeReadSource = "regime_snapshots" | "ledger";
+//
+// `?methodology=<version>` (issue 1753) serves the line of one regime
+// methodology version: `v5` is computed and published beside the main line,
+// `v3` and `v4` are the main line's own versions. The response then names the
+// line in `methodology`, is always read from the ledger, and holds only rows
+// that have a label; a version that has published nothing answers `latest`
+// null and an empty `history`. Without the parameter the response is the main
+// line and carries no `methodology` field. A value that names no version is a
+// 400 `{ error, allowed }`.
+export type RegimeMethodology = "v3" | "v4" | "v5";
 export interface RegimeSnapshotsResponse {
   latest: RegimeSnapshot | null;
   history: RegimeHistoryPoint[];
   staleness: Record<string, unknown>;
   source: RegimeReadSource;
+  methodology?: RegimeMethodology;
 }
 
 // One dated point in a research-signal series (value nullable for pre-history/gaps).

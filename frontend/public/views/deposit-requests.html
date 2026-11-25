@@ -32,10 +32,6 @@
           </div>
         </div>
       </header>
-      <footer class="dp__foot dpg__foot">
-        <span>Robot Money is software that builds transactions your wallet signs. Nothing here is investment advice.</span>
-        <nav aria-label="Legal"><a href="/terms">Terms</a><a href="/privacy">Privacy</a><a href="/disclaimer">Disclaimer</a><a href="/smart-contract-risks">Smart contract risks</a></nav>
-      </footer>
     </div>
   </template>
 
@@ -48,7 +44,12 @@
         <p class="dp__eyebrow"><a class="dp__lbl dp__lbl--link" href="/deposit">Deposit</a><template x-if="sample()"><span class="dp__tag">Sample data</span></template></p>
         <h1 class="dp__title dp__title--page">Your position</h1>
       </div>
-      <template x-if="(connected() && onBase()) || restoring()"><a class="btn-primary dp__btn dp__btn--auto" href="/deposit">Deposit more</a></template>
+      <template x-if="(connected() && onBase()) || restoring()">
+        <div class="dp__btnrow">
+          <template x-if="acct?.shares > 0"><a class="dp__btn2" href="/deposit?action=redeem">Redeem</a></template>
+          <a class="btn-primary dp__btn dp__btn--auto" href="/deposit">Deposit more</a>
+        </div>
+      </template>
     </div>
 
     <p class="dp__err" x-show="loadError" x-text="loadError" x-cloak></p>
@@ -75,7 +76,7 @@
     <template x-if="(connected() && onBase()) || restoring()">
       <div class="dp__load" :class="dataReady() ? 'is-ready' : ''">
       <div class="dp__skel dp__skel--page" aria-hidden="true"><span class="dp__skelfacts"><i></i><i></i><i></i></span><span class="dp__skelrows"><i></i><i></i><i></i><i></i></span></div>
-      <div class="dp__stack dp__stack--loose dp__live">
+      <div class="dp__stack dp__stack--loose dp__stack--page dp__live">
         <div class="dp__facts">
           <template x-for="f in facts()" :key="f.key"><div class="dp__fact"><span class="dp__lbl"><span x-text="f.label"></span><template x-if="f.tip"><span class="rm-tip"><button class="rm-tip__btn" type="button" :aria-label="`About ${f.label}`">i</button><span class="rm-tip__bub" role="tooltip" x-text="f.tip"></span></span></template></span><b x-text="f.value"></b></div></template>
           <template x-if="!facts().length"><div class="dp__fact"><span class="dp__lbl">Shares</span><b>—</b></div></template>
@@ -128,7 +129,8 @@
             <h2 class="dp__h2 dp__h2--flush" id="rq-h">Your requests</h2>
             <p class="dp__countdown" :title="nextBatchTitle()"><span class="dp__lbl">Next batch in</span> <b x-text="nextBatchClock()"></b></p>
           </div>
-          <div class="dp__tablewrap">
+          <!-- One framed object, so it reads apart from the figures above and the stages below (David, 25 Nov). -->
+          <div class="dp__tablewrap dp__reqbox">
             <table class="dp__tbl dp__reqs">
               <thead><tr><th scope="col">Request</th><th scope="col" class="n">Amount</th><th scope="col" class="n">Filled</th><th scope="col">Stage<span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="About stages">i</button><span class="rm-tip__bub" role="tooltip" x-text="stagesTip()"></span></span></th><th scope="col" class="n">Next</th><th scope="col"><span class="dp__sr">Actions</span></th></tr></thead>
               <tbody>
@@ -174,17 +176,17 @@
           </template>
         </section>
 
-        <!-- What each stage means, in the order a deposit moves through them, read as a stepper: a check on the steps this wallet's requests have passed, the stage's own mark where they stand now. -->
+        <!-- The stages as one line, a stepper: a check on the steps this wallet's requests have passed, the stage's own mark where they stand now. What each means is on its name (David, 25 Nov: the four paragraphs ran into the table). -->
         <section class="dp__stack" aria-labelledby="stages-h">
           <h2 class="dp__h2 dp__h2--flush" id="stages-h">Stages</h2>
           <ol class="dp__life">
-            <template x-for="s in lifecycle()" :key="s.stage">
+            <template x-for="(s, i) in lifecycle()" :key="s.stage">
               <li :class="`is-${s.state}`" :aria-current="s.state === 'here' ? 'step' : null">
                 <span class="dp__stage" :class="s.state === 'here' ? `is-${s.tone}` : ''">
                   <svg class="dp__tick" x-show="s.state === 'done'" width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M1.5 5.25 4 7.75 8.75 2.5" fill="none" stroke="currentColor" stroke-width="1.5"></path></svg>
-                  <i x-show="s.state !== 'done'" aria-hidden="true"></i><span x-text="s.stage"></span><span class="rm-visually-hidden" x-text="s.state === 'done' ? ', done' : ''"></span>
+                  <i x-show="s.state !== 'done'" aria-hidden="true"></i>
+                  <span class="rm-tip rm-tip--label" :class="i === lifecycle().length - 1 ? 'rm-tip--end' : ''"><button type="button" class="rm-tip__btn rm-tip__btn--text" x-text="s.stage"></button><span class="rm-tip__bub" role="tooltip" x-text="s.help"></span></span><span class="rm-visually-hidden" x-text="s.state === 'done' ? ', done' : ''"></span>
                 </span>
-                <p x-text="s.help"></p>
                 <span class="dp__life-n" x-show="s.count" x-text="s.count === 1 ? '1 of yours' : `${s.count} of yours`"></span>
               </li>
             </template>
@@ -194,10 +196,6 @@
       </div>
     </template>
 
-    <footer class="dp__foot">
-      <span>Robot Money is software that builds transactions your wallet signs. Nothing here is investment advice.</span>
-      <nav aria-label="Legal"><a href="/terms">Terms</a><a href="/privacy">Privacy</a><a href="/disclaimer">Disclaimer</a><a href="/smart-contract-risks">Smart contract risks</a></nav>
-    </footer>
   </div>
 
   <template x-if="simulated()">

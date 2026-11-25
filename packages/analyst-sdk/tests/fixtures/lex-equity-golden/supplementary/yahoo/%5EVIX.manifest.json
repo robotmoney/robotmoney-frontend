@@ -1,0 +1,11 @@
+{
+  "format": 1,
+  "series": "yahoo:^VIX",
+  "field": "adjusted close (the close where Yahoo gives no adjusted close)",
+  "row_count": 3746,
+  "first_date": "2012-01-03",
+  "last_date": "2026-11-20",
+  "sha256": "7d235a9c6ef1dcf7a5b4f890b9bb5753fd830f0054e9ebf292abe914173c014c",
+  "fetched_at": "2026-11-21T17:20:07.895Z",
+  "fetched_by": "analyst-sdk 0.7.0 fetch, https://query2.finance.yahoo.com/v8/finance/chart/%5EVIX?period1=1325376000&period2=1795305600&interval=1d&events=history"
+}

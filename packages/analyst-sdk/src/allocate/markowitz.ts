@@ -593,7 +593,9 @@ export function markowitzBacktest(options: MarkowitzBacktestOptions): MarkowitzB
   if (scheduleOptions.expands !== undefined) throw new RangeError(`${where}: expands is for markowitzSchedule; a backtest simulates one schedule, so give expand`);
   if (prices === null || typeof prices !== "object") throw new RangeError(`${where}: prices must be a record of holding id to points`);
   if (costBps !== undefined) nonNegative(where, "costBps", costBps);
-  const cost = { ...(costBps === undefined ? {} : { costBps }), ...(fill === undefined ? {} : { fill }) };
+  // The schedule's weights are dated by the day they take effect (decisionDates
+  // lags the as-of by a day), so the simulators add no second lag (issue 1734).
+  const cost = { ...(costBps === undefined ? {} : { costBps }), ...(fill === undefined ? {} : { fill }), lagSessions: 0 };
   let sim: Simulator;
   if (simulate === undefined) {
     sim = (a, s, p, c) => simulatePortfolio(a, s, p, c, cost);
@@ -613,6 +615,7 @@ export function markowitzBacktest(options: MarkowitzBacktestOptions): MarkowitzB
   const simulation = sim(scheduleOptions.dateAxis, schedule, prices, scheduleOptions.cashRate ?? []);
   const stats = periodStats(simulation.values, simulation.startDate, simulation.endDate, {
     returns: simulation.returns,
+    excess: simulation.excess,
     trades: simulation.trades,
     ...(splitDate === undefined ? {} : { splitDate }),
   });

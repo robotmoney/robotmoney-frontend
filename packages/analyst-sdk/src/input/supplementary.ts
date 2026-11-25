@@ -10,6 +10,8 @@
 // requirements section 4.1) with one source id on every row and the dates
 // strictly ascending. Its sidecar `<name>.manifest.json` says what the values are
 // (`field`), who fetched them, when, and the row count and SHA-256 of the file.
+// A Yahoo field other than the adjusted close is its own series (issue 1751):
+// `yahoo:^GSPC.volume` is `yahoo/%5EGSPC.volume.csv`, the naming of the ratio legs.
 
 import type { Point } from "../types.ts";
 import { InputRowError, parseSourceCsv, SOURCE_CSV_HEADER } from "./load.ts";

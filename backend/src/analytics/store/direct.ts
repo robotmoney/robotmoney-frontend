@@ -12,7 +12,8 @@ import { applyRawFloorSeed } from "./floor-seed.ts";
 import { loadRecentResearchSignalDates } from "./research-store.ts";
 import { detectGaps } from "../../ops/gap-detector.ts";
 import { getSeriesDef } from "../../ops/series-registry.ts";
-import { beginRun, appendRunEvent, freezeVintage, loadCommittedInputs, REGIME_STORAGE_KEYS } from "./run-ledger-store.ts";
+import { beginRun, appendRunEvent, freezeVintage, loadCommittedInputs, regimeStorageKeysFor } from "./run-ledger-store.ts";
+import { ledgerKeptRegimeDays } from "../cutover/ledger-current.ts";
 import { submitTerminalRunPackage } from "./output-snapshot-store.ts";
 
 export const directAnalyticsPersistence: AnalyticsPersistence = {
@@ -21,7 +22,9 @@ export const directAnalyticsPersistence: AnalyticsPersistence = {
   freezeVintage,
   submitTerminalRunPackage,
   saveSourceAcquisition,
-  loadCommittedInputs: (marketTimeCutoff, knownBy) => loadCommittedInputs(REGIME_STORAGE_KEYS, marketTimeCutoff, undefined, knownBy),
+  // Issue 1753: the storage keys of the methodology named (the main-line keys when none is).
+  loadCommittedInputs: (marketTimeCutoff, knownBy, methodology) => loadCommittedInputs(regimeStorageKeysFor(methodology), marketTimeCutoff, undefined, knownBy),
+  loadKeptRegimeDays: (methodology, before) => ledgerKeptRegimeDays(methodology, before),
   loadRawHistory: () => loadRawIndicatorHistory(),
   saveRawHistory: (byIndicator, source) => saveRawIndicatorHistory(byIndicator, undefined, source),
   // Gap-fill inside one transaction so a mid-seed failure never leaves a

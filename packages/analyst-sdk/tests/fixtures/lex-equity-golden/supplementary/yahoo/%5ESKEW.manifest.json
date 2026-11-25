@@ -1,0 +1,11 @@
+{
+  "format": 1,
+  "series": "yahoo:^SKEW",
+  "field": "adjusted close (the close where Yahoo gives no adjusted close)",
+  "row_count": 3682,
+  "first_date": "2012-01-03",
+  "last_date": "2026-11-20",
+  "sha256": "9658342a3363ff1d661b600a614cf1effadc8b6adf98c9ba5224be8b4428848c",
+  "fetched_at": "2026-11-21T17:20:08.012Z",
+  "fetched_by": "analyst-sdk 0.7.0 fetch, https://query2.finance.yahoo.com/v8/finance/chart/%5ESKEW?period1=1325376000&period2=1795305600&interval=1d&events=history"
+}

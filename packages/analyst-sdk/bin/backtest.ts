@@ -116,7 +116,7 @@ try {
   const fill: SimulatorFill = { cash: BACKTEST_FILL };
   for (const holding of Object.keys(prices)) fill[holding] = BACKTEST_FILL;
   const sim = simulatePortfolio(axis, axis.map(() => weights), prices, cashRate, { ...(costBps === undefined ? {} : { costBps }), fill });
-  const { _daily, ...stats } = periodStats(sim.values, sim.startDate, sim.endDate, { returns: sim.returns, trades: sim.trades });
+  const { _daily, ...stats } = periodStats(sim.values, sim.startDate, sim.endDate, { returns: sim.returns, excess: sim.excess, trades: sim.trades });
   const out = {
     portfolio,
     universe: { exported: universe.exported, findings: gate.findings.length },

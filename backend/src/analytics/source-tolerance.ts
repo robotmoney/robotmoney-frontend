@@ -84,6 +84,12 @@ export const SOURCE_TOLERANCES: Readonly<Record<string, SourceTolerance>> = {
   "raw_indicator_history:XLP_XLY": YAHOO_RATIO, // yahoo XLP / XLY
   "raw_indicator_history:SHILLER_CAPE": EXACT, // shiller_cape / multpl
   "raw_indicator_history:BAA10Y": EXACT, // fred, a collected series (issue 1653)
+  // The five collected series methodology v5's derived indicators read (issue 1753).
+  "raw_indicator_history:FED_SURPLUS_MONTHLY": EXACT, // fred MTSDS133FMS
+  "raw_indicator_history:US_GDP": EXACT, // fred GDP
+  "raw_indicator_history:CBOE_VIX3M": YAHOO_FLOAT32, // yahoo ^VIX3M
+  "raw_indicator_history:CBOE_SKEW": YAHOO_FLOAT32, // yahoo ^SKEW
+  "raw_indicator_history:SPX_VOLUME": EXACT, // yahoo ^GSPC volume: an integer share count, served exactly
 
   // access/data-source.ts — research inputs.
   "raw_indicator_history:MNA": EXACT, // edgar filing counts

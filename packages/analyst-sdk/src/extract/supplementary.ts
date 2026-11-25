@@ -2,14 +2,16 @@
 // The platform cannot carry the full history of every asset an analyst wants, so
 // the SDK ships source clients for the common providers instead of making each
 // analyst write one. `fetchSupplementary("yahoo:GC=F", { start, end })` returns
-// the observations in the window and says what they are (`field`). It writes
+// the observations in the window and says what they are (`field`). A Yahoo
+// series is the adjusted close unless `{ field }` asks for the raw close or the
+// volume (issue 1751), each stored as its own series. It writes
 // nothing: `bun run fetch` (bin/fetch.ts) stores the result in the supplementary
 // directory. Like every source client it reaches the network only through
 // ./http.ts.
 import type { Point } from "../types.ts";
 import { splitSourceId, SupplementaryError } from "../input/supplementary.ts";
 import { fetchFred } from "./fred.ts";
-import { fetchYahoo, yfUrl } from "./yahoo.ts";
+import { fetchYahoo, fetchYahooChart, parseYahooClose, parseYahooVolume, yfUrl } from "./yahoo.ts";
 import { NoObservationsError } from "./model-portfolio.ts";
 
 export interface SupplementaryWindow {
@@ -33,20 +35,43 @@ const addDays = (d: string, n: number) => new Date(Date.parse(`${d}T00:00:00Z`) 
 /** The providers `fetchSupplementary` has a source client for. */
 export const SUPPLEMENTARY_PROVIDERS = ["yahoo", "fred"] as const;
 
+/** The fields of a Yahoo series (issue 1751). `adjclose` is the default. */
+export const SUPPLEMENTARY_FIELDS = ["adjclose", "close", "volume"] as const;
+export type SupplementaryField = (typeof SUPPLEMENTARY_FIELDS)[number];
+
+export interface FetchSupplementaryOptions {
+  /** Yahoo only: which value to keep. Default `adjclose`. */
+  field?: SupplementaryField;
+}
+
+/** The id a fetched series is stored under: the source id for the default field, else `<id>.<field>`
+ *  (`yahoo:^GSPC.volume`), the naming of the ratio legs, so each field is its own series and file. Throws
+ *  RangeError for an unknown `field` and SupplementaryError for a field on a provider other than Yahoo. */
+export function supplementarySeriesId(id: string, field?: SupplementaryField): string {
+  const { provider } = splitSourceId(id);
+  if (field === undefined) return id;
+  if (!(SUPPLEMENTARY_FIELDS as readonly string[]).includes(field)) {
+    throw new RangeError(`field must be one of ${SUPPLEMENTARY_FIELDS.join(", ")}, got ${JSON.stringify(field)}`);
+  }
+  if (provider !== "yahoo") throw new SupplementaryError(`${id}: field applies to yahoo series only`);
+  return field === "adjclose" ? id : `${id}.${field}`;
+}
+
 /** Fetch one supplementary series over `window`. Throws SupplementaryError for a provider with no client and
  *  NoObservationsError when the window holds no observation. */
-export async function fetchSupplementary(id: string, window: SupplementaryWindow): Promise<FetchedSeries> {
+export async function fetchSupplementary(id: string, window: SupplementaryWindow, options: FetchSupplementaryOptions = {}): Promise<FetchedSeries> {
   const { provider, symbol } = splitSourceId(id);
+  const field = options.field ?? "adjclose";
+  supplementarySeriesId(id, options.field); // refuses an unknown field, and a field on another provider
   if (!(window.start <= window.end)) throw new SupplementaryError(`${id}: start ${window.start} is after end ${window.end}`);
   let fetched: FetchedSeries;
   if (provider === "yahoo") {
     // period2 is exclusive at the second: ask through the day after `end`
     const [p1, p2] = [unix(window.start), unix(addDays(window.end, 1))];
-    fetched = {
-      points: await fetchYahoo(symbol, p1, p2),
-      field: "adjusted close (the close where Yahoo gives no adjusted close)",
-      endpoint: yfUrl(symbol, p1, p2),
-    };
+    fetched =
+      field === "adjclose"
+        ? { points: await fetchYahoo(symbol, p1, p2), field: "adjusted close (the close where Yahoo gives no adjusted close)", endpoint: yfUrl(symbol, p1, p2) }
+        : { points: (field === "close" ? parseYahooClose : parseYahooVolume)(await fetchYahooChart(symbol, p1, p2)), field, endpoint: yfUrl(symbol, p1, p2) };
   } else if (provider === "fred") {
     fetched = { points: await fetchFred(symbol, 15000, window.start), field: "value", endpoint: `FRED fredgraph.csv?id=${symbol}` };
   } else {
