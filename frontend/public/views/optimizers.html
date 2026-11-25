@@ -80,8 +80,43 @@
     .op-scale__head > div { grid-column: 1 / -1; }
     .op-scale__name { grid-column: 1 / -1; display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 0.5rem; }
   }
+
+  /* Loading: the page keeps its own shape (frames, names, card text, the nine
+     table rows) and each figure's place breathes as the site's skeletons do
+     (views.css .rv__skel: flat surface, sv-skel opacity, no gradient), so
+     nothing moves and no number shows before it is real. */
+  .op-wait .op-scale__n, .op-wait .rr-legend b, .op-wait .op-ends b, .op-wait .op-legend b, .op-wait .rv__bt-table td,
+  .op-wait .rr-sec__aside, .op-wait .op-fig .rv__fig-d {
+    color: transparent; background: var(--color-surface-light); animation: sv-skel 1.8s ease-in-out infinite;
+  }
+  .op-wait .op-scale__n { justify-self: stretch; }
+  .op-wait .rr-legend b, .op-wait .op-ends b, .op-wait .op-legend b { display: inline-block; min-width: 2.5rem; }
+  .op-wait .rr-sec__aside { display: inline-block; min-width: 10rem; min-height: 1lh; }
+  .op-wait .op-bar { animation: sv-skel 1.8s ease-in-out infinite; }
+  .op-wait .rv__bt-table td { background-clip: content-box; }
+  .op-donut__skel { stroke: var(--color-surface-light); animation: sv-skel 1.8s ease-in-out infinite; }
+  /* The dial's footprint: its arc scales with the column, its labels do not. */
+  .op-dial-skel { width: 100%; padding-top: calc(52.8% + 46px); background: var(--color-surface); animation: sv-skel 1.8s ease-in-out infinite; }
+  /* The chart's summary and, under 760px, its legend list: held at the lines
+     they take once the figures are in, measured at each width (2026-11-25, on
+     the data file's text; a later file may differ by a line). */
+  .op-wait .op-fig .rv__fig-d { min-height: 1lh; }
+  @media (max-width: 1100px) { .op-wait .op-fig .rv__fig-d { min-height: 2lh; } }
+  @media (max-width: 640px) { .op-wait .op-fig .rv__fig-d { min-height: 3lh; } }
+  @media (max-width: 520px) { .op-wait .op-fig .rv__fig-d { min-height: 2lh; } }
+  @media (max-width: 500px) { .op-wait .op-fig .rv__fig-d { min-height: 3lh; } }
+  @media (max-width: 340px) { .op-wait .op-fig .rv__fig-d { min-height: 4lh; } }
+  @media (max-width: 760px) { .op-wait .op-legend { min-height: 49px; } }
+  @media (max-width: 640px) { .op-wait .op-legend { min-height: 77px; } }
+  @media (max-width: 500px) { .op-wait .op-legend { min-height: 106px; } }
+  @media (max-width: 440px) { .op-wait .op-legend { min-height: 134px; } }
+  @media (max-width: 414px) { .op-wait .op-legend { min-height: 162px; } }
+  @media (prefers-reduced-motion: reduce) {
+    .op-wait .op-scale__n, .op-wait .rr-legend b, .op-wait .op-ends b, .op-wait .op-legend b, .op-wait .rv__bt-table td,
+    .op-wait .rr-sec__aside, .op-wait .op-fig .rv__fig-d, .op-wait .op-bar, .op-donut__skel, .op-dial-skel { animation: none; }
+  }
 </style>
-<section class="rv rv--dash" x-data="optimizersView()" x-init="load()" data-anchors>
+<section class="rv rv--dash" x-data="optimizersView()" x-init="load()" data-anchors :class="{ 'op-wait': loading }" :aria-busy="loading ? 'true' : 'false'">
   <div class="rv__hero">
     <div class="rv__hero-art" x-data="orbitsHero()" aria-hidden="true"></div>
     <div class="rv__hero-inner">
@@ -91,6 +126,7 @@
   </div>
 
   <div class="rv__body rr">
+    <p class="rm-visually-hidden" role="status" x-show="loading">Loading the optimizers</p>
     <p class="rv__error" x-show="error" x-text="error" x-cloak></p>
 
     <section class="rr-sec" aria-labelledby="the-regime-sets-the-risk-on-share">
@@ -101,6 +137,7 @@
       <div class="op-regime">
         <div class="op-now">
           <h3 class="rr-subhead__h">Today's regime</h3>
+          <div class="op-dial-skel" x-show="loading" aria-hidden="true"></div>
           <template x-if="dialModel()">
             <div class="rm-dial rm-dial--sm" x-data="rmRegimeDial(() => dialModel())"
                  @pointermove="move($event)" @mouseleave="point = null" @click.outside="point = null; pinned = null" @keydown.escape="point = null; pinned = null">
@@ -156,7 +193,7 @@
     <section class="rr-sec" aria-labelledby="an-optimizer-sets-the-mix-of-risk-on-assets">
       <div class="rr-sec__head">
         <h2 class="rr-sec__h" id="an-optimizer-sets-the-mix-of-risk-on-assets">An optimizer sets the mix of risk-on assets</h2>
-        <span class="rr-sec__aside" x-show="data" x-text="data ? `Prices to ${dateLong(data.asof)}` : ''"></span>
+        <span class="rr-sec__aside" x-show="data || loading" x-text="data ? `Prices to ${dateLong(data.asof)}` : ''"></span>
       </div>
       <div class="rr-prose rr-sub">
         <p>Each optimizer sets weights for crypto, US equities and commodities from past daily returns. Weights are reset on the first trading day of each month.</p>
@@ -204,8 +241,8 @@
                     </template>
                   </ul>
                 </div>
-                <div x-show="regime" x-cloak>
-                  <h4 class="rr-subhead__h rr-subhead__h--minor rr-sub" x-text="`Whole portfolio, ${todayLabel()}`"></h4>
+                <div x-show="regime || loading" x-cloak>
+                  <h4 class="rr-subhead__h rr-subhead__h--minor rr-sub" x-text="regime ? `Whole portfolio, ${todayLabel()}` : 'Whole portfolio'"></h4>
                   <figure class="rr-ring op-ring" @pointerover="overRing(k, $event)" @pointerleave="setFocus(k, null)">
                     <span class="sv__wdonut-host" role="img" :aria-label="`Whole portfolio, ${todayLabel()} regime: ${wholeRows(k).map((r) => `${r.label} ${pct(r.pct)}`).join(', ')}`" x-html="wholeSvg(k)" x-effect="muteArcs($el, k)"></span>
                     <figcaption x-show="ringRow(wholeRows(k), k)"><b x-text="pct(ringRow(wholeRows(k), k)?.pct)"></b><span x-text="ringRow(wholeRows(k), k)?.label"></span></figcaption>
@@ -226,9 +263,9 @@
     <section class="rr-sec" aria-labelledby="backtest-since-2018">
       <div class="rr-sec__head">
         <h2 class="rr-sec__h" id="backtest-since-2018">Backtest since 2018</h2>
-        <span class="rr-sec__aside" x-show="data" x-text="data ? btPeriod() : ''"></span>
+        <span class="rr-sec__aside" x-show="data || loading" x-text="data ? btPeriod() : ''"></span>
       </div>
-      <template x-if="data">
+      <template x-if="data || loading">
         <figure class="rr-area rv__fig op-fig">
           <figcaption class="rr-area__head">
             <div class="rv__fig-t">
@@ -306,8 +343,8 @@
       </template>
       <!-- Outside the template, so a reader that does not run the script still
            gets the caveat with the page. -->
-      <p class="rr-note" x-show="data">Hypothetical backtest, not live results. $1 is invested on the first day and valued weekly. The regime label sets the risk-on share at 5%, 50% or 95%. Weights are reset on the first trading day of each month, and each trade costs 10 basis points (0.10%). Risk-off assets earn the 3-month T-bill rate. Markowitz starts in June 2019 because it needs a year of returns first. Cash, the S&P 500 index and ETH are held without trading.</p>
-      <div class="rr-tablewrap rr-tablewrap--tips" x-show="data">
+      <p class="rr-note" x-show="data || loading">Hypothetical backtest, not live results. $1 is invested on the first day and valued weekly. The regime label sets the risk-on share at 5%, 50% or 95%. Weights are reset on the first trading day of each month, and each trade costs 10 basis points (0.10%). Risk-off assets earn the 3-month T-bill rate. Markowitz starts in June 2019 because it needs a year of returns first. Cash, the S&P 500 index and ETH are held without trading.</p>
+      <div class="rr-tablewrap rr-tablewrap--tips" x-show="data || loading">
         <table class="rr-table rv__bt-table">
           <thead>
             <tr>
