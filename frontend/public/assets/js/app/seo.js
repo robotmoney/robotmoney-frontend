@@ -341,9 +341,9 @@ const META = {
     modified: RESEARCH_REVISED,
   },
   "/optimizers": {
-    title: "Portfolio Optimizers: Splitting Risk-On Money | Robot Money",
+    title: "Portfolio Optimizers: How Risk-On Money Splits | Robot Money",
     name: "Portfolio Optimizers",
-    description: "Six portfolio optimizers that split risk-on money across crypto, US equities and gold, each with today's mix and a hypothetical backtest since 2018.",
+    description: "Six portfolio optimizers that split risk-on assets across crypto, US equities and gold, with today's mix from each and a hypothetical backtest since 2018.",
     type: "TechArticle",
     modified: "2026-11-24",
     // Every figure on the page, for readers that do not run the page's script.
