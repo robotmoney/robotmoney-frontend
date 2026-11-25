@@ -108,3 +108,13 @@ export async function fetchYahooClose(
 ): Promise<Point[]> {
   return parseYahooClose(await fetchYahooChart(symbol, startUnix, endUnix, timeoutMs));
 }
+
+/** The day's volume (parseYahooVolume): a collected series with field "volume" (issue 1753). */
+export async function fetchYahooVolume(
+  symbol: string,
+  startUnix = 0,
+  endUnix = Math.floor(Date.now() / 1000),
+  timeoutMs = 15000,
+): Promise<Point[]> {
+  return parseYahooVolume(await fetchYahooChart(symbol, startUnix, endUnix, timeoutMs));
+}

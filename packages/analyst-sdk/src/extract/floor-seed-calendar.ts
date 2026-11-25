@@ -24,6 +24,9 @@ export type SourceCalendar = "any" | "business_day" | "weekly_saturday";
 // trade business days.
 const CRYPTO_YAHOO_SYMBOLS = new Set(["BTC-USD", "ETH-USD"]);
 
+// Collected FRED series dated by period start (monthly MTSDS133FMS, quarterly GDP), not by a business day.
+const PERIOD_START_DATED = new Set(["FED_SURPLUS_MONTHLY", "US_GDP"]);
+
 function symbolsOf(series: string | string[] | { asset: string; metric: string } | undefined): string[] {
   if (!series) return [];
   if (Array.isArray(series)) return series;
@@ -35,6 +38,8 @@ function symbolsOf(series: string | string[] | { asset: string; metric: string }
 // its source's publication calendar.
 //   - ICSA: FRED weekly series, week-ending Saturday — the D6 finding: 867/867
 //     observations since 2010 land on a Saturday.
+//   - FED_SURPLUS_MONTHLY and US_GDP (issue 1753): FRED dates a monthly or
+//     quarterly observation on the first day of its period, any weekday.
 //   - Every other FRED series (BAA10Y included), and every yahoo symbol EXCEPT the two crypto
 //     tickers, publish business days only (D6: DTWEXBGS/DXY is business-daily;
 //     its floor should never carry weekend rows).
@@ -46,6 +51,8 @@ export function sourceCalendar(indicatorId: string): SourceCalendar {
   const ind = collectionRegistry().find((i) => i.id === indicatorId);
   if (!ind) return "any"; // unknown id: never flag rows for a series nothing collects
   if (indicatorId === "ICSA") return "weekly_saturday";
+  // Issue 1753: a monthly or quarterly FRED series is dated the first day of its period, whatever the weekday.
+  if (PERIOD_START_DATED.has(indicatorId)) return "any";
   if (ind.source === "fred") return "business_day";
   if (ind.source === "yahoo") {
     const syms = symbolsOf(ind.series);

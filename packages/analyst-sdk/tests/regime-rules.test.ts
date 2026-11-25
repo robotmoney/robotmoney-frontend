@@ -18,6 +18,8 @@ import {
   toHistory,
   PANELS,
   REGIME_ADOPTION_DATE,
+  REGIME_COMPOSITE_NORMALISATION,
+  REGIME_KEPT_HISTORY,
   REGIME_KNOWLEDGE_TIME,
   REGIME_LABEL_CUT,
   REGIME_LOOKBACK,
@@ -55,10 +57,15 @@ describe("REGIME_RULES presets (issue 1751)", () => {
         labelCut: REGIME_LABEL_CUT[v],
         lookback: REGIME_LOOKBACK[v],
         adoptionDate: REGIME_ADOPTION_DATE[v]!,
+        // Issue 1753: stated only where a version departs from v3 and v4.
+        ...(REGIME_COMPOSITE_NORMALISATION[v] === "none" ? {} : { compositeNormalisation: REGIME_COMPOSITE_NORMALISATION[v] }),
+        ...(REGIME_KEPT_HISTORY[v] ? { keptHistory: true } : {}),
       });
       expect(regimeRulesOf(v)).toBe(REGIME_RULES[v]);
     }
-    expect(REGIME_LABEL_CUT).toEqual({ v3: "percentile", v4: "series" });
+    expect(Object.keys(REGIME_RULES.v3).sort()).toEqual(Object.keys(REGIME_RULES.v4).sort());
+    expect("compositeNormalisation" in REGIME_RULES.v4 || "keptHistory" in REGIME_RULES.v4).toBe(false);
+    expect(REGIME_LABEL_CUT).toEqual({ v3: "percentile", v4: "series", v5: "series" });
     expect(regimeRulesOf()).toBe(REGIME_RULES.v4);
   });
 

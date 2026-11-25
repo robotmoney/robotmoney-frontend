@@ -9,13 +9,18 @@ export {
   type PublicationRule, type VersionedPoint, type KnownPoint,
 } from "./transform/knowledge-time.ts";
 export {
-  deriveSeries, DerivedSeriesError,
+  deriveSeries, derivedInputIds, DerivedSeriesError,
   type DerivedSeries, type DerivedLevel, type DerivedRatio, type DerivedRollingSumOverKnownLevel, type DerivedUpVolumeShare,
 } from "./transform/derived.ts";
-export { computeRegime, regimeLabels, fitPanelWeights, weightedMeanOnDay, WeightAnchorOutOfRangeError, type RegimeComputeResult } from "./analyze/compute.ts";
+export { computeRegime, regimeLabels, fitPanelWeights, weightedMeanOnDay, panelMean, smoothRegimes, bucketFn, WeightAnchorOutOfRangeError, type RegimeComputeResult } from "./analyze/compute.ts";
+// The kept record of a methodology that keeps its history (v5, issue 1753).
+export {
+  computeKeptRegime, keptRegimeRows, withDerivedSeries, scoreDays, fitDay, keptDayOf, walkForward, deriveKeptRecord,
+  type KeptDay, type DayScores, type DayFit, type KeptRecord, type KeptOptions, type KeptRegimeRun,
+} from "./analyze/kept-regime.ts";
 export {
   INDICATORS, PANELS, ALL_PANELS, PANEL_MEMBERSHIP, FillPolicyError, fillPolicyOf, fillMaxAgeDays, DAY_RULE, DAY_RULES,
-  CalendarError, calendarOf,
+  CalendarError, calendarOf, REGIME_REGISTRY, REGIME_DERIVED_SERIES, V5_INDICATORS, V5_DERIVED_SERIES, V5_INPUT_IDS,
   type Indicator, type Panel, type PanelMembership, type FillPolicy, type DayRule, type Calendar,
 } from "./analyze/indicators.ts";
 // The report functions the backend shares (issue 1751): one copy, pure.
@@ -30,7 +35,7 @@ export { buildRichIndicators, monthlySparkline } from "./report/indicator-rows.t
 export { computeCorrelations, type CorrelationsPayload, type CorrelationInput } from "./analyze/correlations.ts";
 export {
   computeBacktest, stripDailyFromSnapshot, simulatePortfolio, simulateDrift, periodStats, scheduleFromLabels, PORTFOLIO_SPECS,
-  BACKTEST_COST_PER_REBALANCE, BACKTEST_IN_SAMPLE_END, YEAR_MS,
+  BACKTEST_COST_PER_REBALANCE, BACKTEST_IN_SAMPLE_END, REGIME_BACKTEST_RULES, YEAR_MS,
   referenceStrategies, REFERENCE_FILL_POLICIES, REFERENCE_CALENDARS, discountToYield, SparseSeriesError, MAX_DAILY_MEDIAN_GAP_DAYS, splitSamples, DEFAULT_SIMULATOR_FILL, UNKNOWN_LABEL_RULE,
   type BacktestLabels, type DeclaredFill, type SimulatorFill, type UnknownLabelRule,
   type BacktestPayload, type BacktestMetrics, type Weights, type Schedule, type SimulateOptions, type SimulationResult,
@@ -55,6 +60,10 @@ export {
   REGIME_OBSERVATION_WINDOWS,
   REGIME_MISSING_PANEL,
   REGIME_LABEL_CUT,
+  REGIME_LINE,
+  BESIDE_REGIME_VERSIONS,
+  REGIME_COMPOSITE_NORMALISATION,
+  REGIME_KEPT_HISTORY,
   REGIME_RULES,
   regimeRulesOf,
   isRefreshDate,
@@ -66,6 +75,8 @@ export {
   type WeightRefresh,
   type MissingPanelRule,
   type LabelCut,
+  type RegimeLine,
+  type CompositeNormalisation,
   type RegimeRules,
   type LookbackWindow,
   type RegimeLookback,
