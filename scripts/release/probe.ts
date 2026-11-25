@@ -96,6 +96,23 @@ export function swapGaps(journal: readonly ImageReceipt[], window: { start: numb
   return out;
 }
 
+/** The step whose start ends the previous release's answers of the maintenance status route: READY (Q23-ready, C11-ready). */
+export const PREVIOUS_RELEASE_UNTIL_NAME = "ready";
+
+/**
+ * PURE. The boundary (epoch ms) before which the maintenance status route is answered by the release being replaced:
+ * the start of the run's READY step on its own target (owner decision 2026-11-25, v0.11.0, amending issue 1703). The
+ * journal records no instant for the api's own swap inside the rolling boot, so READY, which starts once every service
+ * the rolling boot replaced is healthy, is the boundary: answers before it are reported, from it on graded. Undefined
+ * when READY never started (nothing is excused).
+ */
+export function previousReleaseUntil(steps: RunJournal["steps"], rmEnv: RunJournal["rmEnv"]): number | undefined {
+  const ready = stepNamed(steps, PREVIOUS_RELEASE_UNTIL_NAME, rmEnv);
+  if (ready === undefined || ready.status === "skipped" || !ready.startedAt) return undefined;
+  const at = Date.parse(ready.startedAt);
+  return Number.isFinite(at) ? at : undefined;
+}
+
 /**
  * PURE. Grade a probe: a run that declared a maintenance window excuses exactly it, any other run excuses
  * nothing but the swap gaps its receipts recorded (`gaps`, from swapGaps): a failed site answer asked
@@ -103,9 +120,10 @@ export function swapGaps(journal: readonly ImageReceipt[], window: { start: numb
  */
 export function gradeRun(receipts: readonly ProbeReceipt[], window: { start: number; end: number }, steps: RunJournal["steps"], rmEnv: RunJournal["rmEnv"], everyMs: number, slackMs: number, gaps: readonly ExcusedSpan[] = []): ProbeGrade {
   const declared = declaredWindow(steps, rmEnv);
-  const grade = declared === "none" ? gradeProbeReceipts(receipts, window, everyMs, slackMs, gaps)
-    : "problem" in declared ? (() => { const base = gradeProbeReceipts(receipts, window, everyMs, slackMs, gaps); return { ...base, ok: false, problems: [declared.problem, ...base.problems] }; })()
-    : gradeProbeWithDeclaredWindow(receipts, window, declared.window, everyMs, slackMs, gaps);
+  const until = previousReleaseUntil(steps, rmEnv);
+  const grade = declared === "none" ? gradeProbeReceipts(receipts, window, everyMs, slackMs, gaps, until)
+    : "problem" in declared ? (() => { const base = gradeProbeReceipts(receipts, window, everyMs, slackMs, gaps, until); return { ...base, ok: false, problems: [declared.problem, ...base.problems] }; })()
+    : gradeProbeWithDeclaredWindow(receipts, window, declared.window, everyMs, slackMs, gaps, until);
   return { ...grade, latency: grade.latency.map((f) => { const step = stepAt(steps, f.at); return step === undefined ? f : { ...f, step }; }) };
 }
 
@@ -236,6 +254,7 @@ if (import.meta.main) {
     writeFileSync(join(dir, "grade.json"), `${JSON.stringify({ ...grade, swapGaps: gaps, startMs: state.startMs, endMs }, null, 2)}\n`, { mode: 0o600 });
     const excused = grade.excused?.length ? `; ${grade.excused.length} failed answer(s) inside ${gaps.length} recorded swap gap(s) excused` : "";
     console.log(`[probe] ${grade.receipts} answers over ${Math.round((endMs - state.startMs) / 1000)} s: ${grade.ok ? `every answer 200, no gap${excused}` : grade.problems.join("; ")}`);
+    for (const r of grade.maintenancePreviousRelease ?? []) console.log(`[probe] maintenance route answered ${r.status} at ${new Date(r.at).toISOString()}${stepAt(journal?.steps ?? {}, r.at) ? ` during ${stepAt(journal?.steps ?? {}, r.at)}` : ""}, before READY: the release being replaced answered it (reported, not graded; owner decision 2026-11-25)`);
     for (const f of grade.latency) console.log(`[probe] latency: worst ${f.path} ${f.latencyMs} ms at ${new Date(f.at).toISOString()}${f.step ? ` during ${f.step}` : ""} (reported, not graded)`);
     process.exit(grade.ok ? 0 : 1);
   } else {

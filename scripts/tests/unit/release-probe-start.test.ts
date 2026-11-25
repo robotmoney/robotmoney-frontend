@@ -269,3 +269,31 @@ describe("the cutover summary reads the probe grade (issue 1703)", () => {
     expect(cutoverSummary({ steps: steps("ok") }, "stage")).toBeUndefined();
   });
 });
+
+// Owner decision 2026-11-25 (v0.11.0, amending issue 1703): the maintenance status route's non-200 answers from the
+// release being replaced, before READY starts, are reported and fail nothing; from READY on they are graded.
+describe("the maintenance route before READY is the previous release's (v0.11.0)", () => {
+  const iso = (ms: number) => new Date(ms).toISOString();
+  const READY_AT = T0 + 60_000;
+  const steps = (status = "ok") => ({ "Q23-ready": { id: "Q23-ready", status, startedAt: iso(READY_AT), endedAt: iso(READY_AT + 5_000) } }) as unknown as RunJournal["steps"];
+  const site: ProbeReceipt[] = Array.from({ length: 60 }, (_, i) => ({ at: T0 + i * 2_000, status: 200, path: "/" }));
+  const win = { start: T0, end: T0 + 118_000 };
+  test("a pre-swap maintenance 503 passes and is reported", () => {
+    const pre = { at: READY_AT - 30_000, status: 503, maintenance: false };
+    const g = gradeRun([...site, pre], win, steps(), "stage", 2_000, 3_000);
+    expect(g).toMatchObject({ ok: true, maintenanceFailures: [], maintenancePreviousRelease: [pre] });
+  });
+  test("red control: a maintenance 503 at or after READY still fails", () => {
+    const post = { at: READY_AT + 2_000, status: 503, maintenance: false };
+    const g = gradeRun([...site, post], win, steps(), "stage", 2_000, 3_000);
+    expect(g.ok).toBe(false);
+    expect(g.maintenanceFailures).toEqual([post]);
+    expect(g.maintenancePreviousRelease).toBeUndefined();
+  });
+  test("red control: without a started READY nothing is excused, and a site 503 before READY still fails", () => {
+    const pre = { at: READY_AT - 30_000, status: 503, maintenance: false };
+    expect(gradeRun([...site, pre], win, {}, "stage", 2_000, 3_000).maintenanceFailures).toEqual([pre]);
+    const siteFail = site.map((r, i) => (i === 5 ? { ...r, status: 503 } : r));
+    expect(gradeRun(siteFail, win, steps(), "stage", 2_000, 3_000).ok).toBe(false);
+  });
+});
