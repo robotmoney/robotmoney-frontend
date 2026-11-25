@@ -118,6 +118,12 @@ export interface ProbeGrade {
   gaps: Array<[number, number]>;
   /** Maintenance status route answers that were not 200, outside every excused span and declared window (issue 1703). */
   maintenanceFailures: ProbeReceipt[];
+  /**
+   * Maintenance status route answers that were not 200 from the release being replaced, asked before the
+   * boundary the caller names (`previousReleaseUntil`, the start of READY): reported, never failed
+   * (owner decision 2026-11-25, v0.11.0, amending issue 1703's rule). Absent when none.
+   */
+  maintenancePreviousRelease?: ProbeReceipt[];
   /** The worst latency per path (issue 1703). Slow answers are reported here and fail nothing. */
   latency: LatencyFinding[];
   problems: string[];
@@ -138,7 +144,13 @@ const inSpan = (spans: readonly ExcusedSpan[], at: number): boolean => spans.som
  * (issue 1630). The gap rule is measured on the starts of successful site
  * answers (an excused one counts as successful), so a slow 200 is no gap
  * (issue 1703). A maintenance status route answer that is not 200 outside an
- * excused span fails too. Latency is reported, never failed.
+ * excused span fails too, unless it was asked before `previousReleaseUntil`
+ * (epoch ms): the release being replaced still answers the route then, and its
+ * non-200 answers (a 503 under migrate or build load) are reported in
+ * `maintenancePreviousRelease` and fail nothing (owner decision 2026-11-25,
+ * v0.11.0, amending issue 1703). The new release's answers, from that boundary
+ * on, stay strictly graded. Site answers keep every rule. Latency is reported,
+ * never failed.
  */
 export function gradeProbeReceipts(
   receipts: readonly ProbeReceipt[],
@@ -146,13 +158,17 @@ export function gradeProbeReceipts(
   intervalMs: number = PROBE_INTERVAL_MS,
   jitterMs: number = PROBE_JITTER_MS,
   excused: readonly ExcusedSpan[] = [],
+  previousReleaseUntil?: number,
 ): ProbeGrade {
   const sorted = receipts.filter(isSiteAnswer).sort((a, b) => a.at - b.at);
   const limit = intervalMs + jitterMs;
   const failedAnswers = sorted.filter((r) => r.status !== 200);
   const nonOk = failedAnswers.filter((r) => !inSpan(excused, r.at));
   const excusedAnswers = failedAnswers.filter((r) => inSpan(excused, r.at));
-  const maintenanceFailures = receipts.filter((r) => !isSiteAnswer(r) && r.status !== 200 && !inSpan(excused, r.at)).sort((a, b) => a.at - b.at);
+  const maintenanceNonOk = receipts.filter((r) => !isSiteAnswer(r) && r.status !== 200 && !inSpan(excused, r.at)).sort((a, b) => a.at - b.at);
+  const beforeSwap = (r: ProbeReceipt) => previousReleaseUntil !== undefined && r.at < previousReleaseUntil;
+  const maintenanceFailures = maintenanceNonOk.filter((r) => !beforeSwap(r));
+  const maintenancePreviousRelease = maintenanceNonOk.filter(beforeSwap);
   const gaps: Array<[number, number]> = [];
   const marks = [window.start, ...sorted.filter((r) => r.status === 200 || inSpan(excused, r.at)).map((r) => r.at), window.end];
   for (let i = 1; i < marks.length; i++) if (marks[i]! - marks[i - 1]! > limit) gaps.push([marks[i - 1]!, marks[i]!]);
@@ -161,7 +177,7 @@ export function gradeProbeReceipts(
   if (nonOk.length > 0) problems.push(`${nonOk.length} probe answer(s) were not 200${excused.length > 0 ? " outside the swap gap(s) the receipts recorded" : ""}`);
   if (gaps.length > 0) problems.push(`${gaps.length} span(s) with no successful site answer exceeded ${(intervalMs + jitterMs) / 1000} s`);
   if (maintenanceFailures.length > 0) problems.push(maintenanceProblem(maintenanceFailures.length));
-  return { ok: problems.length === 0, receipts: sorted.length, nonOk, ...(excused.length > 0 ? { excused: excusedAnswers } : {}), gaps, maintenanceFailures, latency: latencyReport(receipts), problems };
+  return { ok: problems.length === 0, receipts: sorted.length, nonOk, ...(excused.length > 0 ? { excused: excusedAnswers } : {}), gaps, maintenanceFailures, ...(maintenancePreviousRelease.length > 0 ? { maintenancePreviousRelease } : {}), latency: latencyReport(receipts), problems };
 }
 
 const maintenanceProblem = (n: number) => `${n} answer(s) of the maintenance status route were not 200 outside a declared maintenance window`;
@@ -184,8 +200,9 @@ export function gradeProbeWithDeclaredWindow(
   intervalMs: number = PROBE_INTERVAL_MS,
   jitterMs: number = PROBE_JITTER_MS,
   excused: readonly ExcusedSpan[] = [],
+  previousReleaseUntil?: number,
 ): ProbeGrade {
-  const base = gradeProbeReceipts(receipts, window, intervalMs, jitterMs, excused);
+  const base = gradeProbeReceipts(receipts, window, intervalMs, jitterMs, excused, previousReleaseUntil);
   const limit = intervalMs + jitterMs;
   const inWindow = (at: number) => at >= declared.start && at <= declared.end;
   const gaps = base.gaps.filter(([from, to]) => !(from >= declared.start - limit && to <= declared.end + limit));
@@ -196,7 +213,7 @@ export function gradeProbeWithDeclaredWindow(
   if (gaps.length > 0) problems.push(`${gaps.length} gap(s) outside the declared maintenance window exceeded ${intervalMs / 1000} s`);
   if (maintenanceFailures.length > 0) problems.push(maintenanceProblem(maintenanceFailures.length));
   if (!receipts.some((r) => r.maintenance === true && inWindow(r.at))) problems.push("no answer inside the declared maintenance window announced an active maintenance window (/api/status/maintenance)");
-  return { ok: problems.length === 0, receipts: base.receipts, nonOk: base.nonOk, ...(base.excused !== undefined ? { excused: base.excused } : {}), gaps, maintenanceFailures, latency: base.latency, problems };
+  return { ok: problems.length === 0, receipts: base.receipts, nonOk: base.nonOk, ...(base.excused !== undefined ? { excused: base.excused } : {}), gaps, maintenanceFailures, ...(base.maintenancePreviousRelease ? { maintenancePreviousRelease: base.maintenancePreviousRelease } : {}), latency: base.latency, problems };
 }
 
 /** Receipts are JSON lines: {"at": <epoch ms>, "status": <int>}, with optional maintenance, path, endedAt and latencyMs (older lines lack the last three). */

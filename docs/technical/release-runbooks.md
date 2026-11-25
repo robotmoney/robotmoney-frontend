@@ -483,7 +483,11 @@ website down:
 7. **C13-probe-grade** stops the probe and fails the release on any answer that is not 200, or on any gap.
    The one excuse is a website-server swap's measured gap: a failed site answer asked inside a gap that
    a `bun smoke:web` receipt on the control machine recorded during the window passes, and nothing else
-   does (web-serving-architecture.md §4.1).
+   does (web-serving-architecture.md §4.1). A `/api/status/maintenance` answer that is not 200 fails it too,
+   except one asked before the run's READY step starts (C11-ready, Q23-ready on stage): the release being
+   replaced still answers the route then, so its non-200 answers (a 503 under migrate or build load) are listed in
+   `grade.json` `maintenancePreviousRelease` and the step output, and fail nothing (owner, 2026-11-25, v0.11.0,
+   amending issue 1703's rule). The new release's answers, from READY on, stay graded.
 
 The privileged credential `rm_owner` is a line in the host's `~/.env`. `doadmin` is stored in no
 file: the admin types it into `bun run role-passwords` before the run, and no production step reads it
@@ -645,7 +649,8 @@ The probe also asks `/api/status/maintenance` every tick. Its receipt records `m
 body is a valid `MaintenanceStatus` with `state: "active"`. The probe grade (Q25, C13) reads the declared window from the
 start of `maintenance-on` to the end of `maintenance-off` in the run journal. Inside it, the grade still fails any
 non-200 answer on `/` or `/version.json`, and fails a window in which no receipt has `maintenance: true`. Only a gap
-inside the window passes. The grade fails a gap outside it, and a window that never closed.
+inside the window passes. The grade fails a gap outside it, and a window that never closed. Outside a declared window, a non-200 maintenance-route answer asked before the run's READY step starts is the
+replaced release's: it is reported, not graded (owner, 2026-11-25, §4.7 item 7).
 
 A template step that carries `since: vA.B.C` binds the releases from that one on. A release before it
 keeps the runbook it ran, unedited (the SDK steps Q35 to Q37 and C23 to C25 are `since: v0.7.0`, so v0.6.2's file is
