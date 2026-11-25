@@ -2330,8 +2330,9 @@ figure, default, stored row or frozen report changes.
 
 ### 13.1 The registry
 
-`INDICATORS` is not edited. `REGIME_REGISTRY` maps each version to its indicator
-list: `v3` and `v4` to `INDICATORS`, `v5` to `V5_INDICATORS`. That list is
+`INDICATORS` is not edited. `REGIME_REGISTRY` (`regime-versions.ts`) maps each
+version to its indicator list: `v3` and `v4` to `INDICATORS`, `v5` to
+`V5_INDICATORS` (`indicators.ts`). That list is
 `INDICATORS` in order with VIX scored in the factor panel, then four derived
 indicators. It has 30 entries.
 
@@ -2343,7 +2344,7 @@ indicators. It has 30 entries.
 
 All three panels are included. Every `v5` indicator keeps the forward fill of at
 most 120 days. Each derived indicator is a `DerivedSeries` declaration
-(`V5_DERIVED_SERIES`) computed by `deriveSeries` from raw inputs as known on the
+(`V5_DERIVED_SERIES` in `transform/derived.ts`) computed by `deriveSeries` from raw inputs as known on the
 day, never from a stored derived series.
 
 | Indicator | Panel | Sign | Definition | Dated |

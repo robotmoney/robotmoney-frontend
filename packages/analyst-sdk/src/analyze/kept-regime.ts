@@ -21,8 +21,8 @@ import { cutAtAsof, prepareRegimeInputs, type PreparedRegimeInputs } from "../pr
 import { buildRichIndicators } from "../report/indicator-rows.ts";
 import type { RegimeSnapshotRow } from "../report/canonical.ts";
 import { bucketFn, fitPanelWeights, lookbackDays, panelMean, smoothRegimes, weightedMeanOnDay } from "./compute.ts";
-import { ALL_PANELS, PANELS, REGIME_DERIVED_SERIES, REGIME_REGISTRY, type Indicator, type Panel } from "./indicators.ts";
-import { REGIME_RULES, regimeRulesOf, type RegimeRules, type RegimeVersion } from "./regime-versions.ts";
+import { ALL_PANELS, PANELS, type Indicator, type Panel } from "./indicators.ts";
+import { REGIME_DERIVED_SERIES, REGIME_REGISTRY, REGIME_RULES, regimeRulesOf, type RegimeRules, type RegimeVersion } from "./regime-versions.ts";
 
 /** One day's figures as that day computed them. */
 export interface KeptDay {

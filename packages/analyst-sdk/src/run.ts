@@ -7,12 +7,12 @@
 // Optional SPX, ETH and TBILL3M price series in
 // the same input add the correlation and backtest output.
 import type { Point, RawIndicatorHistory } from "./types.ts";
-import { ALL_PANELS, DAY_RULE, DAY_RULES, INDICATORS, PANELS, REGIME_DERIVED_SERIES, REGIME_REGISTRY, type DayRule, type Indicator, type Panel } from "./analyze/indicators.ts";
+import { ALL_PANELS, DAY_RULE, DAY_RULES, INDICATORS, PANELS, type DayRule, type Indicator, type Panel } from "./analyze/indicators.ts";
 import { computeRegime, type RegimeComputeResult } from "./analyze/compute.ts";
 import { computeCorrelations, type CorrelationsPayload } from "./analyze/correlations.ts";
 import { computeBacktest, stripDailyFromSnapshot, REGIME_BACKTEST_RULES, type BacktestPayload } from "./analyze/backtest.ts";
 import { computeKeptRegime, withDerivedSeries, type KeptRegimeRun } from "./analyze/kept-regime.ts";
-import { CURRENT_REGIME_VERSION, REGIME_KEPT_HISTORY, REGIME_RULES, REGIME_VERSIONS, isRegimeVersion, type RegimeVersion } from "./analyze/regime-versions.ts";
+import { CURRENT_REGIME_VERSION, REGIME_DERIVED_SERIES, REGIME_KEPT_HISTORY, REGIME_REGISTRY, REGIME_RULES, REGIME_VERSIONS, isRegimeVersion, type RegimeVersion } from "./analyze/regime-versions.ts";
 import { cutAtAsof, latestCompleteDay, missingOnDay, prepareRegimeInputs, type MissingIndicator } from "./prepare.ts";
 import { LEDGER_EXTRA_KEYS } from "./extras.ts";
 import { StoredRatioOnlyError, resolveInputHistory, seriesMappingFor, storedUnderFor } from "./series-ids.ts";

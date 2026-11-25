@@ -1,4 +1,5 @@
-import { ROLLING_WINDOW_DAYS } from "./indicators.ts";
+import { INDICATORS, ROLLING_WINDOW_DAYS, V5_INDICATORS, type Indicator } from "./indicators.ts";
+import { V5_DERIVED_SERIES, type DerivedSeries } from "../transform/derived.ts";
 
 // Methodology version tag stamped on every persisted regime snapshot row —
 // mirrors agentjuno/robotmoney data/regime/regime-versions.json `current`.
@@ -24,8 +25,8 @@ import { ROLLING_WINDOW_DAYS } from "./indicators.ts";
 //
 // v5 (issue 1753, decision D96): the model ported from the downstream
 // experiment-lex-equity. It is computed and published beside the served line
-// (REGIME_LINE), never on it. Its registry is REGIME_REGISTRY.v5
-// (analyze/indicators.ts): VIX in the factor panel and four derived indicators.
+// (REGIME_LINE), never on it. Its registry is REGIME_REGISTRY.v5 (V5_INDICATORS
+// in analyze/indicators.ts): VIX in the factor panel and four derived indicators.
 // Every day is computed on the day and kept (analyze/kept-regime.ts): weights
 // are refit every day, the composite is the mid-rank of the equal-weight panel
 // mean within every kept mean to date, and a later run never changes a kept day.
@@ -49,6 +50,12 @@ export const BESIDE_REGIME_VERSIONS: readonly RegimeVersion[] = Object.freeze(RE
 
 // The served methodology: the last version declared main (D88 item 2 as D96 amends it).
 export const CURRENT_REGIME_VERSION: RegimeVersion = "v4";
+
+/** The scoring registry of each methodology version (issue 1753). v3 and v4 read INDICATORS itself. */
+export const REGIME_REGISTRY: Readonly<Record<RegimeVersion, readonly Indicator[]>> = Object.freeze({ v3: INDICATORS, v4: INDICATORS, v5: V5_INDICATORS });
+
+/** The derived series each methodology version computes from raw inputs (none for v3 and v4). */
+export const REGIME_DERIVED_SERIES: Readonly<Record<RegimeVersion, readonly DerivedSeries[]>> = Object.freeze({ v3: [], v4: [], v5: V5_DERIVED_SERIES });
 
 /** True for a methodology version this engine can compute (and so replay). */
 export function isRegimeVersion(v: unknown): v is RegimeVersion {

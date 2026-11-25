@@ -9,7 +9,7 @@ export {
   type PublicationRule, type VersionedPoint, type KnownPoint,
 } from "./transform/knowledge-time.ts";
 export {
-  deriveSeries, derivedInputIds, DerivedSeriesError,
+  deriveSeries, derivedInputIds, DerivedSeriesError, V5_DERIVED_SERIES,
   type DerivedSeries, type DerivedLevel, type DerivedRatio, type DerivedRollingSumOverKnownLevel, type DerivedUpVolumeShare,
 } from "./transform/derived.ts";
 export { computeRegime, regimeLabels, fitPanelWeights, weightedMeanOnDay, panelMean, smoothRegimes, bucketFn, WeightAnchorOutOfRangeError, type RegimeComputeResult } from "./analyze/compute.ts";
@@ -20,7 +20,7 @@ export {
 } from "./analyze/kept-regime.ts";
 export {
   INDICATORS, PANELS, ALL_PANELS, PANEL_MEMBERSHIP, FillPolicyError, fillPolicyOf, fillMaxAgeDays, DAY_RULE, DAY_RULES,
-  CalendarError, calendarOf, REGIME_REGISTRY, REGIME_DERIVED_SERIES, V5_INDICATORS, V5_DERIVED_SERIES, V5_INPUT_IDS,
+  CalendarError, calendarOf, V5_INDICATORS, V5_INPUT_IDS,
   type Indicator, type Panel, type PanelMembership, type FillPolicy, type DayRule, type Calendar,
 } from "./analyze/indicators.ts";
 // The report functions the backend shares (issue 1751): one copy, pure.
@@ -62,6 +62,8 @@ export {
   REGIME_LABEL_CUT,
   REGIME_LINE,
   BESIDE_REGIME_VERSIONS,
+  REGIME_REGISTRY,
+  REGIME_DERIVED_SERIES,
   REGIME_COMPOSITE_NORMALISATION,
   REGIME_KEPT_HISTORY,
   REGIME_RULES,

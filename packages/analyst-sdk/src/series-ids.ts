@@ -38,7 +38,6 @@
 // Writes use the reverse mapping: storageKeyForSourceId(consumer, sourceId).
 import type { Point, RawIndicatorHistory } from "./types.ts";
 import { INDICATORS, V5_INPUT_IDS, type Indicator } from "./analyze/indicators.ts";
-import type { RegimeVersion } from "./analyze/regime-versions.ts";
 import { LEDGER_EXTRA_KEYS } from "./extras.ts";
 
 export type SeriesKind = "source" | "calculated";
@@ -188,7 +187,7 @@ export const SERIES_MAPPING: readonly SeriesMapping[] = Object.freeze(validateSe
 
 // METHODOLOGY v5 (issue 1753, decision D96). The main-line mapping above is
 // what v3 and v4 read, and it does not change. A v5 run reads it plus the raw
-// inputs of its four derived indicators (analyze/indicators.ts
+// inputs of its four derived indicators (transform/derived.ts
 // V5_DERIVED_SERIES): five collected series, each stored under
 // `raw_indicator_history:<ID>` (extract/collected-series.ts), the stored
 // yahoo:^VIX stream as the VIX_TERM denominator, and the backtest's ^GSPC
@@ -211,13 +210,15 @@ export const V5_SERIES_MAPPING: readonly SeriesMapping[] = Object.freeze(validat
 /** An input id read from another input's stream when the input omits it: STORED_UNDER, and under v5 the VIX_TERM denominator from VIX. */
 export const V5_STORED_UNDER: Readonly<Record<string, string>> = Object.freeze({ ...STORED_UNDER, [V5_INPUT_IDS.vix]: "VIX" });
 
-/** The storage mapping a methodology version reads (issue 1753): SERIES_MAPPING itself for v3 and v4. */
-export function seriesMappingFor(version: RegimeVersion): readonly SeriesMapping[] {
+// `version` is a methodology tag (analyze/regime-versions.ts REGIME_VERSIONS). It is typed
+// as a string so this module imports no calculation code: the public analytics routes read it.
+/** The storage mapping a methodology version reads (issue 1753): SERIES_MAPPING itself for v3, v4 and any other tag. */
+export function seriesMappingFor(version: string): readonly SeriesMapping[] {
   return version === "v5" ? V5_SERIES_MAPPING : SERIES_MAPPING;
 }
 
 /** The stored-under aliases a methodology version resolves its input with: STORED_UNDER itself for v3 and v4. */
-export function storedUnderFor(version: RegimeVersion): Readonly<Record<string, string>> {
+export function storedUnderFor(version: string): Readonly<Record<string, string>> {
   return version === "v5" ? V5_STORED_UNDER : STORED_UNDER;
 }
 

@@ -21,7 +21,7 @@
 // by inverseCorrelationWeights' minValidObs) and logged loudly. The seededProvider
 // is retained ONLY for the hermetic unit-test tools (analyze/regime.ts etc.) and is
 // never referenced on this path. Tests inject a fixture-backed AnalyticsDataSource.
-import { ALL_PANELS, DAY_RULE, INDICATORS, PANELS, REGIME_DERIVED_SERIES, REGIME_REGISTRY, V5_INPUT_IDS, type DayRule, type Panel } from "./analyze/indicators.ts";
+import { ALL_PANELS, DAY_RULE, INDICATORS, PANELS, V5_INPUT_IDS, type DayRule, type Panel } from "./analyze/indicators.ts";
 import { LEDGER_EXTRA_KEYS, RATIO_IDS, STORED_RATIO_IDS, STORED_UNDER, inputHistoryFromStorage, seriesMappingFor, storedIndicatorId } from "./extras.ts";
 // The kept record of a methodology published beside the main line (v5, issue 1753).
 import { computeKeptRegime, keptRegimeRows, type KeptDay } from "../../../packages/analyst-sdk/src/analyze/kept-regime.ts";
@@ -48,7 +48,7 @@ import {
   REGIME_BACKTEST_RULES,
   type BacktestPayload,
 } from "./analyze/backtest.ts";
-import { CURRENT_REGIME_VERSION, REGIME_KEPT_HISTORY, REGIME_LINE, REGIME_WEIGHT_REFRESH, type RegimeVersion } from "./analyze/regime-versions.ts";
+import { CURRENT_REGIME_VERSION, REGIME_DERIVED_SERIES, REGIME_KEPT_HISTORY, REGIME_LINE, REGIME_REGISTRY, REGIME_WEIGHT_REFRESH, type RegimeVersion } from "./analyze/regime-versions.ts";
 import {
   liveDataSource,
   type AnalyticsDataSource,

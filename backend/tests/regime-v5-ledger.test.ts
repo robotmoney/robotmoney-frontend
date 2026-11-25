@@ -17,7 +17,9 @@ import { runAnalytics } from "../src/analytics/index.ts";
 import { noopTelemetrySink } from "../src/analytics/telemetry.ts";
 import { runProducerOnce } from "../src/producer/index.ts";
 import { ledgerKeptRegimeDays, ledgerPublishedRegimeDays, besideRegimeLine } from "../src/analytics/cutover/ledger-current.ts";
-import type { AnalyticsPersistence } from "../src/analytics/persistence.ts";
+import type { AnalyticsPersistence, CommittedInputs } from "../src/analytics/persistence.ts";
+import { handleAnalytics } from "../src/api/routes/analytics.ts";
+import { provisionAnalyticsToken } from "./support/automation-auth.ts";
 import * as epoch from "../src/swarm/domain.ts";
 import { buildBriefBody } from "../src/swarm/domain.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
@@ -135,6 +137,32 @@ describe("three v5 runs through the ledger (issue 1753)", () => {
       const kept = await ledgerKeptRegimeDays("v5", addDays(ASOF, 1));
       expect(kept.days.map((d) => d.date)).toEqual(line);
       expect(kept.artifactIds.length).toBe(3);
+
+      // The producer's side of the boundary: it has no database, so it reads
+      // the committed inputs and the kept days over the analytics routes.
+      const token = await provisionAnalyticsToken();
+      const get = (route: string, query: string, auth = true) => {
+        const url = `http://backend.test${route}${query}`;
+        return handleAnalytics(new Request(url, auth ? { headers: { Authorization: `Bearer ${token}` } } : {}), new URL(url));
+      };
+      const keys = async (query: string) => new Set(((await get(ROUTES.analytics.committedInputs, query))!.body as CommittedInputs).values.map((v) => v.sourceKey));
+      const mainKeys = await keys(`?asof=${ASOF}`);
+      const v5Keys = await keys(`?asof=${ASOF}&methodology=v5`);
+      for (const key of FIVE_KEYS) expect({ key, main: mainKeys.has(key), v5: v5Keys.has(key) }).toEqual({ key, main: false, v5: true });
+      expect([...v5Keys].filter((k) => !mainKeys.has(k)).sort()).toEqual([...FIVE_KEYS].sort());
+      expect(await keys(`?asof=${ASOF}&methodology=v4`)).toEqual(mainKeys);
+      expect((await get(ROUTES.analytics.committedInputs, `?asof=${ASOF}&methodology=v9`))!.status).toBe(400);
+      const keptOverHttp = await get(ROUTES.analytics.keptRegimeDays, `?methodology=v5&before=${addDays(ASOF, 1)}`);
+      expect(keptOverHttp!.status).toBe(200);
+      expect(keptOverHttp!.body).toEqual(kept);
+      const beforeSecond = (await get(ROUTES.analytics.keptRegimeDays, `?methodology=v5&before=${DAYS[1]}`))!.body as typeof kept;
+      expect(beforeSecond.days.map((d) => d.date)).toEqual(first.rows.map((r) => r.date as string));
+      expect(beforeSecond.artifactIds).toEqual([first.id]);
+      // Only a methodology published beside the main line has kept days; the route is the provider's alone.
+      for (const bad of ["?methodology=v4&before=2026-08-15", "?methodology=v9&before=2026-08-15", "?before=2026-08-15", "?methodology=v5", "?methodology=v5&before=2026-02-30"]) {
+        expect({ bad, status: (await get(ROUTES.analytics.keptRegimeDays, bad))!.status }).toEqual({ bad, status: 400 });
+      }
+      expect((await get(ROUTES.analytics.keptRegimeDays, `?methodology=v5&before=${ASOF}`, false))!.status).toBe(401);
 
       // Nothing a reader of the main line sees has moved.
       expect(await regimeTable()).toBe(tableBefore);

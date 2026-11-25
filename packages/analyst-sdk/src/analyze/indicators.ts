@@ -9,8 +9,6 @@
 //
 // Sign convention: +1 means "rising raw value = risk-on", -1 means flip.
 // Transform: applied to the raw history before percentile ranking.
-import type { DerivedSeries } from "../transform/derived.ts";
-import type { RegimeVersion } from "./regime-versions.ts";
 
 // #402: the former single maximum age (in days) a forward-filled value could be
 // carried. Since issue 1655 it is the value every registry indicator declares in
@@ -780,9 +778,12 @@ export const PANELS: Panel[] = ALL_PANELS.filter((p) => PANEL_MEMBERSHIP[p] === 
 // INDICATORS is not edited: v5 reads it with VIX scored in the factor panel
 // (VIX, VIX_TERM and SKEW are all read from S&P 500 option prices), plus four
 // derived indicators. Each derived indicator is a DerivedSeries declaration
-// (transform/derived.ts) computed by deriveSeries from raw inputs as known on
-// the day, never from a stored derived series. The publication lag of each is
-// stated once, on its declaration, as a calendar-days rule.
+// (V5_DERIVED_SERIES in transform/derived.ts) computed by deriveSeries from raw
+// inputs as known on the day, never from a stored derived series. The
+// publication lag of each is stated once, on its declaration, as a
+// calendar-days rule. REGIME_REGISTRY (regime-versions.ts) maps each version to
+// its list. This file imports no calculation code, so a reader of the registry
+// (the public analytics routes) reaches none.
 
 /** The input ids the v5 derived series read (extract/collected-series.ts, series-ids.ts). */
 export const V5_INPUT_IDS = Object.freeze({
@@ -801,30 +802,6 @@ export const V5_INPUT_IDS = Object.freeze({
   /** The run's own ^GSPC closes: the backtest input SPX (extras.ts). */
   close: "SPX",
 } as const);
-
-const NEXT_DAY: PublicationRule = { kind: "calendar-days", days: 1 };
-
-/** The four derived series of v5, by indicator id. */
-export const V5_DERIVED_SERIES: readonly DerivedSeries[] = Object.freeze([
-  {
-    op: "rolling-sum-over-known-level",
-    id: "FISCAL",
-    flow: V5_INPUT_IDS.deficit,
-    level: V5_INPUT_IDS.gdp,
-    periods: 12,
-    // The plain in-order sum: the published golden holds it, and a compensated sum differs in the last digit.
-    summation: "plain",
-    negate: true,
-    divisor: 1000,
-    multiplier: 100,
-    // A GDP observation is public 120 calendar days after its date; the result 43 days after the month's date.
-    levelPublication: { kind: "calendar-days", days: 120 },
-    publication: { kind: "calendar-days", days: 43 },
-  },
-  { op: "ratio", id: "VIX_TERM", numerator: V5_INPUT_IDS.vix3m, denominator: V5_INPUT_IDS.vix, publication: NEXT_DAY },
-  { op: "level", id: "SKEW", input: V5_INPUT_IDS.skew, publication: NEXT_DAY },
-  { op: "up-volume-share", id: "UPVOL_SHARE", close: V5_INPUT_IDS.close, volume: V5_INPUT_IDS.volume, window: 20, publication: NEXT_DAY },
-] satisfies DerivedSeries[]);
 
 const DERIVED_FILL_REASON = "Carried forward up to the cap the registry indicators declare";
 
@@ -908,12 +885,6 @@ const V5_DERIVED_INDICATORS: Indicator[] = [
 export const V5_INDICATORS: readonly Indicator[] = Object.freeze(
   validateRatioDeclarations([...INDICATORS.map((ind) => (ind.id === "VIX" ? { ...ind, panel: "factor" as const } : ind)), ...V5_DERIVED_INDICATORS]),
 );
-
-/** The scoring registry of each methodology version (issue 1753). v3 and v4 read INDICATORS itself. */
-export const REGIME_REGISTRY: Readonly<Record<RegimeVersion, readonly Indicator[]>> = Object.freeze({ v3: INDICATORS, v4: INDICATORS, v5: V5_INDICATORS });
-
-/** The derived series each methodology version computes from raw inputs (none for v3 and v4). */
-export const REGIME_DERIVED_SERIES: Readonly<Record<RegimeVersion, readonly DerivedSeries[]>> = Object.freeze({ v3: [], v4: [], v5: V5_DERIVED_SERIES });
 
 export const ROLLING_WINDOW_DAYS = 365 * 3;
 export const COMPOSITE_BUCKETS = { risk_off: 0.33, risk_on: 0.67 };
