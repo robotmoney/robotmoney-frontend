@@ -15,7 +15,7 @@ import { MANIFEST } from "../../lib/deposit/manifest.js";
 import { addrHref, copyAddr } from "../../lib/deposit/addr.js";
 import { buildCancel, buildWithdrawCredit, buildWithdrawExpired, buildGiveNotice, buildTakeBackNotice } from "../../lib/deposit/builder.js";
 import { stageOf, filledOf, outOf, canCancel, canWithdrawExpired, canGiveNotice, canTakeBack, liveRemaining, lockOf, STAGE, IN_FLIGHT } from "../../lib/deposit/stages.js";
-import { timelineOf, summaryOf, inUnit, outUnit, kindLabel, toneOf, cancelledOf, stageHelp, STAGES_TIP } from "../../lib/deposit/describe.js";
+import { timelineOf, pathOf, summaryOf, inUnit, outUnit, kindLabel, toneOf, cancelledOf, stageHelp, STAGES_TIP } from "../../lib/deposit/describe.js";
 import { requestExpiresAt, fmtWhenIn } from "../../lib/deposit/schedule.js";
 import { fmtWhen, fmtFee, shortAddr, shortHash } from "../../lib/deposit/format.js";
 import { DEPOSIT_REQUEST_RE } from "../../routes.js";
@@ -101,6 +101,8 @@ export function registerDepositRequestView(Alpine) {
       return out;
     },
     events() { this.now; return this.r ? timelineOf(this.r, this.now, this.flow()) : []; },
+    /** This request's own stages (pathOf), in place of a single stage chip. */
+    path() { this.now; return this.r ? pathOf(this.r, this.now, this.flow()) : []; },
     // An address links to Basescan and copies in one tap (lib/deposit/addr.js).
     shortAddr, addrHref, copyAddr,
     txs() { return (this.r?.txs || []).map((h, i) => ({ key: i, hash: h, short: shortHash(h), url: !session.simulated && /^0x[0-9a-f]{64}$/i.test(h) ? `${MANIFEST.explorer}/tx/${h}` : null })); },

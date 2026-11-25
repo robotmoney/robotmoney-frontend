@@ -61,7 +61,7 @@
       <!-- The vault -->
       <div class="dp__main">
         <header class="dp__head">
-          <p class="dp__eyebrow"><span class="dp__lbl">Base</span><template x-if="sample()"><span class="dp__tag">Sample data</span></template></p>
+          <p class="dp__eyebrow"><span class="dp__chain"><img :src="BASE_MARK" src="/assets/img/brand/base-square.svg" width="14" height="14" alt=""><span>Base</span></span><template x-if="sample()"><span class="dp__tag">Sample data</span></template></p>
           <!-- The vault is one execution of the model portfolio, not the portfolio itself (David, 25 Nov): it tracks the swarm's mix with what it can hold on Base. -->
           <h1 class="dp__title">Robot Money Vault</h1>
           <p class="dp__lede">A vault on Base that tracks the swarm's model portfolio with the assets it can hold on chain.</p>
@@ -163,7 +163,8 @@
             <div class="dp__walletrow" @click.outside="menuOpen = false">
               <span class="dp__chip dp__chip--wait" x-show="!connected()" aria-hidden="true"><i class="dp__skelinline"></i></span>
               <button type="button" class="dp__chip" x-show="connected()" :aria-expanded="menuOpen ? 'true' : 'false'" aria-haspopup="menu" @click="menuOpen = !menuOpen">
-                <i class="dp__dot" :class="onBase() ? 'is-ok' : 'is-off'" aria-hidden="true"></i><span x-text="short()"></span><span class="dp__muted" x-text="onBase() ? 'Base' : 'Wrong network'"></span>
+                <template x-if="onBase()"><img class="dp__chainmark" :src="BASE_MARK" width="12" height="12" alt=""></template>
+                <template x-if="!onBase()"><i class="dp__dot is-off" aria-hidden="true"></i></template><span x-text="short()"></span><span class="dp__muted" x-text="onBase() ? 'Base' : 'Wrong network'"></span>
                 <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M2 3.5l3 3 3-3"></path></svg>
               </button>
               <div class="dp__menu" role="menu" x-show="menuOpen" x-cloak>

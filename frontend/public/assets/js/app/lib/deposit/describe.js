@@ -75,14 +75,6 @@ export function stageHelp(stage, kind = "deposit", f = null) {
 /** The Stage header's (i): the path every request takes, said once for the column. */
 export const STAGES_TIP = "Deposits: Pending, Filled, Ready to claim, Claimed. Redemptions skip the wait: Pending, Ready to claim, Claimed.";
 
-/** The stages a deposit moves through, in order, for the stage guide on Your position. */
-export const LIFECYCLE = Object.freeze([
-  { stage: STAGE.PENDING, tone: "waiting" },
-  { stage: STAGE.ON_HOLD, tone: "hold" },
-  { stage: STAGE.READY, tone: "ready" },
-  { stage: STAGE.CLAIMED, tone: "off" },
-]);
-
 /**
  * A stage's colour, one vocabulary on every surface (David, 17 Nov 2026: "lets
  * be consistent across the app"): green when it is ready to claim, grey while
@@ -175,6 +167,9 @@ export function timelineOf(r, now, f) {
     ev.push({ at: x.at, what: `Filled ${inUnit(r, x.amountIn)} at ${x.price.toFixed(4)} → ${outUnit(r, x.out)}`, tip: splitOf(r, x), mark: "money" });
     if (dep && !x.claimed && x.unlockAt > now) ev.push({ at: x.unlockAt, what: `${fmtRm(x.out)} ready to claim`, mark: "money", next: true });
   }
+  // Claims carry no time the page can read until the indexer records them, so they close the list without one.
+  const claimed = r.fills.filter((x) => x.claimed).reduce((t, x) => t + x.out, 0);
+  if (claimed > EPS) ev.push({ at: Number.MAX_SAFE_INTEGER, what: `Claimed ${outUnit(r, claimed)}`, mark: "done" });
   if (r.noticeGivenAt) ev.push({ at: r.noticeGivenAt, what: "Notice given", tip: "Unfilled rmFUND comes back after one more batch.", mark: "done" });
   const st = stageOf(r, now, f);
   const left = liveRemaining(r);
@@ -191,6 +186,26 @@ export function timelineOf(r, now, f) {
   return ev
     .sort((a, b) => a.at - b.at)
     .map((e, i) => ({ tip: "", next: false, ...e, key: i, when: e.at === Number.MAX_SAFE_INTEGER || e.at === UNKNOWN_EARLY ? "" : fmtWhen(e.at) }));
+}
+
+/**
+ * The stages this one request moves through, for its own page (David, 25 Nov:
+ * the cycle belongs to the request, not to a guide on Your position). A
+ * deposit has four, a redemption three (no wait). An ending off the path
+ * (cancelled, expired, released, notice and take back) follows Pending in
+ * place of the rest. Each step is done, here or still to come; it informs and
+ * does not move.
+ * @param {any} r @param {number} now @param {any} f
+ * @returns {{ stage: string, state: "done" | "here" | "todo", tone: string, help: string }[]}
+ */
+export function pathOf(r, now, f) {
+  const st = stageOf(r, now, f).stage;
+  const main = r.kind === "deposit" ? [STAGE.PENDING, STAGE.ON_HOLD, STAGE.READY, STAGE.CLAIMED] : [STAGE.PENDING, STAGE.READY, STAGE.CLAIMED];
+  const notice = [STAGE.NOTICE, STAGE.TAKE_BACK, STAGE.RETURNED];
+  const steps = main.includes(st) ? main : notice.includes(st) ? [STAGE.PENDING, ...notice.slice(0, notice.indexOf(st) + 1)].filter((s) => !(s === STAGE.TAKE_BACK && st === STAGE.RETURNED)) : [STAGE.PENDING, st];
+  const at = steps.indexOf(st);
+  const closed = [STAGE.CLAIMED, STAGE.RETURNED].includes(st);
+  return steps.map((s, i) => ({ stage: s, state: i < at || (i === at && closed) ? "done" : i === at ? "here" : "todo", tone: toneOf(s, r), help: stageHelp(s, r.kind, f) }));
 }
 
 /** The sentence under a status page title. @param {any} r @param {number} now @param {any} f */

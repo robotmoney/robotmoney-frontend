@@ -34,6 +34,9 @@
 /* Head and facts */
 .dp__head { display: flex; flex-direction: column; gap: 1rem; }
 .dp__eyebrow { display: flex; gap: 0.625rem; align-items: center; margin: 0; }
+/* The network, named with Base's own mark (its brand guide: unaltered, clear space of 0.3 times its size). */
+.dp__chain { display: inline-flex; align-items: center; gap: 0.5rem; font-family: var(--font-mono); font-size: 0.75rem; letter-spacing: 0.12em; text-transform: uppercase; color: var(--color-text); }
+.dp__chain img, .dp__chainmark { display: block; flex: none; }
 .dp__title { margin: 0; font-family: var(--font-display); font-stretch: var(--font-display-stretch); font-weight: 800; text-transform: uppercase; line-height: 0.95; letter-spacing: -0.01em; font-size: clamp(2.5rem, 6vw, 4rem); }
 .dp__lede { margin: 0; font-size: 1.0625rem; line-height: 1.6; color: var(--color-text-soft); }
 .dp__facts { display: flex; flex-wrap: wrap; gap: 0.75rem 2.5rem; padding: 1.25rem 0; border-top: 1px solid var(--color-border); border-bottom: 1px solid var(--color-border); }
@@ -117,7 +120,10 @@
 .dp__reqrow-r { font-family: var(--font-mono); font-size: 0.75rem; color: var(--color-text-soft); white-space: nowrap; }
 /* The wallet button's place, held while the kit reconnects, so nothing below moves when it lands. */
 .dp__chip--wait { width: 11.5rem; cursor: default; }
-/* The stage guide on Your position: the stages in order, what each means, and where this wallet's requests are. */
+/* A request's own stages on its page (pathOf): done, here, still to come. Static: it informs, it does not move (David, 25 Nov). */
+.dp__fact--path { flex: 1 1 100%; grid-column: 1 / -1; }
+.dp__life--req { max-width: 46rem; }
+.dp__life li .dp__stage i { animation: none; }
 .dp__life { list-style: none; margin: 0; padding: 0; display: flex; align-items: flex-start; }
 .dp__life li { position: relative; flex: 1 1 0; display: flex; flex-direction: column; gap: 0.375rem; min-width: 0; }
 /* The line between one stage and the next fills the room after each name. */
@@ -130,9 +136,6 @@
 .dp__life li.is-done .dp__stage { color: var(--color-text-soft); }
 .dp__tick { flex: none; display: block; color: var(--color-text); }
 .dp__life li.is-here .dp__stage:not(.is-ready) { color: var(--color-text); }
-.dp__life p { margin: 0; font-size: 0.8125rem; line-height: 1.55; color: var(--color-text-muted); }
-.dp__life li.is-here p { color: var(--color-text-soft); }
-.dp__life-n { font-family: var(--font-mono); font-size: 0.6875rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--color-text); }
 @media (max-width: 900px) {
   .dp__life { flex-direction: column; gap: 0.875rem; }
   .dp__life li { flex-direction: row; align-items: baseline; justify-content: space-between; gap: 1rem; width: 100%; }
