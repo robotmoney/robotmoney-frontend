@@ -28,6 +28,11 @@
 //     the methodology version of the newest carrying artifact publish. The
 //     ledger start is the first artifact of that version, so a new version
 //     (v4) restates the served history once, from its first run.
+//   - Regime only, one line (issue 1753, decision D96): the rule above is
+//     applied per line. The main line is the `regime_snapshots` artifacts. A
+//     methodology published beside it (v5) has its own line: the
+//     `regime_beside_snapshots` artifacts of runs stamped with that version.
+//     The rule is the same on both; a line never reads the other's artifacts.
 //
 // The compatibility tables are NOT held to this rule: their writers still
 // upsert the newest run's rows (last write wins), and the parity sweep
@@ -38,6 +43,24 @@ import type { RegimeSnapshotRow } from "../report/regime-projection.ts";
 import { selectPublications, type PublicationCandidate } from "../../../../packages/analyst-sdk/src/report/publication.ts";
 import type { ResearchPayload } from "../analyze/research.ts";
 import { on, registerQuery } from "../../db/registry.ts";
+import { REGIME_ARTIFACT_KIND } from "../output-snapshots.ts";
+import type { KeptRegimeDays } from "../persistence.ts";
+
+// Which regime line a read selects from (issue 1753). The main line: every
+// `regime_snapshots` artifact, one method end to end (the newest carrying
+// artifact's version). A beside line: the `regime_beside_snapshots` artifacts
+// of the runs stamped with `version`.
+export interface RegimeLineSelector {
+  kind: (typeof REGIME_ARTIFACT_KIND)[keyof typeof REGIME_ARTIFACT_KIND];
+  version?: string;
+}
+
+export const MAIN_REGIME_LINE: RegimeLineSelector = Object.freeze({ kind: REGIME_ARTIFACT_KIND.main });
+
+/** The line of a methodology version published beside the main line. */
+export const besideRegimeLine = (version: string): RegimeLineSelector => ({ kind: REGIME_ARTIFACT_KIND.beside, version });
+
+const lineKey = (line: RegimeLineSelector): string => `${line.kind}|${line.version ?? ""}`;
 
 // Registered queries (smoke-production-spec.md §7.1), all reads of the
 // immutable ledgers. Reached from the analytics parity sweep, the admin
@@ -89,8 +112,9 @@ const REGIME_INDEX_PROBE = {
            ((aos.created_at AT TIME ZONE 'UTC')::date)::text AS written_on, m.version_label AS version
       FROM analytics_output_snapshots aos JOIN analytics_ledger_runs r ON r.id = aos.run_id
       JOIN analytics_ledger_methodology_versions m ON m.id = r.methodology_version_id
-     WHERE aos.artifact_kind = 'regime_snapshots'
+     WHERE aos.artifact_kind = $1
      ORDER BY aos.run_id, aos.id`,
+  params: ["regime_snapshots"],
 };
 
 const regimeIndex = registerQuery({
@@ -346,13 +370,17 @@ interface PublicationCache {
   researchLatest: Map<string, { at: string; payload: ResearchPayload }>;
 }
 
-const caches = new WeakMap<object, PublicationCache>();
+// One cache per regime line (issue 1753): the main line's rows are kept only
+// while its own selection serves them, whatever a beside line reads.
+const caches = new WeakMap<object, Map<string, PublicationCache>>();
 
-function cacheFor(db: DbHandle): PublicationCache {
-  let cache = caches.get(db);
+function cacheFor(db: DbHandle, line: RegimeLineSelector = MAIN_REGIME_LINE): PublicationCache {
+  let byLine = caches.get(db);
+  if (!byLine) caches.set(db, (byLine = new Map()));
+  let cache = byLine.get(lineKey(line));
   if (!cache) {
     cache = { regimeCarries: new Map(), regimeBefore: new Map(), regimeRows: new Map(), researchKeys: new Map(), researchLatest: new Map() };
-    caches.set(db, cache);
+    byLine.set(lineKey(line), cache);
   }
   return cache;
 }
@@ -371,13 +399,13 @@ interface RegimePublications {
   byDate: Map<string, RegimeArtifact>;
 }
 
-async function regimePublications(db: DbHandle): Promise<RegimePublications | null> {
-  const cache = cacheFor(db);
+async function regimePublications(db: DbHandle, line: RegimeLineSelector = MAIN_REGIME_LINE): Promise<RegimePublications | null> {
+  const cache = cacheFor(db, line);
   const index = await on(db, regimeIndex, regimeIndexRuns, regimeIndexMethodology)<{ id: string; run_id: string; checksum: string; asof: string; written_on: string; version: string }>`SELECT aos.id::text AS id, aos.run_id::text AS run_id, aos.checksum, r.asof::text AS asof,
            ((aos.created_at AT TIME ZONE 'UTC')::date)::text AS written_on, m.version_label AS version
       FROM analytics_output_snapshots aos JOIN analytics_ledger_runs r ON r.id = aos.run_id
       JOIN analytics_ledger_methodology_versions m ON m.id = r.methodology_version_id
-     WHERE aos.artifact_kind = 'regime_snapshots'
+     WHERE aos.artifact_kind = ${line.kind}
      ORDER BY aos.run_id, aos.id`;
   const shapeKey = (r: { checksum: string; asof: string }) => `${r.checksum}|${r.asof}`;
   const unknown = index.filter((r) => !cache.regimeCarries.has(shapeKey(r)));
@@ -399,8 +427,9 @@ async function regimePublications(db: DbHandle): Promise<RegimePublications | nu
   // carrying artifact's methodology version publish. The first of them is the
   // ledger start for that version, and the days before it are served from it,
   // so a new version restates the history once, in one method.
+  // A beside line (issue 1753) names its version; the main line takes the newest carrying artifact's.
   const carriesRow = index.filter((r) => cache.regimeCarries.get(shapeKey(r)));
-  const method = carriesRow.at(-1)?.version;
+  const method = line.version ?? carriesRow.at(-1)?.version;
   const carrying: RegimeArtifact[] = carriesRow
     .filter((r) => r.version === method)
     .map((r) => ({ key: r.asof, date: r.asof, runId: Number(r.run_id), artifactId: Number(r.id), writtenOn: r.written_on, checksum: r.checksum }));
@@ -442,8 +471,9 @@ async function regimeRows(
   pubs: RegimePublications,
   wanted: { date: string; full: boolean }[],
   keep: Map<string, RegimeSnapshotRow> | null,
+  line: RegimeLineSelector = MAIN_REGIME_LINE,
 ): Promise<RegimeSnapshotRow[]> {
-  const cache = cacheFor(db);
+  const cache = cacheFor(db, line);
   const sourceOf = (date: string) => (date < pubs.first.date ? pubs.first : pubs.byDate.get(date)!);
   const rowKey = (w: { date: string; full: boolean }) => `${sourceOf(w.date).checksum}|${w.date}|${w.full ? "full" : "lean"}`;
   const missing = new Map<string, { artifact: RegimeArtifact; dates: Set<string> }>();
@@ -484,8 +514,8 @@ function publishedDays(pubs: RegimePublications): string[] {
  * before the ledger start and, from it, each day a run's own as-of row
  * published. A gap is absent. Reads no payload once the artifacts are known.
  */
-export async function ledgerPublishedRegimeDays(db: DbHandle = sql): Promise<string[]> {
-  const pubs = await regimePublications(db);
+export async function ledgerPublishedRegimeDays(db: DbHandle = sql, line: RegimeLineSelector = MAIN_REGIME_LINE): Promise<string[]> {
+  const pubs = await regimePublications(db, line);
   return pubs ? publishedDays(pubs) : [];
 }
 
@@ -494,13 +524,38 @@ export async function ledgerPublishedRegimeDays(db: DbHandle = sql): Promise<str
  * audits and tests; the endpoint reads ledgerPublishedRegimeHistory, which
  * caches and leaves the heavy blobs off past days.
  */
-export async function ledgerCurrentRegimeSnapshots(db: DbHandle = sql): Promise<RegimeSnapshotRow[]> {
-  const pubs = await regimePublications(db);
+export async function ledgerCurrentRegimeSnapshots(db: DbHandle = sql, line: RegimeLineSelector = MAIN_REGIME_LINE): Promise<RegimeSnapshotRow[]> {
+  const pubs = await regimePublications(db, line);
   if (!pubs) return [];
-  return regimeRows(db, pubs, publishedDays(pubs).map((date) => ({ date, full: true })), null);
+  return regimeRows(db, pubs, publishedDays(pubs).map((date) => ({ date, full: true })), null, line);
 }
 
-const inFlight = new WeakMap<object, { today: string; work: Promise<RegimeSnapshotRow[] | null> }>();
+/**
+ * The kept days of a methodology published beside the main line (issue 1753),
+ * dated before `before`: each published day's date and three panel indices,
+ * and the artifacts they came from, in publication order. This is the
+ * published line itself (D83), rows without a label included, so a run
+ * rebuilds the record every reader is served from. Rows are cached lean, so a
+ * run parses only the artifacts published since the last read.
+ */
+export async function ledgerKeptRegimeDays(version: string, before: string, db: DbHandle = sql): Promise<KeptRegimeDays> {
+  const line = besideRegimeLine(version);
+  const pubs = await regimePublications(db, line);
+  if (!pubs) return { days: [], artifactIds: [] };
+  const dates = publishedDays(pubs).filter((d) => d < before);
+  const rows = await regimeRows(db, pubs, dates.map((date) => ({ date, full: false })), cacheFor(db, line).regimeRows, line);
+  const artifactIds: string[] = [];
+  for (const row of rows) {
+    const id = String((row.date < pubs.first.date ? pubs.first : pubs.byDate.get(row.date)!).artifactId);
+    if (artifactIds.at(-1) !== id) artifactIds.push(id);
+  }
+  return {
+    days: rows.map((r) => ({ date: r.date, macroIndex: r.macroIndex ?? null, onchainIndex: r.onchainIndex ?? null, factorIndex: r.factorIndex ?? null })),
+    artifactIds,
+  };
+}
+
+const inFlight = new WeakMap<object, Map<string, { today: string; work: Promise<RegimeSnapshotRow[] | null> }>>();
 
 /**
  * The served regime history (D83): every published day up to `today`, oldest
@@ -510,24 +565,27 @@ const inFlight = new WeakMap<object, { today: string; work: Promise<RegimeSnapsh
  * caller can fall back to the compatibility table on a database no run has
  * written. Cached across requests (see PublicationCache).
  */
-export function ledgerPublishedRegimeHistory(today: string, db: DbHandle = sql): Promise<RegimeSnapshotRow[] | null> {
+export function ledgerPublishedRegimeHistory(today: string, db: DbHandle = sql, line: RegimeLineSelector = MAIN_REGIME_LINE): Promise<RegimeSnapshotRow[] | null> {
   // Single flight: a request that arrives while the same read is running
   // shares its answer, so concurrent first requests after a deploy parse the
-  // payloads once, not once each.
-  const running = inFlight.get(db);
+  // payloads once, not once each. One flight per line (issue 1753).
+  let flights = inFlight.get(db);
+  if (!flights) inFlight.set(db, (flights = new Map()));
+  const key = lineKey(line);
+  const running = flights.get(key);
   if (running && running.today === today) return running.work;
   const work = (async () => {
-    const pubs = await regimePublications(db);
+    const pubs = await regimePublications(db, line);
     if (!pubs) return null;
     const days = publishedDays(pubs).filter((d) => d <= today);
     const keep = new Map<string, RegimeSnapshotRow>();
-    const rows = await regimeRows(db, pubs, days.map((date, i) => ({ date, full: i === days.length - 1 })), keep);
-    cacheFor(db).regimeRows = keep;
+    const rows = await regimeRows(db, pubs, days.map((date, i) => ({ date, full: i === days.length - 1 })), keep, line);
+    cacheFor(db, line).regimeRows = keep;
     return rows;
   })().finally(() => {
-    if (inFlight.get(db)?.work === work) inFlight.delete(db);
+    if (flights.get(key)?.work === work) flights.delete(key);
   });
-  inFlight.set(db, { today, work });
+  flights.set(key, { today, work });
   return work;
 }
 

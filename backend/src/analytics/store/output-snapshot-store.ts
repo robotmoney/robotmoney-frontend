@@ -12,7 +12,41 @@ import {
 } from "../output-snapshots.ts";
 import { saveRegimeSnapshots } from "./regime-store.ts";
 import { persistResearchSignal } from "./research-store.ts";
-import { loadRunAsof } from "./run-ledger-store.ts";
+import { loadRunAsof, loadRunMethodologyLabel } from "./run-ledger-store.ts";
+import { REGIME_LINE, isRegimeVersion, type RegimeLine } from "../analyze/regime-versions.ts";
+
+// Issue 1753: the line a run's regime rows are published on, from the run's
+// own methodology label (REGIME_LINE), never from the client. A label this
+// build does not know is the main line, as every run was before.
+export function regimeLineOf(methodologyLabel: string | null): RegimeLine {
+  return isRegimeVersion(methodologyLabel) ? REGIME_LINE[methodologyLabel] : "main";
+}
+
+// The artifacts of one terminal package, in insert order. A succeeded run on
+// the main line freezes its regime rows as `regime_snapshots`, as before. A
+// succeeded run of a methodology published beside it (v5) freezes them as
+// `regime_beside_snapshots`, and its `regime_snapshots` artifact is the empty
+// list, so every reader of the main line sees nothing of it.
+function packageArtifacts(input: TerminalRunPackageInput, line: RegimeLine): [OutputArtifactKind, readonly unknown[]][] {
+  if (input.status !== "succeeded") {
+    return [
+      ["warnings", input.warnings ?? []],
+      ["logs", input.logs ?? []],
+      ["exceptions", input.exceptions ?? []],
+    ];
+  }
+  if (line === "beside") {
+    return [
+      ["regime_snapshots", []],
+      ["regime_beside_snapshots", input.regimeSnapshots ?? []],
+      ["research_signals", input.researchSignals ?? []],
+    ];
+  }
+  return [
+    ["regime_snapshots", input.regimeSnapshots ?? []],
+    ["research_signals", input.researchSignals ?? []],
+  ];
+}
 
 // Thrown when a terminal run package's `asof` disagrees with the `asof`
 // already recorded on its run header (analytics_ledger_runs, issue #977) —
@@ -138,18 +172,10 @@ export interface OutputSnapshotRecord {
 export async function insertOutputSnapshots(
   input: TerminalRunPackageInput,
   tx: DbHandle,
+  // The line of the run's methodology (issue 1753). Default: the main line.
+  line: RegimeLine = "main",
 ): Promise<OutputSnapshotRecord[]> {
-  const kinds: [OutputArtifactKind, readonly unknown[]][] =
-    input.status === "succeeded"
-      ? [
-          ["regime_snapshots", input.regimeSnapshots ?? []],
-          ["research_signals", input.researchSignals ?? []],
-        ]
-      : [
-          ["warnings", input.warnings ?? []],
-          ["logs", input.logs ?? []],
-          ["exceptions", input.exceptions ?? []],
-        ];
+  const kinds = packageArtifacts(input, line);
   const out: OutputSnapshotRecord[] = [];
   for (const [kind, rows] of kinds) {
     const artifact = buildOutputArtifact(kind, rows);
@@ -180,8 +206,10 @@ export async function insertReportSnapshot(input: TerminalRunPackageInput, tx: D
 // transaction as the immutable insert above. Never called for a failed
 // package (issue #978 AC2: current projection rows must be untouched by a
 // failed run).
-export async function applyCurrentProjections(input: TerminalRunPackageInput, tx: DbHandle): Promise<void> {
-  await saveRegimeSnapshots(input.regimeSnapshots ?? [], tx);
+// Issue 1753: the rows of a run published beside the main line are NOT
+// written to regime_snapshots; that table holds the main line only.
+export async function applyCurrentProjections(input: TerminalRunPackageInput, tx: DbHandle, line: RegimeLine = "main"): Promise<void> {
+  if (line === "main") await saveRegimeSnapshots(input.regimeSnapshots ?? [], tx);
   for (const s of input.researchSignals ?? []) {
     await persistResearchSignal(s.key, s.date, s.payload, tx);
   }
@@ -222,18 +250,8 @@ export async function findPackageByRun(runId: string, db: DbHandle = sql): Promi
 // already stored (assertReplayMatches below). Exactly the same
 // kind-selection `insertOutputSnapshots` uses, kept in sync by construction
 // (both read `input.status` the same way) rather than duplicated by hand.
-function expectedArtifactChecksums(input: TerminalRunPackageInput): Record<OutputArtifactKind, string> {
-  const kinds: [OutputArtifactKind, readonly unknown[]][] =
-    input.status === "succeeded"
-      ? [
-          ["regime_snapshots", input.regimeSnapshots ?? []],
-          ["research_signals", input.researchSignals ?? []],
-        ]
-      : [
-          ["warnings", input.warnings ?? []],
-          ["logs", input.logs ?? []],
-          ["exceptions", input.exceptions ?? []],
-        ];
+function expectedArtifactChecksums(input: TerminalRunPackageInput, line: RegimeLine): Record<OutputArtifactKind, string> {
+  const kinds = packageArtifacts(input, line);
   const out = {} as Record<OutputArtifactKind, string>;
   for (const [kind, rows] of kinds) out[kind] = buildOutputArtifact(kind, rows).checksum;
   return out;
@@ -248,9 +266,10 @@ function expectedArtifactChecksums(input: TerminalRunPackageInput): Record<Outpu
 async function assertReplayMatches(
   input: TerminalRunPackageInput,
   stored: TerminalRunPackageResult,
+  line: RegimeLine,
   db: DbHandle = sql,
 ): Promise<TerminalRunPackageResult> {
-  const expected = expectedArtifactChecksums(input);
+  const expected = expectedArtifactChecksums(input, line);
   const expectedKinds = Object.keys(expected).sort();
   const storedKinds = stored.outputSnapshots.map((o) => o.artifactKind).sort();
   const kindsMatch = expectedKinds.length === storedKinds.length && expectedKinds.every((k, i) => k === storedKinds[i]);
@@ -291,15 +310,18 @@ export async function submitTerminalRunPackage(input: TerminalRunPackageInput): 
   if (recordedAsof !== null && recordedAsof !== input.asof) {
     throw new RunAsofMismatchError(input.runId, input.asof, recordedAsof);
   }
+  // Issue 1753: the run's methodology label picks the line, and so the
+  // artifact kind of its regime rows. Read from the run header, never sent.
+  const line = regimeLineOf(await loadRunMethodologyLabel(input.runId));
   const existing = await findPackageByRun(input.runId);
-  if (existing) return await assertReplayMatches(input, existing);
+  if (existing) return await assertReplayMatches(input, existing, line);
   try {
     return await sql.begin(async (tx) => {
-      const outputSnapshots = await insertOutputSnapshots(input, tx);
+      const outputSnapshots = await insertOutputSnapshots(input, tx, line);
       let reportSnapshotId: string | null = null;
       if (input.status === "succeeded") {
         reportSnapshotId = await insertReportSnapshot(input, tx);
-        await applyCurrentProjections(input, tx);
+        await applyCurrentProjections(input, tx, line);
       }
       return { outputSnapshots, reportSnapshotId, replayed: false };
     });
@@ -309,7 +331,7 @@ export async function submitTerminalRunPackage(input: TerminalRunPackageInput): 
       const replay = await findPackageByRun(input.runId);
       /* istanbul ignore next -- a 23505 on this unique key means a row now exists; a miss here would be a bug, not a runtime case */
       if (!replay) throw err;
-      return await assertReplayMatches(input, replay);
+      return await assertReplayMatches(input, replay, line);
     }
     throw err;
   }

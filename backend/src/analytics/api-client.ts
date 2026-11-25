@@ -16,6 +16,7 @@ import type {
   AnalyticsPersistence,
   CommittedInputs,
   FloorSeedResult,
+  KeptRegimeDays,
   BeginRunResult,
   FreezeVintageResult,
   TerminalRunPackageResult,
@@ -166,9 +167,14 @@ export function analyticsApiClient(cfg: AnalyticsApiConfig = resolveAnalyticsApi
     async saveSourceAcquisition(acquisition) {
       return await call<SaveSourceAcquisitionResult>("POST", ROUTES.analytics.sourceAcquisitions, { acquisition });
     },
-    async loadCommittedInputs(marketTimeCutoff: string, knownBy?: string) {
+    async loadCommittedInputs(marketTimeCutoff: string, knownBy?: string, methodology?: string) {
       const known = knownBy === undefined ? "" : `&knownBy=${encodeURIComponent(knownBy)}`;
-      return await call<CommittedInputs>("GET", `${ROUTES.analytics.committedInputs}?asof=${encodeURIComponent(marketTimeCutoff)}${known}`);
+      // Issue 1753: named only by a run of a methodology that reads more than the main line.
+      const method = methodology === undefined ? "" : `&methodology=${encodeURIComponent(methodology)}`;
+      return await call<CommittedInputs>("GET", `${ROUTES.analytics.committedInputs}?asof=${encodeURIComponent(marketTimeCutoff)}${known}${method}`);
+    },
+    async loadKeptRegimeDays(methodology: string, before: string) {
+      return await call<KeptRegimeDays>("GET", `${ROUTES.analytics.keptRegimeDays}?methodology=${encodeURIComponent(methodology)}&before=${encodeURIComponent(before)}`);
     },
     async loadRawHistory() {
       const { history } = await call<{ history: RawIndicatorHistory }>("GET", ROUTES.analytics.rawHistory);

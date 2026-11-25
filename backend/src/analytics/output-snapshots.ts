@@ -16,7 +16,15 @@ import { canonicalArtifactBytes, canonicalStringify } from "../../../packages/an
 import type { RegimeSnapshotRow } from "./report/regime-projection.ts";
 import type { ResearchPayload } from "./analyze/research.ts";
 
-export type OutputArtifactKind = "regime_snapshots" | "research_signals" | "warnings" | "logs" | "exceptions";
+// `regime_beside_snapshots` (issue 1753, migration 0136): the regime rows of a
+// run whose methodology is published beside the main line (REGIME_LINE, v5).
+// The API picks the kind from the run's methodology label, never the client:
+// such a run's `regime_snapshots` artifact is the empty list, and its rows
+// are not written to the regime_snapshots table.
+export type OutputArtifactKind = "regime_snapshots" | "regime_beside_snapshots" | "research_signals" | "warnings" | "logs" | "exceptions";
+
+/** The artifact kind the regime rows of a methodology line are frozen under. */
+export const REGIME_ARTIFACT_KIND = { main: "regime_snapshots", beside: "regime_beside_snapshots" } as const satisfies Record<string, OutputArtifactKind>;
 
 export interface ResearchSignalArtifact {
   key: string;

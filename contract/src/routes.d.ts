@@ -171,6 +171,7 @@ export const ROUTES: {
     vintages: string;
     vintage: string;
     committedInputs: string;
+    keptRegimeDays: string;
     runPackage: string;
     reportSnapshot: string;
     paritySweep: string;

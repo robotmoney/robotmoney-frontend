@@ -53,6 +53,9 @@ export const ROUTES = {
   },
 
   dashboards: {
+    // &methodology=<version> (issue 1753) serves that methodology's line: the
+    // main line for v3 or v4, the line published beside it for v5. Absent, the
+    // main line, byte for byte as before. An unknown value is a 400.
     regimeSnapshots: "/api/dashboards/regime-snapshots", // GET ?range=
     researchSignal: "/api/dashboards/research-signals/:key", // GET
     vaultEconomics: "/api/dashboards/vault-economics", // GET
@@ -503,7 +506,17 @@ export const ROUTES = {
     // heads of every storage key the regime reads, dated on or before asof.
     // The run computes from these, records the same cutoff on its vintage and
     // sends their versionIds as POST vintages' regimeVersionIds.
+    // Issue 1753: &methodology=<version> reads the storage keys of that
+    // methodology version. Absent, the main-line regime keys, as before; v5
+    // adds the five collected keys its derived indicators read.
     committedInputs: "/api/analytics/committed-inputs",
+    // GET ?methodology=<version>&before=YYYY-MM-DD — issue 1753: the kept days
+    // of a methodology published beside the main line (v5), dated before
+    // `before`: each published day's date and three panel indices, and the ids
+    // of the frozen artifacts they came from. A run of that methodology reads
+    // them, computes only its own day, and names the artifacts in its report.
+    // 400 for a version that is not published beside the main line.
+    keptRegimeDays: "/api/analytics/kept-regime-days",
     // Issue #978: freeze analytics outputs and report snapshots — the next
     // layer above the run header. One terminal package per runId (idempotent,
     // same shape as beginRun): a SUCCEEDED package's complete regime-snapshot

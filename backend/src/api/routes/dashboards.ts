@@ -3,6 +3,7 @@
 // only parse/clamp request params and forward. API paths, DTOs, and response
 // shapes are unchanged.
 import { fetchRegimeSnapshots, fetchLatestResearchSignal, toRegimeSummary } from "../../analytics/report/projections.ts";
+import { REGIME_VERSIONS, isRegimeVersion, type RegimeVersion } from "../../analytics/analyze/regime-versions.ts";
 import { fetchVaultEconomics } from "../../chain/vault-economics.ts";
 import { fetchPersistedWalletBalances } from "../../chain/wallet-balances-store.ts";
 // Live-data contract (#50 honesty): each chain/db module owns its own short-TTL
@@ -65,13 +66,30 @@ export async function getWalletBalances() {
   return fetchPersistedWalletBalances();
 }
 
+// ?methodology=<version> (issue 1753): the line of one methodology version.
+// Absent, the main line, as before. Any value outside REGIME_VERSIONS is a
+// 400 that names the allowed values (regimeMethodologyError, checked by the
+// router before either handler below runs).
+function regimeMethodology(url: URL): RegimeVersion | undefined {
+  const v = url.searchParams.get("methodology");
+  return isRegimeVersion(v) ? v : undefined;
+}
+
+/** The 400 body for a `methodology` parameter that names no methodology version; null when it is absent or valid. */
+export function regimeMethodologyError(url: URL): { error: string; allowed: readonly string[] } | null {
+  const v = url.searchParams.get("methodology");
+  if (v === null || isRegimeVersion(v)) return null;
+  return { error: `methodology must be one of ${REGIME_VERSIONS.join(", ")}`, allowed: [...REGIME_VERSIONS] };
+}
+
 // GET /api/dashboards/regime-snapshots?range=<n days> → { latest, history }
 export async function getRegimeSnapshots(url: URL) {
   const n = Math.trunc(Number(url.searchParams.get("range") ?? 180));
   const range = Number.isFinite(n) ? Math.min(3650, Math.max(1, n)) : 180;
   const includeBacktest = (url.searchParams.get("include") ?? "")
     .split(",").map((s) => s.trim()).includes("backtest");
-  return fetchRegimeSnapshots(range, includeBacktest);
+  const methodology = regimeMethodology(url);
+  return methodology === undefined ? fetchRegimeSnapshots(range, includeBacktest) : fetchRegimeSnapshots(range, includeBacktest, methodology);
 }
 
 // GET /api/dashboards/regime-snapshots?view=summary → today's classifier read
@@ -82,9 +100,15 @@ export async function getRegimeSnapshots(url: URL) {
 // (issue #866c). Ignores `range`: `latest` is always history's last row
 // regardless of range, so this queries range=1 rather than paying for history
 // it would only discard.
-export async function getRegimeSnapshotsSummary() {
-  const full = await fetchRegimeSnapshots(1);
-  return { summary: toRegimeSummary(full.latest, full.staleness) };
+export async function getRegimeSnapshotsSummary(url?: URL) {
+  const methodology = url ? regimeMethodology(url) : undefined;
+  if (methodology === undefined) {
+    const full = await fetchRegimeSnapshots(1);
+    return { summary: toRegimeSummary(full.latest, full.staleness) };
+  }
+  // Issue 1753: the summary of the methodology's own line, which the response names.
+  const full = await fetchRegimeSnapshots(1, false, methodology);
+  return { summary: toRegimeSummary(full.latest, full.staleness), methodology };
 }
 
 // GET /api/dashboards/buybacks → token buyback history (ROBOTMONEY Transfer logs

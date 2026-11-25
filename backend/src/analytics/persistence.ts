@@ -32,6 +32,16 @@ export interface CommittedInputs {
   values: { versionId: string; sourceKey: string; marketDate: string; value: number }[];
 }
 
+// Issue 1753: the published line of a methodology that keeps its history
+// (REGIME_KEPT_HISTORY, v5), before a run's as-of day: each kept day's date and
+// three panel indices, and the frozen artifacts they were read from, in
+// publication order (cutover/ledger-current.ts ledgerKeptRegimeDays).
+export interface KeptRegimeDays {
+  days: { date: string; macroIndex: number | null; onchainIndex: number | null; factorIndex: number | null }[];
+  /** The ids of the analytics_output_snapshots artifacts the days came from: the run's report names them. */
+  artifactIds: string[];
+}
+
 export interface BeginRunResult {
   runId: string;
   methodologyVersionId: string;
@@ -110,7 +120,14 @@ export interface AnalyticsPersistence {
   // persistence without a source ledger has nothing to read.
   // Issue 1733: `knownBy`, for a replay of a past as-of day, reads each value
   // known by the end of that day (store/run-ledger-store.ts).
-  loadCommittedInputs?(marketTimeCutoff: string, knownBy?: string): Promise<CommittedInputs>;
+  // Issue 1753: `methodology` names the version whose storage keys are read.
+  // Absent, the main-line regime keys, as before; "v5" adds the five collected
+  // keys its derived indicators read.
+  loadCommittedInputs?(marketTimeCutoff: string, knownBy?: string, methodology?: string): Promise<CommittedInputs>;
+  // Issue 1753: the kept days of a methodology published beside the main line,
+  // dated before `before`. A run of such a methodology cannot start without
+  // it: a missing read is an error, never an empty record.
+  loadKeptRegimeDays?(methodology: string, before: string): Promise<KeptRegimeDays>;
   // Read the whole persisted raw floor, grouped by indicator, sorted by date.
   loadRawHistory(): Promise<RawIndicatorHistory>;
   // Upsert merged raw history on (date, indicator); fetched wins on overlap
