@@ -180,6 +180,11 @@ function parseSnapshotRow(v: unknown, i: number): RegimeSnapshotRow | Invalid {
     if (v[k] != null && !isPlainObject(v[k])) return invalid(`snapshots[${i}].${k} must be an object or null`);
   }
   // Rebuild the row explicitly (never pass unknown client fields through).
+  // Issue 1765 (D-f): bucketThresholds and extras are carried only when the
+  // sender sent them (an explicit null stays null). No row builder sets them,
+  // and canonicalStringify keeps a null key, so adding them here made the HTTP
+  // path freeze different artifact bytes than the direct path. Every reader
+  // treats a missing key as null (store/regime-store.ts, report/projections.ts).
   return {
     date: v.date,
     composite: (v.composite ?? null) as number | null,
@@ -200,10 +205,10 @@ function parseSnapshotRow(v: unknown, i: number): RegimeSnapshotRow | Invalid {
     percentiles: v.percentiles as Record<string, number>,
     indicators: v.indicators as JsonValue[],
     panels: (v.panels ?? null) as readonly string[] | null,
-    bucketThresholds: v.bucketThresholds ?? null,
+    ...(Object.hasOwn(v, "bucketThresholds") ? { bucketThresholds: v.bucketThresholds ?? null } : {}),
     backtest: v.backtest ?? null,
     correlations: v.correlations ?? null,
-    extras: v.extras ?? null,
+    ...(Object.hasOwn(v, "extras") ? { extras: v.extras ?? null } : {}),
   };
 }
 
