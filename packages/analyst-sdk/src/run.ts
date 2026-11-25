@@ -11,10 +11,10 @@ import { ALL_PANELS, DAY_RULE, DAY_RULES, INDICATORS, PANELS, type DayRule, type
 import { computeRegime, type RegimeComputeResult } from "./analyze/compute.ts";
 import { computeCorrelations, type CorrelationsPayload } from "./analyze/correlations.ts";
 import { computeBacktest, stripDailyFromSnapshot, type BacktestPayload } from "./analyze/backtest.ts";
-import { CURRENT_REGIME_VERSION, REGIME_VERSIONS, isRegimeVersion, type RegimeVersion } from "./analyze/regime-versions.ts";
+import { CURRENT_REGIME_VERSION, REGIME_RULES, REGIME_VERSIONS, isRegimeVersion, type RegimeVersion } from "./analyze/regime-versions.ts";
 import { cutAtAsof, latestCompleteDay, missingOnDay, prepareRegimeInputs, type MissingIndicator } from "./prepare.ts";
 import { LEDGER_EXTRA_KEYS } from "./extras.ts";
-import { resolveInputHistory } from "./series-ids.ts";
+import { StoredRatioOnlyError, resolveInputHistory } from "./series-ids.ts";
 import { ratioDeclarationsFor, ratiosFromLegs } from "./transform/ratios.ts";
 import { assertRequiredCoverage } from "./coverage.ts";
 
@@ -41,6 +41,10 @@ export interface RunResult {
   factor?: RegimeComputeResult;
   correlations?: CorrelationsPayload;
   backtest?: BacktestPayload;
+  // Coverage entry (issue 1751): the id of each ratio declared ratioInput
+  // "legs" that the run dropped (weight 0) because the input carries its stored
+  // ratio and neither selected leg. Empty when none was dropped.
+  droppedRatios: string[];
 }
 
 // The as-of day is not complete (issue 1655): some indicator has neither a
@@ -98,7 +102,18 @@ export interface RunOptions {
   // collected series (extract/collected-series.ts) with its scoring fields
   // scores it, with no edit to the registry.
   indicators?: readonly Indicator[];
+  // The in-sample end of the backtest (issue 1751). "current-version" (the
+  // default, decision D94 item 3): the adoption date of the current
+  // methodology version. "computed-version": the adoption date of `version`.
+  inSampleEnd?: InSampleEnd;
+  // A ratio declared ratioInput "legs" whose input carries only the stored
+  // ratio (issue 1751). "drop" (the default): it gets no weight and is listed
+  // in droppedRatios. "error": the run throws StoredRatioOnlyError naming it.
+  storedOnlyRatio?: StoredOnlyRatio;
 }
+
+export type InSampleEnd = "current-version" | "computed-version";
+export type StoredOnlyRatio = "drop" | "error";
 
 // A real calendar date in YYYY-MM-DD form (rejects 2026-02-30, 2026-13-45, "").
 function assertIsoDate(name: string, v: string): void {
@@ -106,7 +121,7 @@ function assertIsoDate(name: string, v: string): void {
   if (!ok) throw new RangeError(`${name} must be a real date in YYYY-MM-DD form, got ${JSON.stringify(v)}`);
 }
 
-const KNOWN_OPTIONS: readonly string[] = ["start", "asof", "factor", "version", "dayRule", "indicators", "panels"];
+const KNOWN_OPTIONS: readonly string[] = ["start", "asof", "factor", "version", "dayRule", "indicators", "panels", "inSampleEnd", "storedOnlyRatio"];
 
 export function runRegime(input: RawIndicatorHistory, opts: RunOptions = {}): RunOutcome {
   // An option this version does not know is an error, never silently ignored
@@ -136,7 +151,19 @@ export function runRegime(input: RawIndicatorHistory, opts: RunOptions = {}): Ru
   }
   // Input names (input id, storage key or source id, D74) -> the ids read
   // below, and each ratio the input does not store from its legs (4.3).
-  const rawIn = ratiosFromLegs(input, resolveInputHistory(input), ratioDeclarationsFor(version));
+  const inSampleEnd = opts.inSampleEnd ?? "current-version";
+  if (inSampleEnd !== "current-version" && inSampleEnd !== "computed-version") {
+    throw new RangeError(`inSampleEnd must be "current-version" or "computed-version", got ${JSON.stringify(opts.inSampleEnd)}`);
+  }
+  const storedOnlyRatio = opts.storedOnlyRatio ?? "drop";
+  if (storedOnlyRatio !== "drop" && storedOnlyRatio !== "error") {
+    throw new RangeError(`storedOnlyRatio must be "drop" or "error", got ${JSON.stringify(opts.storedOnlyRatio)}`);
+  }
+  const droppedRatios: string[] = [];
+  const rawIn = ratiosFromLegs(input, resolveInputHistory(input), ratioDeclarationsFor(version), (id) => {
+    if (storedOnlyRatio === "error") throw new StoredRatioOnlyError(id);
+    droppedRatios.push(id);
+  });
   const start = opts.start ?? BACKFILL_START;
   let asof = opts.asof;
   assertIsoDate("start", start);
@@ -200,14 +227,17 @@ export function runRegime(input: RawIndicatorHistory, opts: RunOptions = {}): Ru
   // global-cap mask too, which leaves a policy-masked series unchanged.
   const { dateAxis, transformed, ages, carried } = prepareRegimeInputs(raw, { start, asof, indicators, version });
   const result = computeRegime(transformed, dateAxis, [...panels], ages, undefined, version, undefined, indicators, undefined, carried);
-  const out: RunResult = { kind: "complete", version, dateAxis, result };
+  const out: RunResult = { kind: "complete", version, dateAxis, result, droppedRatios };
   if (opts.factor) out.factor = computeRegime(transformed, dateAxis, ALL_PANELS, ages, undefined, version, undefined, indicators, undefined, carried);
   const spx: Point[] | undefined = raw[EXTRA_IDS.spx];
   const eth: Point[] | undefined = raw[EXTRA_IDS.eth];
   const tbill3m: Point[] | undefined = raw[EXTRA_IDS.tbill3m];
   if (spx?.length && eth?.length) {
     out.correlations = computeCorrelations(dateAxis, result, { spx, eth });
-    if (tbill3m?.length) out.backtest = stripDailyFromSnapshot(computeBacktest(dateAxis, result, { spx, eth, tbill3m }));
+    // The default passes no splitDate: computeBacktest's own default, the
+    // current version's adoption date.
+    const split = inSampleEnd === "computed-version" ? { splitDate: REGIME_RULES[version].adoptionDate } : {};
+    if (tbill3m?.length) out.backtest = stripDailyFromSnapshot(computeBacktest(dateAxis, result, { spx, eth, tbill3m }, split));
   }
   return out;
 }

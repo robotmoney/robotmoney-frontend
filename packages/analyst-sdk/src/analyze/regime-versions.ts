@@ -145,3 +145,68 @@ export function adoptionDate(version: string): string {
   if (typeof d !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(d)) throw new AdoptionDateError(version);
   return d;
 }
+
+/**
+ * What a label is cut on (issue 1751): `series` is the composite or panel index
+ * itself (v4, issue 1652), `percentile` its rolling percentile over the
+ * percentile lookback (v3).
+ */
+export type LabelCut = "series" | "percentile";
+export const REGIME_LABEL_CUT: Readonly<Record<RegimeVersion, LabelCut>> = Object.freeze({ v3: "percentile", v4: "series" });
+
+/**
+ * Every rule of the engine, stated as one object (issue 1751). A caller passes
+ * its own `rules` to prepareRegimeInputs, knowledgeTimeHistory,
+ * latestCompleteDay, missingOnDay, computeRegime and regimeLabels to change one
+ * rule; without it they read REGIME_RULES of the version.
+ */
+export interface RegimeRules {
+  /** Dating rule: read each value from the day it was published (REGIME_KNOWLEDGE_TIME). */
+  knowledgeTime: boolean;
+  /** Window counting: an `exchange` series counts its own observation days (REGIME_OBSERVATION_WINDOWS). */
+  observationWindows: boolean;
+  /** The weight refit calendar (REGIME_WEIGHT_REFRESH). */
+  weightRefresh: WeightRefresh;
+  /** The composite on a day an included panel has no index (REGIME_MISSING_PANEL). */
+  missingPanel: MissingPanelRule;
+  /** What each label is cut on (REGIME_LABEL_CUT). */
+  labelCut: LabelCut;
+  /** The rank, weight and percentile windows (REGIME_LOOKBACK). */
+  lookback: RegimeLookback;
+  /** The in-sample end of a backtest of these rules (REGIME_ADOPTION_DATE). */
+  adoptionDate: string;
+}
+
+const rulesOfVersion = (v: RegimeVersion): RegimeRules =>
+  Object.freeze({
+    knowledgeTime: REGIME_KNOWLEDGE_TIME[v],
+    observationWindows: REGIME_OBSERVATION_WINDOWS[v],
+    weightRefresh: REGIME_WEIGHT_REFRESH[v],
+    missingPanel: REGIME_MISSING_PANEL[v],
+    labelCut: REGIME_LABEL_CUT[v],
+    lookback: REGIME_LOOKBACK[v],
+    adoptionDate: adoptionDate(v),
+  });
+
+/** The named presets: the rules of each methodology version, built from the per-version tables. */
+export const REGIME_RULES: Readonly<Record<RegimeVersion, RegimeRules>> = Object.freeze({ v3: rulesOfVersion("v3"), v4: rulesOfVersion("v4") });
+
+/**
+ * The rules in force: `rules` when given (checked, a RangeError names a bad
+ * field), else the preset of `version` (default the current version).
+ */
+export function regimeRulesOf(version: RegimeVersion = CURRENT_REGIME_VERSION, rules?: RegimeRules): RegimeRules {
+  if (rules === undefined) return REGIME_RULES[version];
+  if (rules === null || typeof rules !== "object") throw new RangeError("rules must be a RegimeRules object");
+  if (typeof rules.knowledgeTime !== "boolean") throw new RangeError(`rules.knowledgeTime must be a boolean, got ${JSON.stringify(rules.knowledgeTime)}`);
+  if (typeof rules.observationWindows !== "boolean") throw new RangeError(`rules.observationWindows must be a boolean, got ${JSON.stringify(rules.observationWindows)}`);
+  if (rules.missingPanel !== "rebase" && rules.missingPanel !== "nan") throw new RangeError(`rules.missingPanel must be "rebase" or "nan", got ${JSON.stringify(rules.missingPanel)}`);
+  if (rules.labelCut !== "series" && rules.labelCut !== "percentile") throw new RangeError(`rules.labelCut must be "series" or "percentile", got ${JSON.stringify(rules.labelCut)}`);
+  const r = rules.weightRefresh;
+  if (r === null || typeof r !== "object" || !Number.isInteger(r.intervalDays) || r.intervalDays <= 0 || typeof r.anchor !== "string" || typeof r.refitOnLastDay !== "boolean") {
+    throw new RangeError(`rules.weightRefresh must be { intervalDays, anchor, refitOnLastDay }, got ${JSON.stringify(r)}`);
+  }
+  if (rules.lookback === null || typeof rules.lookback !== "object") throw new RangeError("rules.lookback is missing");
+  if (typeof rules.adoptionDate !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(rules.adoptionDate)) throw new RangeError(`rules.adoptionDate must be a YYYY-MM-DD date, got ${JSON.stringify(rules.adoptionDate)}`);
+  return rules;
+}

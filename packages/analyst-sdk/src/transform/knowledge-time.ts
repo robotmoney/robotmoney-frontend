@@ -36,10 +36,11 @@ export interface KnownPoint extends Point {
   period: string;
 }
 
-// Raised when a series has no valid publication rule. Names it.
+// Raised when a series has no valid publication rule. Names it. publishedOn has
+// no series id, so it names the rule kind there instead (issue 1751).
 export class PublicationRuleError extends Error {
   constructor(readonly seriesId: string, detail: string) {
-    super(`series ${seriesId}: ${detail} (declare publication as same-day, business-days, next-weekday or months-later)`);
+    super(`series ${seriesId}: ${detail} (declare publication as same-day, business-days, next-weekday, months-later or calendar-days)`);
     this.name = "PublicationRuleError";
   }
 }
@@ -56,6 +57,7 @@ export function publicationRuleOf(s: { id: string; publication?: unknown }): Pub
     return { kind: "next-weekday", weekday: p.weekday };
   }
   if (p.kind === "months-later" && positiveInt(p.months)) return { kind: "months-later", months: p.months as number };
+  if (p.kind === "calendar-days" && positiveInt(p.days)) return { kind: "calendar-days", days: p.days as number };
   throw new PublicationRuleError(s.id, `malformed publication rule ${JSON.stringify(p)}`);
 }
 
@@ -88,6 +90,12 @@ export function publishedOn(period: string, rule: PublicationRule): string {
       const d = new Date(t);
       return toDay(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + rule.months, 1));
     }
+    case "calendar-days":
+      // A direct call skips publicationRuleOf, so the count is checked here too.
+      if (!positiveInt(rule.days)) {
+        throw new PublicationRuleError("(calendar-days rule)", `days must be a positive integer, got ${JSON.stringify(rule.days)}`);
+      }
+      return toDay(t + rule.days * DAY_MS);
   }
 }
 

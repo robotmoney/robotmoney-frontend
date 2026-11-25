@@ -10,10 +10,10 @@ import { INDICATORS, InvalidRatioCloseError, validateRatioDeclarations, type Ind
 import { configureHttp } from "../src/extract/http.ts";
 import { createFetchMemo, fetchAll, registryYahooPlan } from "../src/extract/sources.ts";
 import { fetchYahoo } from "../src/extract/yahoo.ts";
-import { MissingRatioLegError, RATIO_IDS, resolveInputHistory } from "../src/series-ids.ts";
+import { MissingRatioLegError, RATIO_IDS, RATIO_LEG_KEYS, StoredRatioOnlyError, resolveInputHistory } from "../src/series-ids.ts";
 import { mergeRatioSeries } from "../src/transform/grid.ts";
 import { ratioDeclarationsFor, ratiosFromLegs } from "../src/transform/ratios.ts";
-import { requireComplete, runRegime } from "../src/run.ts";
+import { buildReport, requireComplete, runRegime } from "../src/run.ts";
 import type { RawIndicatorHistory } from "../src/types.ts";
 import { fixture } from "./support/ratio-legs.ts";
 
@@ -116,4 +116,46 @@ test("non-vacuity: the factor run's composite series with IWM_SPY from its raw l
   const shipped = composite(fixture);
   expect(shipped.filter(Number.isFinite).length).toBeGreaterThan(100);
   expect(composite({ ...fixture, IWM_SPY: fromRaw })).not.toEqual(shipped);
+}, 120_000);
+
+// Issue 1751, gap 10: under v4 the six equity ratios are calculated from their
+// raw-close legs. An input that stores only the finished ratios (an archive run
+// before 2026-11-17) loses all six; the run now says so in droppedRatios, and
+// throws only when asked to.
+test("v4 over stored-only equity ratios lists exactly the six in droppedRatios and reports as 0.8.0; storedOnlyRatio error throws naming the first; an input with legs drops none", () => {
+  const storedOnly: RawIndicatorHistory = Object.fromEntries(Object.entries(fixture).filter(([k]) => !RATIO_LEG_KEYS.has(k)));
+  for (const id of EQUITY) expect(storedOnly[id]!.length).toBeGreaterThan(100);
+  expect(Object.keys(storedOnly).some((k) => k.startsWith("yahoo:"))).toBe(false);
+
+  const run = requireComplete(runRegime(storedOnly, { factor: true }));
+  expect([...run.droppedRatios].sort()).toEqual(EQUITY);
+  // 0.8.0 dropped the six in silence: the report is the one of an input without them.
+  const without: RawIndicatorHistory = Object.fromEntries(Object.entries(storedOnly).filter(([k]) => !EQUITY.includes(k)));
+  const silent = requireComplete(runRegime(without, { factor: true }));
+  expect(silent.droppedRatios).toEqual([]);
+  expect(JSON.stringify(buildReport(run, { full: true }))).toBe(JSON.stringify(buildReport(silent, { full: true })));
+  for (const id of EQUITY) expect(run.factor!.weightsByPanel.factor![id]).toBe(0);
+  expect("droppedRatios" in buildReport(run)).toBe(false);
+  // "drop" spelled out is the default, and the default never throws for this input.
+  expect(requireComplete(runRegime(storedOnly, { factor: true, storedOnlyRatio: "drop" }))).toEqual(run);
+
+  const call = () => runRegime(storedOnly, { storedOnlyRatio: "error" });
+  expect(call).toThrow(StoredRatioOnlyError);
+  const first = INDICATORS.find((i) => EQUITY.includes(i.id))!.id;
+  let err: unknown;
+  try {
+    call();
+  } catch (e) {
+    err = e;
+  }
+  expect((err as StoredRatioOnlyError).ratio).toBe(first);
+  expect((err as Error).message).toContain(first);
+
+  // The fixture carries the raw-close legs: nothing is dropped, under either setting.
+  const withLegs = requireComplete(runRegime(fixture, { factor: true }));
+  expect(withLegs.droppedRatios).toEqual([]);
+  expect(requireComplete(runRegime(fixture, { factor: true, storedOnlyRatio: "error" }))).toEqual(withLegs);
+  for (const id of EQUITY) expect(withLegs.factor!.weightsByPanel.factor![id]).toBeGreaterThan(0);
+  // v3 reads every ratio stored, so it drops none from the stored-only input.
+  expect(requireComplete(runRegime(storedOnly, { version: "v3", storedOnlyRatio: "error" })).droppedRatios).toEqual([]);
 }, 120_000);

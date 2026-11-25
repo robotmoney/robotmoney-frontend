@@ -12,6 +12,8 @@ import { gunzipSync, gzipSync } from "node:zlib";
 import { openBackupsDir, collectRunInputs as binCollectRunInputs } from "../bin/backups-dir.ts";
 import * as binExports from "../bin/backups-dir.ts";
 import * as sdkIndex from "../src/index.ts";
+import { runVintageMembers } from "../src/archive/reader.ts";
+import { RunInputCollector, type RunInputs } from "../src/archive/format1.ts";
 import { ArchiveError, INPUT_TABLES, collectRunInputs, openArchive, selectBackups, type ArchiveFiles, type Archive, type ArchiveRow as Row } from "../src/index.ts";
 
 const ARCHIVE = join(import.meta.dir, "fixtures/archive");
@@ -503,6 +505,102 @@ describe("files are decoded as strict UTF-8 with no byte order mark", () => {
     }
   });
   const good = () => "1,backtest:^GSPC,2026-01-02,,100\n";
+});
+
+// ── Issue 1751 (gap 9): collectRunInputs reads only the run's vintage members ──
+
+describe("collectRunInputs reads the vintage members one file at a time (issue 1751)", () => {
+  const MEMBERS = "analytics_vintage_members";
+  // collectRunInputs as 0.8.0 shipped it, frozen: the whole member table through table().
+  const collect080 = (archive: Archive, runKey: string): RunInputs => {
+    const collector = new RunInputCollector(runKey, {
+      runs: archive.table("analytics_ledger_runs"),
+      methodologies: archive.table("analytics_ledger_methodology_versions"),
+      vintages: archive.table("analytics_data_vintages"),
+      members: archive.table("analytics_vintage_members"),
+    });
+    const vfiles = archive.files("source_value_versions");
+    archive.versions().forEach((rows, i) => collector.addVersions(rows, `${archive.root.replace(/\/+$/, "")}/${vfiles[i]!.path}`));
+    return collector.finish();
+  };
+  // An archive whose table() refuses the member table.
+  const noMemberTable = (archive: Archive): Archive => ({
+    ...archive,
+    table: (name) => {
+      if (name === MEMBERS) throw new Error(`table(${MEMBERS}) was called`);
+      return archive.table(name);
+    },
+  });
+  const outcome = (f: () => RunInputs) => {
+    try {
+      return { inputs: f() };
+    } catch (e) {
+      return { error: `${(e as Error).name}: ${(e as Error).message}` };
+    }
+  };
+  const open = (name: string) => openArchive(memoryFiles(loadTree(join(ARCHIVE, name)), join(ARCHIVE, name)));
+  const runKeys = (name: string) => open(name).table("analytics_ledger_runs").map((r) => r.run_key!);
+
+  for (const name of COPIES) {
+    test(`${name}: every run's RunInputs equal the 0.8.0 result, and table(${MEMBERS}) is never called`, () => {
+      let collected = 0;
+      for (const key of runKeys(name)) {
+        const now = outcome(() => collectRunInputs(noMemberTable(open(name)), key));
+        expect(now, key).toEqual(outcome(() => collect080(open(name), key)));
+        if ("inputs" in now) collected++;
+      }
+      // revised holds no run ledger; every other copy has a run that collects
+      expect(collected > 0, name).toBe(name !== "revised");
+    });
+  }
+
+  test("the fixture's two runs collect, and the wrapping archive does throw on the 0.8.0 path", () => {
+    const keys = runKeys("repo-plus-increment");
+    for (const key of Object.keys(FACTS.runs)) {
+      expect(keys).toContain(key);
+      expect(collectRunInputs(noMemberTable(open("repo-plus-increment")), key).run.memberCount).toBe(FACTS.runs[key].members);
+    }
+    expect(() => collect080(noMemberTable(open("repo-plus-increment")), keys[0]!)).toThrow(`table(${MEMBERS}) was called`);
+  });
+
+  test("RunInputCollector is handed only the rows of the run's vintage, in the table's order", () => {
+    let handed = 0;
+    for (const name of COPIES) {
+      const archive = open(name);
+      const all = open(name).table(MEMBERS);
+      for (const run of archive.table("analytics_ledger_runs")) {
+        const vintages = archive.table("analytics_data_vintages").filter((v) => v.run_id === run.id);
+        if (vintages.length !== 1) continue;
+        const members = runVintageMembers(noMemberTable(archive), run.run_key!);
+        expect(members.length).toBeGreaterThan(0);
+        expect(members.every((m) => m.vintage_id === vintages[0]!.id)).toBe(true);
+        expect(members).toEqual(all.filter((m) => m.vintage_id === vintages[0]!.id));
+        expect(members.length).toBeLessThan(all.length); // the copy holds other vintages' rows too
+        handed++;
+      }
+    }
+    expect(handed).toBeGreaterThan(1);
+    expect(runVintageMembers(open("repo-plus-increment"), "no-such-run")).toEqual([]);
+  });
+
+  test("the member files are read one at a time and never kept: scanRows hands out fresh rows, table() still memoizes", () => {
+    const files = countingFiles(loadTree(join(ARCHIVE, "repo-plus-increment")));
+    const archive = openArchive(files);
+    const memberFiles = archive.files(MEMBERS);
+    expect(memberFiles.length).toBeGreaterThan(1);
+    const key = Object.keys(FACTS.runs)[0]!;
+    const memberReads = () => files.reads.filter((p) => tableOfPath(p) === MEMBERS);
+    const first = collectRunInputs(archive, key);
+    expect(memberReads()).toEqual(memberFiles.map((f) => f.path));
+    // nothing was kept: a second run reads each member file again, and returns the same
+    expect(collectRunInputs(archive, key)).toEqual(first);
+    expect(memberReads()).toEqual([...memberFiles, ...memberFiles].map((f) => f.path));
+    const a = archive.scanRows(memberFiles[0]!);
+    expect(archive.scanRows(memberFiles[0]!)).not.toBe(a);
+    expect(archive.scanRows(memberFiles[0]!)).toEqual(a);
+    expect(archive.readRows(memberFiles[0]!)).toBe(archive.readRows(memberFiles[0]!));
+    expect(archive.table(MEMBERS)).toBe(archive.table(MEMBERS));
+  });
 });
 
 describe("the retired reader names are gone", () => {

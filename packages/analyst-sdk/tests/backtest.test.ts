@@ -37,8 +37,12 @@ import {
   SparseSeriesError,
   stripDailyFromSnapshot,
   type BacktestExtras,
+  type MarketCalendar,
+  type ReferenceBacktestOptions,
   type Schedule,
+  type SimulateOptions,
 } from "../src/analyze/backtest.ts";
+import { periodicRate } from "../src/transform/exact.ts";
 import { computeBacktest as originalBacktest } from "./reference/backtest-pre-refactor.ts";
 import type { RegimeComputeResult } from "../src/analyze/compute.ts";
 import { buildReport, parseRawHistory, runRegime as runRegimeOutcome, requireComplete, toHistory } from "../src/index.ts";
@@ -644,5 +648,213 @@ describe("Sharpe, cash basis, costs and daily series (issue 1734)", () => {
     const early = periodStats(sim.values, sim.startDate, sim.endDate, { returns: sim.returns, excess: sim.excess, splitDate: "2020-01-01" });
     expect(early.in_sample.n_days).toBe(0);
     expect(early.in_sample.cagr).toBeNull();
+  });
+});
+
+// Issue 1751, gaps 1 and 2: the cash basis, the Sharpe basis, and the reference
+// backtest passing its options to every line of the grid.
+describe("cash basis, Sharpe basis and reference backtest options (issue 1751)", () => {
+  const axis = axisOf(30);
+  const q = 5.25;
+  const tbill = pts(axis, axis.map(() => q));
+  const allCash: Schedule = axis.map(() => ({ cash: 1 }));
+  const compound = (r: number) => exactCompound(axis.slice(1).map(() => r));
+  const asYield = periodicRate(q / 100, 365);
+  const asDiscount = periodicRate(discountToYield(q) / 100, 365);
+
+  test("cashBasis yield compounds the quote as a yearly yield; discount and no option convert it first, as 0.8.0", () => {
+    expect(asYield).not.toBe(asDiscount);
+    // Held from the same close, so the book earns cash on every later axis day.
+    const run = (o?: SimulateOptions) => simulateWithDefaults(axis, allCash, {}, tbill, { lagSessions: 0, ...o });
+    const end = (o?: SimulateOptions) => run(o).values.at(-1)!.value;
+    expect(end({ cashBasis: "yield" })).toBe(compound(asYield));
+    expect(end({ cashBasis: "yield" })).toBeCloseTo((1 + asYield) ** (axis.length - 1), 14);
+    expect(run({ cashBasis: "yield" }).returns.every((r) => r.value === asYield)).toBe(true);
+    expect(end({ cashBasis: "discount" })).toBe(compound(asDiscount));
+    expect(end()).toBe(compound(asDiscount));
+    expect(run({ cashBasis: "discount" })).toEqual(run());
+    expect(run().returns.every((r) => r.value === asDiscount)).toBe(true);
+  });
+
+  test("a cashBasis outside discount and yield, and an unknown option key, are RangeErrors naming them", () => {
+    const bad = (o: unknown, field: RegExp) => {
+      const call = () => simulateWithDefaults(axis, allCash, {}, tbill, o as SimulateOptions);
+      expect(call).toThrow(RangeError);
+      expect(call).toThrow(field);
+    };
+    bad({ cashBasis: "other" }, /cashBasis/);
+    bad({ cashbasis: "yield" }, /cashbasis/);
+    bad({ sharpeBasis: "returns" }, /sharpeBasis/);
+  });
+
+  // The Sharpe the test computes from the simulator's pre-cost `returns` dated
+  // in (lo, hi]: the annualised (365) mean over the sample standard deviation.
+  const returnsSharpe = (sim: { returns: Point[] }, lo: string, hi: string) =>
+    exactSharpe(sim.returns.filter((p) => p.date > lo && p.date <= hi).map((p) => p.value), 365);
+
+  test("periodStats sharpeBasis returns reads the simulator's pre-cost returns, for the whole window and each sample block", () => {
+    const A = pts(axis, axis.map((_, i) => 100 + i + 3 * Math.sin(i)));
+    const sched: Schedule = axis.map((_, i): Record<string, number> => (i % 9 < 4 ? { cash: 1 } : { cash: 0.5, A: 0.5 }));
+    const sim = simulateWithDefaults(axis, sched, { A }, tbill, { lagSessions: 0 });
+    expect(sim.trades.length).toBeGreaterThan(2);
+    expect(Object.keys(sim).sort()).toEqual(["endDate", "excess", "returns", "startDate", "trades", "values"]);
+    const splitDate = axis[14]!;
+    const base = { returns: sim.returns, excess: sim.excess, trades: sim.trades, splitDate };
+    const stats = (o: object) => periodStats(sim.values, sim.startDate, sim.endDate, { ...base, ...o });
+    const byReturns = stats({ sharpeBasis: "returns" });
+    expect(byReturns.sharpe).toBe(returnsSharpe(sim, sim.startDate, sim.endDate));
+    expect(byReturns.in_sample.sharpe).toBe(returnsSharpe(sim, sim.startDate, splitDate));
+    expect(byReturns.out_of_sample.sharpe).toBe(returnsSharpe(sim, splitDate, sim.endDate));
+    expect(byReturns.in_sample.n_days).toBeGreaterThan(2);
+    expect(byReturns.out_of_sample.n_days).toBeGreaterThan(2);
+    // With a trade the pre-cost returns score differently from the default's.
+    const byExcess = stats({});
+    expect(byReturns.sharpe).not.toBe(byExcess.sharpe);
+    expect(byReturns.in_sample.sharpe).not.toBe(byExcess.in_sample.sharpe);
+    expect(byReturns.out_of_sample.sharpe).not.toBe(byExcess.out_of_sample.sharpe);
+    // The same number as the 0.7.0 workaround of passing the returns as `excess`.
+    expect(byReturns).toEqual(periodStats(sim.values, sim.startDate, sim.endDate, { ...base, excess: sim.returns }));
+    expect(stats({ sharpeBasis: "excess" })).toEqual(byExcess);
+    // Only the Sharpe figures move.
+    const { sharpe: _s, in_sample: _i, out_of_sample: _o, ...restReturns } = byReturns;
+    const { sharpe: _s2, in_sample: _i2, out_of_sample: _o2, ...restDefault } = byExcess;
+    expect(restReturns).toEqual(restDefault);
+    expect(() => stats({ sharpeBasis: "other" })).toThrow(RangeError);
+    expect(() => stats({ sharpeBasis: "other" })).toThrow(/sharpeBasis/);
+    expect(() => stats({ sharpe: "returns" })).toThrow(/unknown option "sharpe"/);
+    expect(() => stats({ net: sim.returns })).toThrow(/unknown option "net"/);
+  });
+
+  test("an all-cash book over a varying cash rate scores a Sharpe that is not 0 under returns and exactly 0 under excess", () => {
+    const moving = pts(axis, axis.map((_, i) => 4 + 0.05 * (i % 7)));
+    const sim = simulateWithDefaults(axis, allCash, {}, moving);
+    const base = { returns: sim.returns, excess: sim.excess, trades: sim.trades, splitDate: axis[14]! };
+    const byReturns = periodStats(sim.values, sim.startDate, sim.endDate, { ...base, sharpeBasis: "returns" });
+    expect(byReturns.sharpe).not.toBe(0);
+    expect(byReturns.sharpe).toBe(returnsSharpe(sim, sim.startDate, sim.endDate));
+    expect(byReturns.in_sample.sharpe).not.toBe(0);
+    expect(byReturns.out_of_sample.sharpe).not.toBe(0);
+    for (const st of [periodStats(sim.values, sim.startDate, sim.endDate, { ...base, sharpeBasis: "excess" }), periodStats(sim.values, sim.startDate, sim.endDate, base)]) {
+      expect(st.sharpe).toBe(0);
+      expect(st.in_sample.sharpe).toBe(0);
+      expect(st.out_of_sample.sharpe).toBe(0);
+    }
+  });
+
+  describe("the reference grid", () => {
+    const raw = toHistory(parseRawHistory(readFileSync(join(DIR, "fixtures/raw-indicator-history.csv"), "utf8")));
+    const extras: BacktestExtras = { spx: raw.SPX!, eth: raw.ETH!, tbill3m: raw.TBILL3M! };
+    const run = runRegime(raw);
+    const shipped = computeBacktest(run.dateAxis, run.result, extras);
+
+    // Every line of every market through simulatePortfolio and periodStats
+    // called directly with the options, on the schedules computeBacktest builds.
+    function direct(options: ReferenceBacktestOptions & { calendars: Record<string, MarketCalendar> }) {
+      const { dateAxis } = run;
+      const price: Record<string, Point[]> = { eth: extras.eth, sp500: extras.spx };
+      const strategies = referenceStrategies(run.result);
+      const out: Record<string, Record<string, unknown>> = {};
+      const sims: Record<string, Record<string, ReturnType<typeof simulateWithDefaults>>> = {};
+      for (const [pKey, spec] of Object.entries(PORTFOLIO_SPECS)) {
+        const prices: Record<string, Point[]> = {};
+        const calendars: Record<string, MarketCalendar> = {};
+        for (const a of spec.risky) {
+          prices[a] = price[a]!;
+          calendars[a] = options.calendars[a]!;
+        }
+        const priced = dateAxis.findIndex((_, i) => spec.risky.every((a) => price[a]!.some((p) => p.date <= dateAxis[i]! && Number.isFinite(p.value))));
+        const schedules: Record<string, Schedule> = {};
+        for (const [name, labels] of Object.entries(strategies)) schedules[name] = scheduleFromLabels(labels, spec.weights);
+        const start = Math.max(-1, ...Object.values(schedules).map((s) => s.findIndex((w, i) => i >= priced && w != null)));
+        schedules[spec.hodl.key] = dateAxis.map(() => spec.hodl.weights);
+        schedules.stables_only = dateAxis.map(() => ({ cash: 1 }));
+        const port: Record<string, unknown> = {};
+        sims[pKey] = {};
+        for (const [name, s] of Object.entries(schedules)) {
+          const sim = simulateWithDefaults(dateAxis, start < 0 ? s : s.map((w, i) => (i < start ? null : w)), prices, extras.tbill3m, {
+            lagSessions: options.lagSessions,
+            calendars,
+            cashBasis: options.cashBasis,
+          });
+          port[name] = periodStats(sim.values, sim.startDate, sim.endDate, {
+            returns: sim.returns,
+            excess: sim.excess,
+            trades: sim.trades,
+            ...(options.splitDate === undefined ? {} : { splitDate: options.splitDate }),
+            ...(options.sharpeBasis === undefined ? {} : { sharpeBasis: options.sharpeBasis }),
+          });
+          sims[pKey]![name] = sim;
+        }
+        out[pKey] = port;
+      }
+      return { out, sims };
+    }
+
+    test("computeBacktest with lagSessions 0, calendars and cashBasis yield equals periodStats over simulatePortfolio called directly, for every market and line", () => {
+      const options = { lagSessions: 0, calendars: { eth: "continuous", sp500: "weekdays" } as Record<string, MarketCalendar>, cashBasis: "yield" as const };
+      const got = computeBacktest(run.dateAxis, run.result, extras, options);
+      const want = direct(options).out;
+      expect(Object.keys(got)).toEqual(["eth", "sp500", "mixed"]);
+      for (const m of Object.keys(got)) expect(Object.keys(got[m]!)).toEqual(Object.keys(shipped[m]!));
+      expect(JSON.stringify(got)).toBe(JSON.stringify(want));
+      // Each option changes the output, so the comparison is not vacuous.
+      expect(got).not.toEqual(shipped);
+      expect(computeBacktest(run.dateAxis, run.result, extras, { cashBasis: "yield" })).not.toEqual(shipped);
+      expect(computeBacktest(run.dateAxis, run.result, extras, { lagSessions: 0 })).not.toEqual(shipped);
+      expect(computeBacktest(run.dateAxis, run.result, extras, { calendars: { eth: "continuous", sp500: "continuous" } })).not.toEqual(shipped);
+    });
+
+    test("sharpeBasis returns reaches every line: each Sharpe is the one of that line's pre-cost returns, whole window and each block", () => {
+      // A split every line straddles: halfway between the latest line start and the end.
+      const latestStart = Object.values(shipped).flatMap((port) => Object.values(port).map((l) => l.start_date)).sort().at(-1)!;
+      const splitDate = run.dateAxis[Math.floor((run.dateAxis.indexOf(latestStart) + run.dateAxis.length - 1) / 2)]!;
+      const options = { splitDate, lagSessions: 1, calendars: { ...REFERENCE_CALENDARS }, sharpeBasis: "returns" as const };
+      const got = computeBacktest(run.dateAxis, run.result, extras, options);
+      const { out, sims } = direct(options);
+      expect(JSON.stringify(got)).toBe(JSON.stringify(out));
+      const byExcess = computeBacktest(run.dateAxis, run.result, extras, { splitDate });
+      let lines = 0;
+      for (const m of Object.keys(got)) {
+        for (const [name, line] of Object.entries(got[m]!)) {
+          const sim = sims[m]![name]!;
+          expect(line.sharpe).toBe(returnsSharpe(sim, sim.startDate, sim.endDate));
+          expect(line.in_sample.sharpe).toBe(returnsSharpe(sim, sim.startDate, splitDate));
+          expect(line.out_of_sample.sharpe).toBe(returnsSharpe(sim, splitDate, sim.endDate));
+          expect(line.in_sample.n_days).toBeGreaterThan(2);
+          expect(line.out_of_sample.n_days).toBeGreaterThan(2);
+          // A line that trades scores differently from the default basis.
+          if (line.transitions > 0) expect(line.sharpe).not.toBe(byExcess[m]![name]!.sharpe);
+          lines++;
+        }
+      }
+      expect(lines).toBe(Object.values(shipped).reduce((n, port) => n + Object.keys(port).length, 0));
+      expect(got.eth!.composite!.transitions).toBeGreaterThan(0);
+      // All cash over the fixture's varying T-bill rate.
+      expect(got.eth!.stables_only!.sharpe).not.toBe(0);
+      expect(byExcess.eth!.stables_only!.sharpe).toBe(0);
+      expect(shipped.eth!.stables_only!.sharpe).toBe(0);
+    });
+
+    test("with no options, and with the defaults spelled out, the payload is the 0.8.0 one", () => {
+      // No options, an empty object, and the defaults spelled out are one payload: the golden's.
+      expect(computeBacktest(run.dateAxis, run.result, extras, {})).toEqual(shipped);
+      expect(computeBacktest(run.dateAxis, run.result, extras, { lagSessions: 1, calendars: { ...REFERENCE_CALENDARS }, cashBasis: "discount", sharpeBasis: "excess" })).toEqual(shipped);
+      expect(computeBacktestWithFill(run.dateAxis, run.result, extras, REFERENCE_FILL_POLICIES, { cashBasis: "yield" })).toEqual(computeBacktest(run.dateAxis, run.result, extras, { cashBasis: "yield" }));
+      expect(computeBacktestWithFill(run.dateAxis, run.result, extras, REFERENCE_FILL_POLICIES, { sharpeBasis: "returns" })).toEqual(computeBacktest(run.dateAxis, run.result, extras, { sharpeBasis: "returns" }));
+    });
+
+    test("an unknown reference option, calendar asset or basis is a RangeError naming it", () => {
+      const bad = (o: unknown, field: RegExp) => {
+        const call = () => computeBacktest(run.dateAxis, run.result, extras, o as ReferenceBacktestOptions);
+        expect(call).toThrow(RangeError);
+        expect(call).toThrow(field);
+      };
+      bad({ lag: 0 }, /unknown option "lag"/);
+      bad({ calendars: { spx: "weekdays" } }, /"spx"/);
+      bad({ calendars: { eth: "sometimes" } }, /calendar for "eth"/);
+      bad({ cashBasis: "other" }, /cashBasis/);
+      bad({ sharpeBasis: "other" }, /sharpeBasis/);
+      bad({ lagSessions: -1 }, /lagSessions/);
+    });
   });
 });
