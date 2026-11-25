@@ -268,6 +268,7 @@ bun run regime my-history.csv --start 2018-01-01                   # first day o
 bun run regime my-history.csv --asof 2026-10-05                    # last day of the date axis
 bun run regime my-history.csv --factor                             # also report the factor panel
 bun run regime my-history.csv --replay --methodology v3            # replay a run published under v3
+bun run regime my-history.csv --methodology v5                     # the methodology published beside the main line
 bun test                                                           # package tests, every HTTP client is a thrower
 bunx tsc --noEmit                                                  # typecheck
 ```
@@ -283,7 +284,7 @@ Options (CLI flag, or the `runRegime(raw, opts)` field):
 | `dayRule` | what to do with a day that is not complete (see "Fill policy, day rule and day close"). Default `DAY_RULE`, `"score-newest"`: the day given, or the newest date, as above. `"require-complete"`: without `asof` the latest complete day; with an incomplete `asof`, `runRegime` returns `{ kind: "incomplete", asof, missing: [{ id, lastObserved }] }` and no figure. |
 | `--factor` / `factor: true` | also run production's second `computeRegime` call (macro, onchain, factor) and report `factor` (`index`, `percentile`, `regime`, `weights` for the last day, plus a per-day `series` with `--full`). The factor panel is display-only in production, so `composite`, `compositePercentile` and the labels stay the two-panel ones and match the published table. |
 | `--replay` | accept the historical replay contract (`parseInput(text, { replay: true })`). |
-| `--methodology V` / `version` | the regime methodology version to compute, `v3` or `v4`. Default `CURRENT_REGIME_VERSION` (`v4`). `v4` cuts the regime label on the composite and each panel label on its panel index; `v3` cut them on the 3y rolling percentile of that series. A published run replays under the version it was stamped with, e.g. `--replay --methodology v3` for a run published before v4 (issue 1652, decision D84). `compositePercentile` and the panel percentiles are the same under both and are information only. |
+| `--methodology V` / `version` | the regime methodology version to compute, `v3`, `v4` or `v5`. Default `CURRENT_REGIME_VERSION` (`v4`). `v5` is the methodology published beside the main line (see "Methodology v5"); it walks every day forward from this input. `v4` cuts the regime label on the composite and each panel label on its panel index; `v3` cut them on the 3y rolling percentile of that series. A published run replays under the version it was stamped with, e.g. `--replay --methodology v3` for a run published before v4 (issue 1652, decision D84). `compositePercentile` and the panel percentiles are the same under both and are information only. |
 | required data | at least one composite panel (macro, on-chain) needs a registry indicator with a row on or before the as-of day, or `runRegime` throws the named `CoverageError` (the CLI exits 1). It never fetches to fill the gap. Optional inputs give a missing result instead: without `SPX` and `ETH`, `correlations` and `backtest` are `null`; without `TBILL3M`, `backtest` is `null`; without factor indicators, the `factor` figures are `null`. |
 | `lookback` (`computeRegime` only) | the rank, weight and percentile lookback windows, `{ rank, weight, percentile }`. Each window is `{ kind: "trailing", days: N }` (the trailing `N` days, `N` a positive integer) or `{ kind: "inception" }` (all history from day 0 of the date axis). Default `REGIME_LOOKBACK[version]`, the version's declared value: the trailing 1095 days for every window under both `v3` and `v4`. An invalid window throws `RangeError` naming it. `runRegime` and the CLI have no lookback option, so a published run always uses its version's declaration (issue 1659). |
 | `--provenance` | print `{pinned, manifest, report}` instead of the bare report; see the quickstart. The report inside is unchanged. |
@@ -723,6 +724,57 @@ stored artifact's canonical JSON), `rowToSnapshot`, `forHistory` and `shapeRegim
 `Archive.scanRows` and keeps only the rows of the run's vintage, so the whole table is
 never held in memory.
 
+### Methodology v5: a model published beside the main line
+
+`v5` (issue 1753, decision D96) is a second regime methodology. The platform computes
+and publishes it beside the served one. `CURRENT_REGIME_VERSION` stays `v4`, and
+`REGIME_LINE` says which line a version is on: `v3` and `v4` `main`, `v5` `beside`.
+
+- **Rules.** `REGIME_RULES.v5`: values read by period date, calendar-day windows that
+  count carried days, weights refit every day, the composite mean taken over the panels
+  present, and the composite ranked within every kept mean to date
+  (`compositeNormalisation: "percentile"` with an `inception` percentile lookback). Each
+  day is computed on the day and kept (`keptHistory: true`). Both fields are absent on
+  the `v3` and `v4` presets.
+- **Registry.** `REGIME_REGISTRY.v5` (`V5_INDICATORS`) has 30 indicators: `INDICATORS`
+  with VIX scored in the factor panel, plus `FISCAL`, `VIX_TERM`, `SKEW` and
+  `UPVOL_SHARE`. Each of the four is a `DerivedSeries` declaration (`V5_DERIVED_SERIES`).
+  `INDICATORS` itself is unchanged.
+- **Inputs.** The four read five raw series, named by `V5_INPUT_IDS`:
+  `FED_SURPLUS_MONTHLY` (`fred:MTSDS133FMS`), `US_GDP` (`fred:GDP`), `CBOE_VIX3M`
+  (`yahoo:^VIX3M`), `CBOE_SKEW` (`yahoo:^SKEW`) and `SPX_VOLUME` (`yahoo:^GSPC.volume`).
+  An input may name each by its id, its storage key or its source id. `VIX_TERM` divides
+  by the `VIX` series unless the input names `VIX_TERM_DENOMINATOR`. A missing series
+  leaves its indicator missing with weight 0.
+- **Kept record.** `computeKeptRegime(raw, { asof, start, kept })` is one run. With no
+  kept day it walks forward from `start`, fitting each day on that day. With kept days it
+  computes only `asof`. `keptRegimeRows` gives the rows the run publishes. The building
+  blocks are exported too: `withDerivedSeries`, `scoreDays`, `fitDay`, `keptDayOf`,
+  `walkForward` and `deriveKeptRecord`.
+- **Backtest.** `REGIME_BACKTEST_RULES` holds the reference backtest options of each
+  version. The `v3` and `v4` rows are `computeBacktest`'s defaults. The `v5` row is the
+  rule set its golden was published with: `lagSessions` 0, `continuous` calendars,
+  `cashBasis` `"yield"`, `sharpeBasis` `"returns"` and a split on 2024-01-31. Its
+  results are hypothetical.
+
+```ts
+import { REGIME_BACKTEST_RULES, buildReport, requireComplete, runRegime } from "@robotmoney/analyst-sdk";
+
+// A v5 run of one input: every day from the axis start, each computed from that day's inputs.
+const run = requireComplete(runRegime(raw, { version: "v5" }));
+const report = buildReport(run); // 30 indicators; compositePercentile is NaN (null in JSON)
+REGIME_BACKTEST_RULES.v5; // { splitDate: "2024-01-31", lagSessions: 0, calendars: { eth: "continuous", sp500: "continuous" }, cashBasis: "yield", sharpeBasis: "returns" }
+```
+
+`tests/regime-v5-golden.test.ts` reproduces the downstream golden of this model byte
+for byte (3,124 days, SHA-256 `03b9633d...`) from the committed fixture
+`tests/fixtures/lex-equity-golden/`. `scripts/lex-golden-fixture.ts` rebuilds the
+fixture's `runs.json.gz` from a local csv-backups folder:
+
+```sh
+RM_CSV_BACKUPS_DIR=<a csv-backups checkout> bun run scripts/lex-golden-fixture.ts --check
+```
+
 ## What changes after publication, and why
 
 `regime_snapshots` is a current view. The ledger is the record. A figure you saw on day
@@ -866,6 +918,8 @@ src/input/       the input loaders, the manifest, the provenance envelope and th
 src/archive/     reading a format 1 local copy: completeness, a run's vintage, the input file
                  (format1.ts), and the reader over injected files (reader.ts: openArchive,
                  revised tables, latest values)
+src/analyze/kept-regime.ts  the kept record of a methodology that keeps its history (v5): score a day,
+                 walk forward, derive the composite and the labels from kept days
 src/run.ts       source data in, regime report out
 src/coverage.ts  required-data check (CoverageError)
 bin/regime.ts    the `bun run regime` entry (reads one file and its sidecar)

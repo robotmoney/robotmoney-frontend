@@ -452,6 +452,51 @@ test("the backtest chart's caption names the payload's start date", async ({ pag
 
 // A link to a panel opens its tab: session pages link their market context
 // rows to #panel-<key>.
+// Issue 1753: methodology v5 is published beside the main line. The page reads
+// ?methodology= from its own URL, passes it on both of its requests (the first
+// paint and the whole history with the backtests) and shows the tag beside the
+// title. With no parameter the page asks for exactly what it always did.
+test("/regime?methodology=v5 sends methodology=v5 on both requests and shows the tag v5", async ({ page }) => {
+  await stubEnvironment(page);
+  const requests: URL[] = [];
+  await page.route("**/api/dashboards/regime-snapshots*", (route) => {
+    requests.push(new URL(route.request().url()));
+    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ ...loadRegimeStub(), methodology: "v5" }) });
+  });
+  await page.goto("/");
+  await navigate(page, "/regime?methodology=v5");
+  await expect(page.locator("#daily-regime-classification")).toBeVisible();
+  // Both requests: the first paint, then the whole history with the backtests.
+  await expect.poll(() => requests.length).toBe(2);
+  expect(requests.map((u) => u.searchParams.get("methodology"))).toEqual(["v5", "v5"]);
+  expect(requests[0]!.searchParams.get("include")).toBeNull();
+  expect(requests[1]!.searchParams.get("include")).toBe("backtest");
+  expect(requests[1]!.searchParams.get("range")).toBe("4000");
+  // The methodology tag sits beside the title.
+  const tag = page.locator(".rv__title [data-testid='regime-methodology']");
+  await expect(tag).toBeVisible();
+  await expect(tag).toHaveText("v5");
+  await expect(page.locator(".rv__title")).toContainText("Regime Classifier");
+});
+
+test("/regime sends no methodology parameter and shows no methodology tag", async ({ page }) => {
+  await stubEnvironment(page);
+  const requests: URL[] = [];
+  await page.route("**/api/dashboards/regime-snapshots*", (route) => {
+    requests.push(new URL(route.request().url()));
+    return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify(loadRegimeStub()) });
+  });
+  await page.goto("/");
+  await navigate(page, "/regime");
+  await expect(page.locator("#daily-regime-classification")).toBeVisible();
+  await expect.poll(() => requests.length).toBe(2);
+  for (const u of requests) expect(u.searchParams.has("methodology")).toBe(false);
+  // The requests are the ones the page made before the parameter existed.
+  expect(requests.map((u) => [...u.searchParams.keys()].sort())).toEqual([["range"], ["include", "range"]]);
+  await expect(page.locator("[data-testid='regime-methodology']")).toHaveCount(0);
+  await expect(page.locator(".rv__title")).toHaveText("Regime Classifier");
+});
+
 test("a link to a regime panel opens that panel's tab", async ({ page }) => {
   await stubEnvironment(page);
   await page.goto("/");
