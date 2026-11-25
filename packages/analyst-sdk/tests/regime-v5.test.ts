@@ -478,6 +478,32 @@ describe("runRegime with version v5 (issue 1753)", () => {
   });
 });
 
+// ── The regime command accepts v5 ───────────────────────────────────────────
+
+describe("bun run regime --methodology v5 (issue 1753)", () => {
+  const PKG = join(import.meta.dir, "..");
+  const cli = async (args: string[]) => {
+    const p = Bun.spawn(["bun", join(PKG, "bin/regime.ts"), ...args], { cwd: PKG, stdout: "pipe", stderr: "pipe" });
+    const [stdout, stderr, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
+    return { code, stdout, stderr };
+  };
+
+  test("the command, run as a process, prints the v5 report runRegime gives; an unknown methodology is a usage error", async () => {
+    const out = await cli([join(import.meta.dir, "fixtures/raw-indicator-history.csv"), "--methodology", "v5"]);
+    expect(out.stderr).toBe("");
+    expect(out.code).toBe(0);
+    const raw = toHistory(parseRawHistory(readFileSync(join(import.meta.dir, "fixtures/raw-indicator-history.csv"), "utf8")));
+    expect(out.stdout).toBe(JSON.stringify(buildReport(requireComplete(runRegime(raw, { version: "v5", factor: false }))), null, 2) + "\n");
+    const report = JSON.parse(out.stdout) as { version: string; indicators: unknown[] };
+    expect(report.version).toBe("v5");
+    expect(report.indicators.length).toBe(30);
+    const bad = await cli([join(import.meta.dir, "fixtures/raw-indicator-history.csv"), "--methodology", "v99"]);
+    expect(bad.code).toBe(2);
+    expect(bad.stderr).toContain("version must be one of v3, v4, v5");
+    expect(bad.stderr).toContain("--methodology v3|v4|v5");
+  });
+});
+
 // ── No private copy of an SDK function on the v5 path ───────────────────────
 
 describe("the kept-record module is built from the SDK's own functions (issue 1753)", () => {

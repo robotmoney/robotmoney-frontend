@@ -81,7 +81,8 @@ async function runRegimeTick(runner: Runner, asof: string, source: AnalyticsData
     try {
       await runner(asof, "regime", source, persistence, { regimeVersion, runSource });
     } catch (err) {
-      console.error(`[analytics-producer] regime ${regimeVersion} (beside the main line) ${asof} failed: ${err instanceof Error ? err.message : err}`);
+      // "regime failed" is the phrase the standing soak check reads (scripts/lib/gate/standing.ts PRODUCER_FAILURE).
+      console.error(`[analytics-producer] regime failed for methodology ${regimeVersion} (beside the main line), ${asof}: ${err instanceof Error ? err.message : err}`);
     }
   }
   if (main === null) throw mainError;
