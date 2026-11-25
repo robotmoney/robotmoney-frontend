@@ -126,7 +126,7 @@ describe("the five collected series of methodology v5 (issue 1753)", () => {
     const read = new Set(V5_DERIVED_SERIES.flatMap(derivedInputIds));
     for (const id of FIVE) expect(read.has(id), id).toBe(true);
     expect([...read].filter((id) => !FIVE.includes(id)).sort()).toEqual(["SPX", "VIX_TERM_DENOMINATOR"]);
-    expect([V5_INPUT_IDS.deficit, V5_INPUT_IDS.gdp, V5_INPUT_IDS.vix3m, V5_INPUT_IDS.skew, V5_INPUT_IDS.volume]).toEqual(FIVE);
+    expect<string[]>([V5_INPUT_IDS.deficit, V5_INPUT_IDS.gdp, V5_INPUT_IDS.vix3m, V5_INPUT_IDS.skew, V5_INPUT_IDS.volume]).toEqual(FIVE);
   });
 
   test("no main-line scoring reader includes them: INDICATORS, the main-line mapping and its storage keys", () => {

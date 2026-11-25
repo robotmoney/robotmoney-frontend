@@ -128,7 +128,7 @@ export interface FetchMemo {
    * the runs of one producer tick share a memo, so a tick makes one request
    * per provider series. A failed request fails every caller of it.
    */
-  once(key: string, fetch: () => Promise<Point[]>): Promise<Point[]>;
+  once(key: string, request: () => Promise<Point[]>): Promise<Point[]>;
   defillamaTvl(): Promise<Point[]>;
   defillamaStables(): Promise<Point[]>;
 }
@@ -178,9 +178,9 @@ export function createFetchMemo(plan: YahooPlan = {}): FetchMemo {
     yahoo: (symbol, startUnix = 0) => serve(symbol, startUnix, parseYahoo),
     yahooClose: (symbol, startUnix = 0) => serve(symbol, startUnix, parseYahooClose),
     yahooVolume: (symbol, startUnix = 0) => serve(symbol, startUnix, parseYahooVolume),
-    once: (key, fetch) => {
+    once: (key, request) => {
       let hit = others.get(key);
-      if (!hit) others.set(key, (hit = fetch()));
+      if (!hit) others.set(key, (hit = request()));
       return hit.then((p) => p.slice());
     },
     defillamaTvl: () => (tvl ??= fetchDefillamaTvl(15000, dayClose("defillama_tvl"))).then((p) => p.slice()),
@@ -220,7 +220,7 @@ export function registryRatioLegs(indicators: readonly SourceSeries[] = INDICATO
 export async function fetchOne(ind: SourceSeries, logger: Logger = console, ext: SourceExtensions = {}, memo?: FetchMemo): Promise<Point[]> {
   const yahoo = (symbol: string) => (memo ? memo.yahoo(symbol, 0) : fetchYahoo(symbol));
   // One request per provider series per memo (issue 1753); without a memo the call fetches on its own.
-  const once = (key: string, fetch: () => Promise<Point[]>) => (memo ? memo.once(key, fetch) : fetch());
+  const once = (key: string, request: () => Promise<Point[]>) => (memo ? memo.once(key, request) : request());
   switch (ind.source) {
     case "fred":
       return once(`fred:${ind.series as string}`, () => fetchFred(ind.series as string));

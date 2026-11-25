@@ -29,6 +29,7 @@ import {
 } from "./support/lex-golden.ts";
 import { keptRegimeRows } from "../src/analyze/kept-regime.ts";
 import { canonicalStringify } from "../src/report/canonical.ts";
+import type { RawIndicatorHistory } from "../src/types.ts";
 
 setDefaultTimeout(600_000);
 
@@ -102,8 +103,8 @@ describe("methodology v5 reproduces the golden byte for byte", () => {
     for (const h of servingInputs(fixture, repro.serving.serving)) if (h.run.id === newest.id) history = h;
     const series = history!.history["T10Y2Y"]!;
     const last = series.at(-1)!;
-    const flipped = { ...history!.history, T10Y2Y: [...series.slice(0, -1), { date: last.date, value: -last.value - 1 }] };
-    const rerun = (h: typeof flipped) => {
+    const flipped: RawIndicatorHistory = { ...history!.history, T10Y2Y: [...series.slice(0, -1), { date: last.date, value: -last.value - 1 }] };
+    const rerun = (h: RawIndicatorHistory) => {
       const c = computeRun(newest, h, supplementary, repro.keptBeforeNewest);
       const rows = JSON.parse(canonicalStringify(keptRegimeRows(c.result, { source: newest.source, backtest: backtestOf(c) }))) as typeof repro.rows;
       return goldenText([...repro.rows.filter((r) => r.date < newest.asof), ...rows], repro.runOf);

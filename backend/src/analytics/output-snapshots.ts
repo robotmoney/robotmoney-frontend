@@ -26,6 +26,16 @@ export type OutputArtifactKind = "regime_snapshots" | "regime_beside_snapshots" 
 /** The artifact kind the regime rows of a methodology line are frozen under. */
 export const REGIME_ARTIFACT_KIND = { main: "regime_snapshots", beside: "regime_beside_snapshots" } as const satisfies Record<string, OutputArtifactKind>;
 
+// Issue 1753: the published line of a methodology that keeps its history
+// (REGIME_KEPT_HISTORY, v5), before a run's as-of day: each kept day's date and
+// three panel indices, and the frozen artifacts they were read from, in
+// publication order (cutover/ledger-current.ts ledgerKeptRegimeDays).
+export interface KeptRegimeDays {
+  days: { date: string; macroIndex: number | null; onchainIndex: number | null; factorIndex: number | null }[];
+  /** The ids of the analytics_output_snapshots artifacts the days came from: the run's report names them. */
+  artifactIds: string[];
+}
+
 export interface ResearchSignalArtifact {
   key: string;
   date: string;

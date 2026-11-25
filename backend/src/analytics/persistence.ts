@@ -16,7 +16,7 @@ import type { RegimeSnapshotRow } from "./report/regime-projection.ts";
 import type { ResearchPayload } from "./analyze/research.ts";
 import type { SaveSourceAcquisitionResult, SourceAcquisitionEvidence } from "./source-ledger.ts";
 import type { MethodologyIdentity, RunLifecycleEvent, VintageManifest } from "./run-ledger.ts";
-import type { OutputArtifactKind, TerminalRunPackageInput } from "./output-snapshots.ts";
+import type { KeptRegimeDays, OutputArtifactKind, TerminalRunPackageInput } from "./output-snapshots.ts";
 
 export interface FloorSeedResult {
   seededPoints: number; // rows actually written this run (gap-fill only)
@@ -32,15 +32,9 @@ export interface CommittedInputs {
   values: { versionId: string; sourceKey: string; marketDate: string; value: number }[];
 }
 
-// Issue 1753: the published line of a methodology that keeps its history
-// (REGIME_KEPT_HISTORY, v5), before a run's as-of day: each kept day's date and
-// three panel indices, and the frozen artifacts they were read from, in
-// publication order (cutover/ledger-current.ts ledgerKeptRegimeDays).
-export interface KeptRegimeDays {
-  days: { date: string; macroIndex: number | null; onchainIndex: number | null; factorIndex: number | null }[];
-  /** The ids of the analytics_output_snapshots artifacts the days came from: the run's report names them. */
-  artifactIds: string[];
-}
+// Issue 1753: the kept days of a methodology published beside the main line
+// (declared in output-snapshots.ts, beside the artifact kind they are read from).
+export type { KeptRegimeDays };
 
 export interface BeginRunResult {
   runId: string;

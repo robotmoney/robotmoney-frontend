@@ -43,8 +43,7 @@ import type { RegimeSnapshotRow } from "../report/regime-projection.ts";
 import { selectPublications, type PublicationCandidate } from "../../../../packages/analyst-sdk/src/report/publication.ts";
 import type { ResearchPayload } from "../analyze/research.ts";
 import { on, registerQuery } from "../../db/registry.ts";
-import { REGIME_ARTIFACT_KIND } from "../output-snapshots.ts";
-import type { KeptRegimeDays } from "../persistence.ts";
+import { REGIME_ARTIFACT_KIND, type KeptRegimeDays } from "../output-snapshots.ts";
 
 // Which regime line a read selects from (issue 1753). The main line: every
 // `regime_snapshots` artifact, one method end to end (the newest carrying
