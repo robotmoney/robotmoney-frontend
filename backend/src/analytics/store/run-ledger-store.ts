@@ -12,7 +12,8 @@ import {
   type RunLifecycleEvent,
   type VintageManifest,
 } from "../run-ledger.ts";
-import { STORED_RATIO_IDS, SERIES_MAPPING } from "../extras.ts";
+import { STORED_RATIO_IDS, SERIES_MAPPING, seriesMappingFor, type SeriesMapping } from "../extras.ts";
+import { isRegimeVersion } from "../analyze/regime-versions.ts";
 
 /** The only entry module that reaches this store: the analytics ingestion route. */
 const ANALYTICS_ROUTE = "src/api/routes/analytics";
@@ -84,6 +85,45 @@ const readRunAsof = registerQuery({
   callers: [ANALYTICS_ROUTE],
   probe: {
     statement: "SELECT asof::text AS asof FROM analytics_ledger_runs WHERE id = $1::bigint",
+    params: [1],
+  },
+});
+
+const RUN_METHODOLOGY_PROBE = {
+  statement: `SELECT m.version_label FROM analytics_ledger_runs r
+      JOIN analytics_ledger_methodology_versions m ON m.id = r.methodology_version_id WHERE r.id = $1::bigint`,
+  params: [1],
+};
+
+const readRunMethodology = registerQuery({
+  role: "rm_app",
+  object: "analytics_ledger_runs",
+  privileges: ["SELECT"],
+  site: "src/analytics/store/run-ledger-store:loadRunMethodologyLabel",
+  purpose: "Read a run's methodology version, which decides the artifact kind its regime rows are frozen under (issue 1753).",
+  callers: [ANALYTICS_ROUTE],
+  probe: RUN_METHODOLOGY_PROBE,
+});
+
+const readRunMethodologyLabel = registerQuery({
+  role: "rm_app",
+  object: "analytics_ledger_methodology_versions",
+  privileges: ["SELECT"],
+  site: "src/analytics/store/run-ledger-store:loadRunMethodologyLabel.label",
+  purpose: "Read the version label of a run's methodology version (issue 1753).",
+  callers: [ANALYTICS_ROUTE],
+  probe: RUN_METHODOLOGY_PROBE,
+});
+
+const readMethodologyLabel = registerQuery({
+  role: "rm_app",
+  object: "analytics_ledger_methodology_versions",
+  privileges: ["SELECT"],
+  site: "src/analytics/store/run-ledger-store:freezeVintage.methodologyLabel",
+  purpose: "Read the version label of the methodology a vintage is frozen under, which decides the storage keys its regime members may carry (issue 1753).",
+  callers: [ANALYTICS_ROUTE],
+  probe: {
+    statement: "SELECT version_label FROM analytics_ledger_methodology_versions WHERE id = $1::bigint",
     params: [1],
   },
 });
@@ -410,6 +450,15 @@ export async function loadRunAsof(runId: string, db: DbHandle = sql): Promise<st
   return row ? (row.asof as string) : null;
 }
 
+// The methodology version label a run was begun under (issue 1753), or null
+// when runId names no run. The terminal package uses it to pick the artifact
+// kind of the run's regime rows.
+export async function loadRunMethodologyLabel(runId: string, db: DbHandle = sql): Promise<string | null> {
+  const [row] = await on(db, readRunMethodology, readRunMethodologyLabel)<{ version_label: string }>`SELECT m.version_label FROM analytics_ledger_runs r
+      JOIN analytics_ledger_methodology_versions m ON m.id = r.methodology_version_id WHERE r.id = ${runId}::bigint`;
+  return row ? row.version_label : null;
+}
+
 // Append-only, ordered lifecycle events (issue #977 AC5). Never updates the
 // header — there is no status/finished_at/warning/error column on it to
 // update. Serialized per run_id via an advisory xact lock so two concurrent
@@ -548,15 +597,35 @@ export async function loadHistoricalSourceValues(
  * mapping). A ratio's stored key is read while the ratio is declared
  * ratioInput "stored".
  */
-export const REGIME_STORAGE_KEYS: readonly string[] = Object.freeze([...new Set(SERIES_MAPPING
+const readKeysOf = (mapping: readonly SeriesMapping[]): readonly string[] => Object.freeze([...new Set(mapping
   .filter((m) => m.kind === "source" || STORED_RATIO_IDS.has(m.inputId))
   .map((m) => m.storageKey))].sort());
+const mappedKeysOf = (mapping: readonly SeriesMapping[]): readonly string[] => Object.freeze([...new Set(mapping.map((m) => m.storageKey))].sort());
+
+export const REGIME_STORAGE_KEYS: readonly string[] = readKeysOf(SERIES_MAPPING);
 
 // Every key a regime consumer maps, a ratio's calculated key included. A
 // vintage with regime members selects none of these by cutoff: its regime keys
 // are the exact versions read, so a stored ratio the run did not read (one
 // declared "legs") is never a member its replay would read.
-const REGIME_MAPPED_KEYS: readonly string[] = Object.freeze([...new Set(SERIES_MAPPING.map((m) => m.storageKey))].sort());
+const REGIME_MAPPED_KEYS: readonly string[] = mappedKeysOf(SERIES_MAPPING);
+
+// Issue 1753: the keys of a methodology version that reads more than the main
+// line (v5: the main-line keys plus the five collected keys of its derived
+// indicators). Any other label, a main-line version included, reads the
+// main-line keys above, unchanged.
+const versionKeys = new Map<string, { read: readonly string[]; mapped: readonly string[] }>();
+function keysOfVersion(version: string | null | undefined): { read: readonly string[]; mapped: readonly string[] } {
+  if (!isRegimeVersion(version) || seriesMappingFor(version) === SERIES_MAPPING) return { read: REGIME_STORAGE_KEYS, mapped: REGIME_MAPPED_KEYS };
+  let keys = versionKeys.get(version);
+  if (!keys) versionKeys.set(version, (keys = { read: readKeysOf(seriesMappingFor(version)), mapped: mappedKeysOf(seriesMappingFor(version)) }));
+  return keys;
+}
+
+/** Every storage key a regime run of `version` reads (REGIME_STORAGE_KEYS for a main-line version or an unknown label). */
+export function regimeStorageKeysFor(version: string | null | undefined): readonly string[] {
+  return keysOfVersion(version).read;
+}
 
 export interface CommittedInputs {
   /** The database clock the heads were read at, ISO 8601 with microseconds. */
@@ -658,6 +727,8 @@ async function loadRegimeMembers(
   ids: readonly string[],
   knowledgeTimeCutoff: string,
   marketTimeCutoff: string,
+  // The keys the vintage's methodology reads (issue 1753). Default: the main line's.
+  storageKeys: readonly string[] = REGIME_STORAGE_KEYS,
 ): Promise<FrozenSourceValue[]> {
   // The cutoff is bound as text: a parameter the server types timestamptz is
   // serialized by postgres.js through a JS Date, which drops the
@@ -668,7 +739,7 @@ async function loadRegimeMembers(
       knowledge_time <= ${knowledgeTimeCutoff}::text::timestamptz AS known
     FROM source_value_versions WHERE id = ANY(${[...ids]}::bigint[])`) as unknown as (SourceValueRow & { known: boolean })[];
   const found = new Map(rows.map((r) => [String(r.id), r]));
-  const regimeKeys = new Set(REGIME_STORAGE_KEYS);
+  const regimeKeys = new Set(storageKeys);
   const coordinates = new Set<string>();
   for (const id of ids) {
     const r = found.get(id);
@@ -719,11 +790,18 @@ export async function freezeVintage(input: FreezeVintageInput): Promise<FreezeVi
     notePhase(phase, now - mark);
     mark = now;
   };
+  // Issue 1753: the regime keys are those of the vintage's methodology. A
+  // main-line methodology reads the main-line keys, as before.
+  let keys = { read: REGIME_STORAGE_KEYS, mapped: REGIME_MAPPED_KEYS };
+  if (input.regimeVersionIds) {
+    const [methodology] = await on(sql, readMethodologyLabel)<{ version_label: string }>`SELECT version_label FROM analytics_ledger_methodology_versions WHERE id = ${input.methodologyVersionId}::bigint`;
+    keys = keysOfVersion(methodology?.version_label);
+  }
   const byCutoff = await loadHistoricalSourceValues(
     input.knowledgeTimeCutoff,
     input.marketTimeCutoff,
     sql,
-    input.regimeVersionIds ? REGIME_MAPPED_KEYS : [],
+    input.regimeVersionIds ? keys.mapped : [],
   );
   lap("heads");
   try {
@@ -731,7 +809,7 @@ export async function freezeVintage(input: FreezeVintageInput): Promise<FreezeVi
       mark = performance.now();
       let members = byCutoff;
       if (input.regimeVersionIds) {
-        const regime = await loadRegimeMembers(tx, input.regimeVersionIds, input.knowledgeTimeCutoff, input.marketTimeCutoff);
+        const regime = await loadRegimeMembers(tx, input.regimeVersionIds, input.knowledgeTimeCutoff, input.marketTimeCutoff, keys.read);
         members = [...regime, ...byCutoff];
       }
       const { manifest } = buildVintageManifest(

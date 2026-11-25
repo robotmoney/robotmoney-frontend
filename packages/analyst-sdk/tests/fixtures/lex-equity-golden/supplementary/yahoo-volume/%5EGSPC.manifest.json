@@ -1,0 +1,11 @@
+{
+  "format": 1,
+  "series": "yahoo-volume:^GSPC",
+  "field": "daily volume (Yahoo chart API, ^GSPC)",
+  "row_count": 4752,
+  "first_date": "2008-01-02",
+  "last_date": "2026-11-20",
+  "sha256": "6ae01f507d717ebc8fd05dda25e3ae2e53d9444e6a8f3e727fea34f533d80041",
+  "fetched_at": "2026-11-23T20:29:04.893Z",
+  "fetched_by": "fetch of query1.finance.yahoo.com/v8/finance/chart/^GSPC, interval 1d, volume field"
+}

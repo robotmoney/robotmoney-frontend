@@ -16,7 +16,7 @@ import type { RegimeSnapshotRow } from "./report/regime-projection.ts";
 import type { ResearchPayload } from "./analyze/research.ts";
 import type { SaveSourceAcquisitionResult, SourceAcquisitionEvidence } from "./source-ledger.ts";
 import type { MethodologyIdentity, RunLifecycleEvent, VintageManifest } from "./run-ledger.ts";
-import type { OutputArtifactKind, TerminalRunPackageInput } from "./output-snapshots.ts";
+import type { KeptRegimeDays, OutputArtifactKind, TerminalRunPackageInput } from "./output-snapshots.ts";
 
 export interface FloorSeedResult {
   seededPoints: number; // rows actually written this run (gap-fill only)
@@ -31,6 +31,10 @@ export interface CommittedInputs {
   knowledgeTimeCutoff: string;
   values: { versionId: string; sourceKey: string; marketDate: string; value: number }[];
 }
+
+// Issue 1753: the kept days of a methodology published beside the main line
+// (declared in output-snapshots.ts, beside the artifact kind they are read from).
+export type { KeptRegimeDays };
 
 export interface BeginRunResult {
   runId: string;
@@ -110,7 +114,14 @@ export interface AnalyticsPersistence {
   // persistence without a source ledger has nothing to read.
   // Issue 1733: `knownBy`, for a replay of a past as-of day, reads each value
   // known by the end of that day (store/run-ledger-store.ts).
-  loadCommittedInputs?(marketTimeCutoff: string, knownBy?: string): Promise<CommittedInputs>;
+  // Issue 1753: `methodology` names the version whose storage keys are read.
+  // Absent, the main-line regime keys, as before; "v5" adds the five collected
+  // keys its derived indicators read.
+  loadCommittedInputs?(marketTimeCutoff: string, knownBy?: string, methodology?: string): Promise<CommittedInputs>;
+  // Issue 1753: the kept days of a methodology published beside the main line,
+  // dated before `before`. A run of such a methodology cannot start without
+  // it: a missing read is an error, never an empty record.
+  loadKeptRegimeDays?(methodology: string, before: string): Promise<KeptRegimeDays>;
   // Read the whole persisted raw floor, grouped by indicator, sorted by date.
   loadRawHistory(): Promise<RawIndicatorHistory>;
   // Upsert merged raw history on (date, indicator); fetched wins on overlap

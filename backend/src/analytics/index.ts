@@ -21,8 +21,11 @@
 // by inverseCorrelationWeights' minValidObs) and logged loudly. The seededProvider
 // is retained ONLY for the hermetic unit-test tools (analyze/regime.ts etc.) and is
 // never referenced on this path. Tests inject a fixture-backed AnalyticsDataSource.
-import { ALL_PANELS, DAY_RULE, INDICATORS, PANELS, type DayRule, type Panel } from "./analyze/indicators.ts";
-import { LEDGER_EXTRA_KEYS, RATIO_IDS, STORED_RATIO_IDS, STORED_UNDER, inputHistoryFromStorage, storedIndicatorId } from "./extras.ts";
+import { ALL_PANELS, DAY_RULE, INDICATORS, PANELS, V5_INPUT_IDS, type DayRule, type Panel } from "./analyze/indicators.ts";
+import { LEDGER_EXTRA_KEYS, RATIO_IDS, STORED_RATIO_IDS, STORED_UNDER, inputHistoryFromStorage, seriesMappingFor, storedIndicatorId } from "./extras.ts";
+// The kept record of a methodology published beside the main line (v5, issue 1753).
+import { computeKeptRegime, keptRegimeRows, type KeptDay } from "../../../packages/analyst-sdk/src/analyze/kept-regime.ts";
+import { derivedInputIds } from "../../../packages/analyst-sdk/src/transform/derived.ts";
 import { ratioDeclarationsFor, ratiosFromLegs } from "../../../packages/analyst-sdk/src/transform/ratios.ts";
 import { computeRegime, type RegimeComputeResult } from "./analyze/compute.ts";
 import { cutAtAsof, latestCompleteDay, missingOnDay, prepareRegimeInputs } from "./prepare.ts";
@@ -42,9 +45,10 @@ import { computeCorrelations, type CorrelationsPayload } from "./analyze/correla
 import {
   computeBacktest,
   stripDailyFromSnapshot,
+  REGIME_BACKTEST_RULES,
   type BacktestPayload,
 } from "./analyze/backtest.ts";
-import { CURRENT_REGIME_VERSION, REGIME_WEIGHT_REFRESH, type RegimeVersion } from "./analyze/regime-versions.ts";
+import { CURRENT_REGIME_VERSION, REGIME_DERIVED_SERIES, REGIME_KEPT_HISTORY, REGIME_LINE, REGIME_REGISTRY, REGIME_WEIGHT_REFRESH, type RegimeVersion } from "./analyze/regime-versions.ts";
 import {
   liveDataSource,
   type AnalyticsDataSource,
@@ -170,10 +174,23 @@ function boundedTelemetrySummary(raw: Record<string, unknown>): Record<string, u
 // the worker handlers, which fold it into job_runs.output — can still see it.
 //
 // METHODOLOGY (issue 1652): `regimeVersion` is the regime methodology the run
-// computes and stamps (methodology label, every row's `version`). Production
-// never passes it, so a run is CURRENT_REGIME_VERSION (v4). A replay of a run
+// computes and stamps (methodology label, every row's `version`). The main-line
+// run never passes it, so it is CURRENT_REGIME_VERSION (v4). A replay of a run
 // stamped with an earlier version passes that version (v3) and computes it
 // exactly as published.
+//
+// BESIDE THE MAIN LINE (issue 1753, decision D96): a run of a methodology
+// REGIME_LINE declares `beside` (v5) is a normal run: it begins a ledger run
+// stamped with that version, reads its committed inputs (the main-line regime
+// keys plus the five collected keys its derived indicators read), freezes its
+// vintage and submits one terminal package. It keeps its history
+// (REGIME_KEPT_HISTORY): the first such run finds no kept day and computes
+// every day from the axis start one by one from its own vintage; every later
+// run reads the kept days before its as-of day (persistence.loadKeptRegimeDays),
+// computes only its own day and publishes that one row. The API freezes its
+// rows under `regime_beside_snapshots` and writes none to regime_snapshots.
+// `opts.runSource` hands the run a source another run of the same producer
+// tick already took, so the tick makes one provider request per series.
 export async function runAnalytics(
   asof: string,
   toolId?: string,
@@ -189,7 +206,7 @@ export async function runAnalytics(
   // the whole run. `now` is the run time, a parameter so tests pin it.
   // `panels` is the composite's panel set (default PANELS, issue 1708); a test
   // replaying an older composite passes its set explicitly.
-  opts: { dayRule?: DayRule; now?: Date; panels?: Panel[] } = {},
+  opts: { dayRule?: DayRule; now?: Date; panels?: Panel[]; runSource?: AnalyticsDataSource } = {},
 ): Promise<Record<string, unknown>> {
   const logger: Logger = console;
   // `toolId` is one tool id, the RESEARCH_TOOL_GROUP alias, or omitted (whole
@@ -205,7 +222,17 @@ export async function runAnalytics(
   const sourceLabel = source === hermeticDataSource ? "hermetic" : source === liveDataSource ? "live" : "fixture";
   // Issue 1514: one provider request per symbol for the whole run. The live
   // source shares one fetch memo across the collectors this run calls.
-  const runSource = source.forRun?.({ regime: want("regime"), research: want("channel-divergence") || want("late-cycle-signals") }) ?? source;
+  const runSource = opts.runSource ?? source.forRun?.({ regime: want("regime"), research: want("channel-divergence") || want("late-cycle-signals") }) ?? source;
+  // Issue 1753: the scoring registry of the version computed (INDICATORS for
+  // v3 and v4), whether its history is kept, and the raw input ids its derived
+  // series read beyond the registry and the price extras.
+  const scoringRegistry = REGIME_REGISTRY[regimeVersion];
+  const keptHistory = REGIME_KEPT_HISTORY[regimeVersion];
+  const besideLine = REGIME_LINE[regimeVersion] === "beside";
+  const derivedInputs = [...new Set(REGIME_DERIVED_SERIES[regimeVersion].flatMap(derivedInputIds))];
+  if (keptHistory && !persistence.loadKeptRegimeDays) {
+    throw new Error(`regime methodology ${regimeVersion} keeps its history: the persistence must read its kept days (loadKeptRegimeDays)`);
+  }
   // Issue 1421: every acquisition's collected values are compared with the
   // committed values the ledger hands back, and the run's input evidence
   // records the difference and the consumed versions.
@@ -394,6 +421,12 @@ export async function runAnalytics(
     const committedFloor = await persistence.loadRawHistory();
     registry = {};
     for (const ind of INDICATORS) registry[ind.id] = committedFloor[storedIndicatorId(ind.id)] ?? [];
+    // Issue 1753: the raw inputs of the version's derived series, from the
+    // committed floor (the collected series, and VIX under the denominator's id).
+    for (const id of derivedInputs) {
+      if (id === V5_INPUT_IDS.close) continue; // the backtest's ^GSPC closes, added with the extras below
+      registry[id] = committedFloor[id === V5_INPUT_IDS.vix ? "VIX" : id] ?? [];
+    }
     // Issue 1644: each ratio under its declared parameters, from the legs this
     // source served when the ratio is not read as stored.
     registry = withRatios(fetched, registry, regimeVersion);
@@ -412,6 +445,7 @@ export async function runAnalytics(
     t0 = new Date();
     const fetchedExtras = await runSource.fetchBacktestExtras(logger, acquisitionSink, jobId ?? null);
     extras = { spx: cutAtAsof(fetchedExtras.spx, asof), eth: cutAtAsof(fetchedExtras.eth, asof), tbill3m: cutAtAsof(fetchedExtras.tbill3m, asof) };
+    if (derivedInputs.includes(V5_INPUT_IDS.close)) registry[V5_INPUT_IDS.close] = extras.spx;
     collector.stage("access", "ok", `fetched backtest extras from the ${sourceLabel} source`, t0);
     // Issue 1398: the model portfolio inputs are collected into the source
     // ledger in extract, on the same run. The regime reads none of them, so
@@ -470,14 +504,20 @@ export async function runAnalytics(
     // Issue 1733: a run for a day before its own UTC date is a replay: it
     // reads each value known by the end of that day, never a later revision.
     const today = (opts.now ?? new Date()).toISOString().slice(0, 10);
-    const committed = await persistence.loadCommittedInputs(asof, asof < today ? asof : undefined);
+    // Issue 1753: a run beside the main line names its methodology, so the
+    // read (and the vintage) also covers the collected keys it reads. The
+    // main-line call is unchanged.
+    const committed = besideLine
+      ? await persistence.loadCommittedInputs(asof, asof < today ? asof : undefined, regimeVersion)
+      : await persistence.loadCommittedInputs(asof, asof < today ? asof : undefined);
     knowledgeTimeCutoff = committed.knowledgeTimeCutoff;
     regimeVersionIds = committed.values.map((v) => v.versionId);
     // Issue 1644: each ratio under its declared parameters (transform/ratios.ts).
-    const ledgerInput = inputHistoryFromStorage(committed.values);
+    const ledgerInput = inputHistoryFromStorage(committed.values, seriesMappingFor(regimeVersion));
     const fromLedger = withRatios(ledgerInput, ledgerInput, regimeVersion);
     registry = {};
     for (const ind of INDICATORS) registry[ind.id] = fromLedger[ind.id] ?? [];
+    for (const id of derivedInputs) registry[id] = fromLedger[id] ?? [];
     const X = LEDGER_EXTRA_KEYS;
     extras = { spx: fromLedger[X.spx.inputId] ?? [], eth: fromLedger[X.eth.inputId] ?? [], tbill3m: fromLedger[X.tbill3m.inputId] ?? [] };
     inputEvidence.registry = registryEvidence(collectedRegistry, registry);
@@ -490,8 +530,64 @@ export async function runAnalytics(
 
   // ══ DOWNSTREAM: committed data only, no `source` call below ══════════════
 
+  // ── REGIME, KEPT HISTORY (v5, issue 1753) ─────────────────────────────────
+  if (want("regime") && registry && extras && keptHistory) {
+    assertRequiredCoverage(registry, regimeAsof, undefined, scoringRegistry);
+    let t0 = new Date();
+    // ── A methodology that keeps its history (v5, issue 1753) ─────────────
+    // The kept days before the as-of day are the published line itself. With
+    // none this is the first run: it walks forward from its own inputs.
+    const keptRead = await persistence.loadKeptRegimeDays!(regimeVersion, regimeAsof);
+    const kept: KeptDay[] = keptRead.days.map((d) => ({
+      date: d.date,
+      panelIndices: { macro: d.macroIndex ?? NaN, onchain: d.onchainIndex ?? NaN, factor: d.factorIndex ?? NaN },
+    }));
+    if (regimeAsof !== asof) extras = { spx: cutAtAsof(extras.spx, regimeAsof), eth: cutAtAsof(extras.eth, regimeAsof), tbill3m: cutAtAsof(extras.tbill3m, regimeAsof) };
+    const run = computeKeptRegime(registry, { asof: regimeAsof, start: BACKFILL_START, version: regimeVersion, panels: ALL_PANELS, included: opts.panels ?? PANELS, kept });
+    const { record, dateAxis } = run;
+    collector.stage("transform", "ok", `built ${dateAxis.length}-day date axis and aligned/transformed ${scoringRegistry.length} indicator(s)`, t0);
+
+    t0 = new Date();
+    // The correlations and the backtest read the kept record. The backtest
+    // runs under the rule row of the version (REGIME_BACKTEST_RULES).
+    let backtest: BacktestPayload | null = null;
+    let correlations: CorrelationsPayload | null = null;
+    let analyzeStatus: "ok" | "warn" = "ok";
+    const included = opts.panels ?? PANELS;
+    try {
+      correlations = computeCorrelations(dateAxis, { composite: record.composite, panelIndices: record.panelIndices, panels: included }, extras);
+      backtest = stripDailyFromSnapshot(computeBacktest(dateAxis, { regime: record.regime, panelRegimes: record.panelRegimes, panels: included }, extras, REGIME_BACKTEST_RULES[regimeVersion]));
+    } catch (e: any) {
+      logger.error?.(`[analytics] backtest/correlations failed: ${e?.message ?? e}`);
+      collector.warn("analyze", `backtest/correlations failed: ${e?.message ?? e}`);
+      analyzeStatus = "warn";
+    }
+    const last = dateAxis.length - 1;
+    collector.stage("analyze", analyzeStatus, `computed regime ${regimeVersion} composite=${nn(record.composite[last])} regime=${record.regime[last] ?? "insufficient_history"}`, t0);
+    collector.artifact("analyze", "regime-composite", { composite: nn(record.composite[last]), compositePercentile: null, regime: record.regime[last] ?? null });
+
+    t0 = new Date();
+    const rows = keptRegimeRows(run, { source: sourceLabel, backtest, correlations }) as RegimeSnapshotRow[];
+    collector.stage("report", "ok", `built ${rows.length} snapshot row(s) for persistence`, t0);
+    regimeSnapshotRows = rows;
+    results.regime = {
+      asof: regimeAsof,
+      rows: rows.length,
+      composite: nn(record.composite[last]),
+      compositePercentile: null,
+      regime: record.regime[last] ?? null,
+      methodology: regimeVersion,
+      // What the kept days were read from, so the run replays from its
+      // vintage plus these frozen artifacts: the kept days are their rows
+      // dated before the as-of day, a later artifact's row replacing an
+      // earlier one's for the same date.
+      kept: { days: kept.length, artifactIds: keptRead.artifactIds, sha256: sha256Hex(canonicalStringify(keptRead.days)) },
+    };
+    logger.log?.(`[analytics] regime ${regimeVersion} asof ${regimeAsof}: composite=${nn(record.composite[last])} regime=${record.regime[last] ?? "insufficient_history"} (${rows.length} rows, ${kept.length} kept days)`);
+  }
+
   // ── REGIME ────────────────────────────────────────────────────────────────
-  if (want("regime") && registry && extras) {
+  if (want("regime") && registry && extras && !keptHistory) {
     // With no composite panel holding any observation nothing can be classified: a
     // named coverage error, never a fetch (issue 1421).
     assertRequiredCoverage(registry, regimeAsof);
@@ -517,7 +613,9 @@ export async function runAnalytics(
     let analyzeStatus: "ok" | "warn" = "ok";
     try {
       correlations = computeCorrelations(dateAxis, r2, extras);
-      backtest = stripDailyFromSnapshot(computeBacktest(dateAxis, r2, extras));
+      // The rule row of the version computed (REGIME_BACKTEST_RULES, issue
+      // 1753): the v3 and v4 rows are computeBacktest's own defaults.
+      backtest = stripDailyFromSnapshot(computeBacktest(dateAxis, r2, extras, REGIME_BACKTEST_RULES[regimeVersion]));
     } catch (e: any) {
       logger.error?.(`[analytics] backtest/correlations failed: ${e?.message ?? e}`);
       collector.warn("analyze", `backtest/correlations failed: ${e?.message ?? e}`);

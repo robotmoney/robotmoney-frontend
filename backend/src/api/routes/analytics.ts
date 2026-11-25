@@ -40,12 +40,14 @@ import {
   freezeVintage,
   findVintageByRunAndTool,
   loadCommittedInputs,
-  REGIME_STORAGE_KEYS,
+  regimeStorageKeysFor,
   loadFrozenVintage,
   VintageConflictError,
   VintageMembersInvalidError,
 } from "../../analytics/store/run-ledger-store.ts";
 import type { MethodologyIdentity, RunLifecycleEvent } from "../../analytics/run-ledger.ts";
+import { BESIDE_REGIME_VERSIONS, REGIME_LINE, REGIME_VERSIONS, isRegimeVersion } from "../../analytics/analyze/regime-versions.ts";
+import { ledgerKeptRegimeDays } from "../../analytics/cutover/ledger-current.ts";
 import {
   submitTerminalRunPackage,
   loadReportSnapshot,
@@ -624,7 +626,7 @@ function parseTerminalRunPackage(body: unknown): TerminalRunPackageInput | Inval
 export const ANALYTICS_PATHS: ReadonlySet<string> = new Set([
   A.readiness, A.rawHistory, A.rawHistorySeed, A.researchSignalDates, A.rawHistoryGaps,
   A.sourceAcquisitions, A.researchEligibility, A.telemetry, A.runs, A.runEvents,
-  A.vintages, A.vintage, A.committedInputs, A.runPackage, A.reportSnapshot, A.paritySweep,
+  A.vintages, A.vintage, A.committedInputs, A.keptRegimeDays, A.runPackage, A.reportSnapshot, A.paritySweep,
 ]);
 
 // ANALYTICS_CONCURRENCY and createLimiter live in a leaf module since issue
@@ -823,7 +825,24 @@ async function handleAnalyticsUnbounded(req: Request, url: URL): Promise<{ statu
     // Issue 1733: a replay of a past as-of day reads the values known by its end.
     const knownBy = url.searchParams.get("knownBy");
     if (knownBy !== null && !isIsoDate(knownBy)) return { status: 400, body: { error: "knownBy must be a valid YYYY-MM-DD date" } };
-    return { status: 200, body: await loadCommittedInputs(REGIME_STORAGE_KEYS, asof, undefined, knownBy ?? undefined) };
+    // Issue 1753: the keys of the methodology named; absent, the main-line keys, as before.
+    const methodology = url.searchParams.get("methodology");
+    if (methodology !== null && !isRegimeVersion(methodology)) {
+      return { status: 400, body: { error: `methodology must be one of ${REGIME_VERSIONS.join(", ")}` } };
+    }
+    return { status: 200, body: await loadCommittedInputs(regimeStorageKeysFor(methodology), asof, undefined, knownBy ?? undefined) };
+  }
+
+  // Issue 1753: the kept days of a methodology published beside the main
+  // line, before a run's as-of day (cutover/ledger-current.ts).
+  if (m === "GET" && p === A.keptRegimeDays) {
+    const methodology = url.searchParams.get("methodology");
+    if (!isRegimeVersion(methodology) || REGIME_LINE[methodology] !== "beside") {
+      return { status: 400, body: { error: `methodology must be a version published beside the main line: ${BESIDE_REGIME_VERSIONS.join(", ")}` } };
+    }
+    const before = url.searchParams.get("before");
+    if (!before || !isIsoDate(before)) return { status: 400, body: { error: "before must be a valid YYYY-MM-DD date" } };
+    return { status: 200, body: await ledgerKeptRegimeDays(methodology, before) };
   }
 
 // ── issue #978: the immutable analytics output/report snapshot layer ─────

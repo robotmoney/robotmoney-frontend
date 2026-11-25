@@ -237,6 +237,8 @@ The reference portfolios are data: `eth`, `sp500` and `mixed`, with their existi
 
 Running those schedules through `simulatePortfolio` (with `REFERENCE_CALENDARS`) and `periodStats`, each empty before the portfolio's start date (section 5.2), gives the same daily values, statistics and serialized reference report as `computeBacktest`.
 
+`REGIME_BACKTEST_RULES` declares the options the reference backtest of each methodology version runs with (issue 1753): `lagSessions`, `calendars`, `cashBasis`, `sharpeBasis` and the split date. The backend and `runRegime` pass the row of the version they compute to `computeBacktest`. The `v3` and `v4` rows are the defaults of sections 5.3 and 5.4 (D94), so a run with the row passed equals a run with no options. Methodology `v5` is the one exception to D94 (D96): it is published beside the main line, its figures are fixed by a frozen golden, and its row is the rule set that golden was published with. A label trades at the close of its own day (`lagSessions` 0). Every market trades on every axis day (`calendars` `continuous`). Cash earns the quote read as a yearly yield (`cashBasis` `yield`). The Sharpe ratio is taken on pre-cost daily returns (`sharpeBasis` `returns`). The in-sample period ends on 2024-01-31. The `v5` results are hypothetical: no real strategy could have traded at the close that set the label. D94 keeps applying to `v3` and `v4` unchanged.
+
 ### 5.6 Consumers
 
 - **Backend.** It runs the reference portfolios on every analytics run. It stores the result on the latest snapshot row.
@@ -282,6 +284,10 @@ Package paths are relative to `packages/analyst-sdk/`.
 | `periodStats` computes Sharpe from post-cost daily returns minus that day's cash return (an all-cash portfolio scores 0), reports labelled in-sample and out-of-sample blocks, and refuses a series sparser than daily. | `tests/backtest.test.ts` |
 | A target trades no earlier than the next session, a weekend label change defers the S&P 500 trade to the next open session, the cash leg uses the bond-equivalent yield, and `costBps` takes a per-asset map. | `tests/backtest.test.ts` |
 | Every methodology version declares an adoption date and the loader refuses one without. | `tests/regime-versions.test.ts` |
+| `REGIME_BACKTEST_RULES.v3` and `.v4` are `computeBacktest`'s defaults, and the `v5` row is the rule set its golden was published with (D96). | `tests/regime-v5.test.ts` |
+| Methodology `v5` reproduces its frozen golden byte for byte from the committed fixture, backtest block included, with no csv-backups access (D96). | `tests/regime-v5-golden.test.ts` |
+| A `v5` run goes through the ledger beside the main line: its rows are frozen as `regime_beside_snapshots`, the main-line table, response and brief lookup are byte-identical, and the published rows are the SDK's rows exactly (D96). | `backend/tests/regime-v5-ledger.test.ts`, `backend/tests/regime-v5-sdk-equivalence.test.ts` |
+| `GET /api/dashboards/regime-snapshots` without `methodology` is the main line as before; with `v5` it is the `v5` line; an unknown value is a 400 (D96). | `backend/tests/api/regime-snapshots.test.ts` |
 | A label with no weight row is refused by default and skipped under `unknownLabel: "skip"`; a null label is a skipped day under both. | `tests/backtest.test.ts` |
 | Every simulator series has a declared fill policy: a covered gap runs, an uncovered gap on a held day is refused naming the series, the date and the policy, the cash rate earns zero before its first observation, and a missing or unknown `fill` entry is refused. The shipped default reproduces every existing call. | `tests/backtest.test.ts`, `tests/backtest-drift.test.ts` |
 | The reference backtest over `{ regime, panelRegimes, panels }` equals it over a full result; `REFERENCE_FILL_POLICIES` reproduce the golden; a changed reference policy ends each portfolio on its latest complete day and equals the original cut there. | `tests/backtest.test.ts` |

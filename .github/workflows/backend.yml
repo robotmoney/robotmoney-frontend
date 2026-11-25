@@ -275,6 +275,23 @@ jobs:
           tests/analytics-ledger-cutover.test.ts:19
           tests/analytics-ledger-repair.test.ts:12
           tests/migrate-reclaim.test.ts:1
+      # Issue 1753: methodology v5 through the ledger, beside the main line.
+      # Three v5 runs freeze their rows as regime_beside_snapshots while the
+      # main-line table, response and brief lookup stay byte-identical; a failed
+      # v5 run leaves no beside artifact and the main-line run still publishes;
+      # the published rows are the SDK's rows exactly and the third run replays
+      # from its vintage and the artifacts its report names; migration 0136
+      # accepts the new kind with its row dates as natural keys; the endpoint
+      # serves a methodology line only when asked. Absent, short or skipped is red.
+      - name: Methodology v5 ledger proofs ran (issue 1753)
+        shell: bash
+        run: >-
+          bun scripts/checks/assert-junit-suites.ts "$RUNNER_TEMP/backend.junit.xml"
+          tests/regime-v5-ledger.test.ts:2
+          tests/regime-v5-sdk-equivalence.test.ts:1
+          tests/regime-beside-snapshots-migration.test.ts:4
+          tests/api/regime-snapshots.test.ts:24
+          tests/analytics-source-tolerance.test.ts:20
       # Issue 1477: format 1 has one writer. csvb and the archive store write the
       # same day-cut backups byte for byte, the planted junction cases of the
       # archive routes ran, and the api-recorded fixture is reproduced unchanged.

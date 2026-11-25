@@ -1,0 +1,11 @@
+{
+  "format": 1,
+  "series": "fred:GDP",
+  "field": "value",
+  "row_count": 59,
+  "first_date": "2012-01-01",
+  "last_date": "2026-07-01",
+  "sha256": "ecd46804bd463972978f7141f4ad4bd66b50e8fec4d6061ce95e17cd9e50691a",
+  "fetched_at": "2026-11-21T17:20:08.685Z",
+  "fetched_by": "analyst-sdk 0.7.0 fetch, FRED fredgraph.csv?id=GDP"
+}

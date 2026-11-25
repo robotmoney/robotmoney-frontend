@@ -4,6 +4,7 @@
 import parser from "cron-parser";
 import { ROUTES } from "@robotmoney/contract";
 import { runAnalytics, resolveAnalyticsSource, RESEARCH_TOOL_GROUP, RESEARCH_SIGNAL_TELEMETRY_KEYS } from "../analytics/index.ts";
+import { BESIDE_REGIME_VERSIONS, type RegimeVersion } from "../analytics/analyze/regime-versions.ts";
 import { analyticsApiClient, resolveAnalyticsApiConfig, type AnalyticsApiConfig } from "../analytics/api-client.ts";
 import { bootstrapEdgarSeed } from "../analytics/edgar-seed-loader.ts";
 import type { AnalyticsPersistence } from "../analytics/persistence.ts";
@@ -15,7 +16,14 @@ import { writeHeartbeat } from "../ops/heartbeat.ts";
 
 export type ProducerKind = "regime" | "research";
 
-type Runner = (asof: string, tool: string, source: AnalyticsDataSource, persistence: AnalyticsPersistence) => Promise<Record<string, unknown>>;
+// `run` (issue 1753) names what one regime run of a tick computes: the
+// methodology version when it is not the main line's, and the source the
+// tick's runs share so the tick makes one provider request per series.
+export interface RegimeTickRun {
+  regimeVersion?: RegimeVersion;
+  runSource?: AnalyticsDataSource;
+}
+type Runner = (asof: string, tool: string, source: AnalyticsDataSource, persistence: AnalyticsPersistence, run?: RegimeTickRun) => Promise<Record<string, unknown>>;
 
 export function requireProducerApiConfig(
   env: Record<string, string | undefined> = process.env,
@@ -36,8 +44,13 @@ export async function runProducerOnce(
 ): Promise<Record<string, unknown>> {
   const persistence = deps.persistence ?? analyticsApiClient();
   const source = deps.source ?? resolveAnalyticsSource();
-  const runner: Runner = deps.runner ?? ((date, tool, src, store) => runAnalytics(date, tool, src, store));
-  if (kind === "regime") return runner(asof, "regime", source, persistence);
+  const runner: Runner =
+    deps.runner ??
+    ((date, tool, src, store, run) =>
+      run === undefined
+        ? runAnalytics(date, tool, src, store)
+        : runAnalytics(date, tool, src, store, undefined, undefined, run.regimeVersion, run.runSource ? { runSource: run.runSource } : {}));
+  if (kind === "regime") return runRegimeTick(runner, asof, source, persistence);
   // ONE invocation for both research signals (issue #509). They share a
   // single fetchResearchInputs call — and therefore a single live EDGAR
   // sweep. Looping the research tool ids here ran that sweep once PER TOOL: two
@@ -46,6 +59,34 @@ export async function runProducerOnce(
   // persists the fetched rows), and whose degrade never reached the
   // telemetry collector.
   return runner(asof, RESEARCH_TOOL_GROUP, source, persistence);
+}
+
+// One regime tick (issue 1753, decision D96): the main-line run first, then
+// one run for each methodology published beside it (BESIDE_REGIME_VERSIONS:
+// v5). The runs share one fetch memo, so the tick makes one provider request
+// per series. Each run is its own ledger run with its own outcome: a beside
+// run that fails is logged and neither fails nor changes the main-line run,
+// and a failed main-line run does not stop the beside runs. The tick's result
+// and its error are the main-line run's.
+async function runRegimeTick(runner: Runner, asof: string, source: AnalyticsDataSource, persistence: AnalyticsPersistence): Promise<Record<string, unknown>> {
+  const runSource = source.forRun?.({ regime: true, research: false }) ?? source;
+  let main: Record<string, unknown> | null = null;
+  let mainError: unknown = null;
+  try {
+    main = await runner(asof, "regime", source, persistence, { runSource });
+  } catch (err) {
+    mainError = err;
+  }
+  for (const regimeVersion of BESIDE_REGIME_VERSIONS) {
+    try {
+      await runner(asof, "regime", source, persistence, { regimeVersion, runSource });
+    } catch (err) {
+      // "regime failed" is the phrase the standing soak check reads (scripts/lib/gate/standing.ts PRODUCER_FAILURE).
+      console.error(`[analytics-producer] regime failed for methodology ${regimeVersion} (beside the main line), ${asof}: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+  if (main === null) throw mainError;
+  return main;
 }
 
 // ── Catch-up (issue #614 AC4) ────────────────────────────────────────────────

@@ -71,7 +71,7 @@ jobs:
       - name: Fixtures exist and are current
         working-directory: packages/analyst-sdk
         run: |
-          for f in tests/fixtures/raw-indicator-history.csv tests/fixtures/raw-indicator-history.json tests/golden/regime-report.json tests/fixtures/archive/facts.json tests/fixtures/archive/api-recorded/backups.json tests/reference/backtest-pre-refactor.ts; do
+          for f in tests/fixtures/raw-indicator-history.csv tests/fixtures/raw-indicator-history.json tests/golden/regime-report.json tests/fixtures/archive/facts.json tests/fixtures/archive/api-recorded/backups.json tests/reference/backtest-pre-refactor.ts tests/fixtures/lex-equity-golden/runs.json.gz tests/fixtures/lex-equity-golden/outputs.json tests/fixtures/lex-equity-golden/manifest.json; do
             test -s "$f" || { echo "::error::$f is missing: an SDK fixture is absent"; exit 1; }
           done
           bun run archive-fixture:regenerate --check
@@ -209,6 +209,21 @@ jobs:
           tests/archive-reader.test.ts:39
           tests/ratio-close.test.ts:6
           tests/exports.test.ts:7
+      # Issue 1753: methodology v5. The golden suite is the full 3,124-day
+      # reproduction of the downstream golden from the committed fixture, byte for
+      # byte, backtest block included, with its negative controls; it needs no
+      # csv-backups access. The v5 suite holds the rules, the registry, the kept
+      # record and the derived declarations. The suites the same issue extended
+      # ran their added cases. A suite that runs fewer cases, or skips one, is red.
+      - name: Methodology v5 suites ran (issue 1753)
+        run: >-
+          bun scripts/checks/assert-junit-suites.ts "$RUNNER_TEMP/analyst-sdk.junit.xml"
+          tests/regime-v5-golden.test.ts:10
+          tests/regime-v5.test.ts:23
+          tests/regime-versions.test.ts:26
+          tests/collected-series.test.ts:15
+          tests/exports.test.ts:9
+          tests/regime-rules.test.ts:11
       # Export ONLY the package's tracked files (no node_modules from the install
       # above) into a fresh directory, install from the lockfile, and diff the CLI
       # output against the committed golden. Fails if the SDK reaches outside

@@ -8,7 +8,9 @@
 //                                    DXY/DTWEXBGS, ICSA; and the collected, unscored
 //                                    BAA10Y, extract/collected-series.ts)
 //   - yahoo single symbol         → adj-close level (VIX/^VIX, SPX_TREND/^GSPC,
-//                                    ETH_TREND/ETH-USD)
+//                                    ETH_TREND/ETH-USD; and the collected CBOE_VIX3M,
+//                                    CBOE_SKEW), or the day's volume for a collected
+//                                    series with field "volume" (SPX_VOLUME, issue 1753)
 //   - yahoo [num, den]            → num/den ratio on shared dates (COPPER_GOLD=HG/GC,
 //                                    IWM_SPY, BTC_ETH=BTC-USD/ETH-USD, SPHB_SPLV,
 //                                    MTUM_SPY, IWF_IWD, XLU_SPY, XLP_XLY), for a stored
@@ -36,7 +38,7 @@ import { mergeRatioSeries } from "../transform/grid.ts";
 import { ratioLegSourceId, STORED_RATIO_IDS, STORED_UNDER, type LegClose } from "../series-ids.ts";
 import { COLLECTED_SERIES, collectionRegistry, type SourceSeries } from "./collected-series.ts";
 import { fetchFred } from "./fred.ts";
-import { fetchYahoo, fetchYahooChart, fetchYahooClose, parseYahoo, parseYahooClose } from "./yahoo.ts";
+import { fetchYahoo, fetchYahooChart, fetchYahooClose, fetchYahooVolume, parseYahoo, parseYahooClose, parseYahooVolume } from "./yahoo.ts";
 import { fetchDefillamaTvl, fetchDefillamaStables } from "./defillama.ts";
 import { fetchBlockchainComChart } from "./blockchain-com.ts";
 import { fetchCoinmetrics } from "./coinmetrics.ts";
@@ -119,6 +121,14 @@ export interface FetchMemo {
   yahoo(symbol: string, startUnix?: number): Promise<Point[]>;
   /** fetchYahooClose(symbol, startUnix), the raw close, from the same request as `yahoo` (issue 1644). */
   yahooClose(symbol: string, startUnix?: number): Promise<Point[]>;
+  /** The day's volume, from the same request as `yahoo` (issue 1753). */
+  yahooVolume(symbol: string, startUnix?: number): Promise<Point[]>;
+  /**
+   * Any other provider request, made once per memo under `key` (issue 1753):
+   * the runs of one producer tick share a memo, so a tick makes one request
+   * per provider series. A failed request fails every caller of it.
+   */
+  once(key: string, request: () => Promise<Point[]>): Promise<Point[]>;
   defillamaTvl(): Promise<Point[]>;
   defillamaStables(): Promise<Point[]>;
 }
@@ -145,6 +155,7 @@ export function mergeYahooPlans(...plans: YahooPlan[]): Record<string, number> {
 
 export function createFetchMemo(plan: YahooPlan = {}): FetchMemo {
   const yahoo = new Map<string, { start: number; chart: Promise<unknown> }>();
+  const others = new Map<string, Promise<Point[]>>();
   let tvl: Promise<Point[]> | null = null;
   let stables: Promise<Point[]> | null = null;
   // The adjusted close and the raw close (issue 1644) read the one chart
@@ -166,6 +177,12 @@ export function createFetchMemo(plan: YahooPlan = {}): FetchMemo {
   return {
     yahoo: (symbol, startUnix = 0) => serve(symbol, startUnix, parseYahoo),
     yahooClose: (symbol, startUnix = 0) => serve(symbol, startUnix, parseYahooClose),
+    yahooVolume: (symbol, startUnix = 0) => serve(symbol, startUnix, parseYahooVolume),
+    once: (key, request) => {
+      let hit = others.get(key);
+      if (!hit) others.set(key, (hit = request()));
+      return hit.then((p) => p.slice());
+    },
     defillamaTvl: () => (tvl ??= fetchDefillamaTvl(15000, dayClose("defillama_tvl"))).then((p) => p.slice()),
     defillamaStables: () => (stables ??= fetchDefillamaStables(15000, dayClose("defillama_stables"))).then((p) => p.slice()),
   };
@@ -202,10 +219,14 @@ export function registryRatioLegs(indicators: readonly SourceSeries[] = INDICATO
 // caller decides whether to fall back to persisted history.
 export async function fetchOne(ind: SourceSeries, logger: Logger = console, ext: SourceExtensions = {}, memo?: FetchMemo): Promise<Point[]> {
   const yahoo = (symbol: string) => (memo ? memo.yahoo(symbol, 0) : fetchYahoo(symbol));
+  // One request per provider series per memo (issue 1753); without a memo the call fetches on its own.
+  const once = (key: string, request: () => Promise<Point[]>) => (memo ? memo.once(key, request) : request());
   switch (ind.source) {
     case "fred":
-      return fetchFred(ind.series as string);
+      return once(`fred:${ind.series as string}`, () => fetchFred(ind.series as string));
     case "yahoo": {
+      // Issue 1753: a volume series reads the chart response the run already requests for the symbol.
+      if (ind.field === "volume") return memo ? memo.yahooVolume(ind.series as string, 0) : fetchYahooVolume(ind.series as string);
       if (Array.isArray(ind.series)) {
         // Issue 1644: a ratio that is not stored is never computed at ingestion
         // (issue 1733: every registry ratio is stored, for v3 replays).
@@ -219,18 +240,20 @@ export async function fetchOne(ind: SourceSeries, logger: Logger = console, ext:
     case "defillama_stables":
       return memo ? memo.defillamaStables() : fetchDefillamaStables(15000, dayClose("defillama_stables"));
     case "blockchain_com":
-      return fetchBlockchainComChart(ind.series as string);
+      return once(`blockchain_com:${ind.series as string}`, () => fetchBlockchainComChart(ind.series as string));
     case "coinmetrics": {
       const s = ind.series as { asset: string; metric: string };
-      return fetchCoinmetrics(s.asset, s.metric, "2018-01-01", 15000, dayClose("coinmetrics"));
+      return once(`coinmetrics:${s.asset}.${s.metric}`, () => fetchCoinmetrics(s.asset, s.metric, "2018-01-01", 15000, dayClose("coinmetrics")));
     }
-    case "geckoterminal_newpools":
+    case "geckoterminal_newpools": {
       if (!ext.geckoterminal_newpools) throw new Error("geckoterminal_newpools needs a host-supplied adapter (SourceExtensions)");
-      return ext.geckoterminal_newpools();
+      const newPools = ext.geckoterminal_newpools;
+      return once("geckoterminal_newpools", () => newPools());
+    }
     case "multpl_shiller_cape":
-      return fetchMultplShillerCape();
+      return once("multpl_shiller_cape", () => fetchMultplShillerCape());
     case "shiller_cape":
-      return fetchShillerCape(logger);
+      return once("shiller_cape", () => fetchShillerCape(logger));
     default:
       throw new Error(`Unknown source: ${ind.source}`);
   }
@@ -293,8 +316,8 @@ export async function fetchAll(
         const points = await record({
           provider: ind.source,
           sourceKey: `raw_indicator_history:${ind.id}`,
-          parserVersion: `${ind.source}:1`,
-          cacheIdentity: JSON.stringify(ind.series ?? null),
+          parserVersion: ind.field === undefined ? `${ind.source}:1` : `${ind.source}-${ind.field}:1`,
+          cacheIdentity: ind.field === undefined ? JSON.stringify(ind.series ?? null) : `${JSON.stringify(ind.series ?? null)}:${ind.field}`,
           requestedByRunId: opts.requestedByRunId,
           provenance: opts.provenance,
         }, () => fetchOne(ind, logger, opts.extensions, opts.memo));

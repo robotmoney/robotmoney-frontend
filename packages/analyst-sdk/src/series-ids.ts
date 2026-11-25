@@ -37,7 +37,7 @@
 //
 // Writes use the reverse mapping: storageKeyForSourceId(consumer, sourceId).
 import type { Point, RawIndicatorHistory } from "./types.ts";
-import { INDICATORS, type Indicator } from "./analyze/indicators.ts";
+import { INDICATORS, V5_INPUT_IDS, type Indicator } from "./analyze/indicators.ts";
 import { LEDGER_EXTRA_KEYS } from "./extras.ts";
 
 export type SeriesKind = "source" | "calculated";
@@ -185,6 +185,48 @@ export function validateSeriesMapping<T extends readonly SeriesMapping[]>(mappin
 /** The one shared mapping, validated when this module loads. */
 export const SERIES_MAPPING: readonly SeriesMapping[] = Object.freeze(validateSeriesMapping(buildMapping()));
 
+// METHODOLOGY v5 (issue 1753, decision D96). The main-line mapping above is
+// what v3 and v4 read, and it does not change. A v5 run reads it plus the raw
+// inputs of its four derived indicators (transform/derived.ts
+// V5_DERIVED_SERIES): five collected series, each stored under
+// `raw_indicator_history:<ID>` (extract/collected-series.ts), the stored
+// yahoo:^VIX stream as the VIX_TERM denominator, and the backtest's ^GSPC
+// closes. The platform stores one yahoo:^VIX stream (D74): the VIX indicator
+// and the VIX_TERM denominator both read it, the denominator under its own
+// input id, so an input may still supply the two separately.
+const V5_INPUT_MAPPING: readonly SeriesMapping[] = Object.freeze([
+  { consumer: indicatorConsumer("FISCAL"), storageKey: `raw_indicator_history:${V5_INPUT_IDS.deficit}`, series: "fred:MTSDS133FMS", kind: "source", inputId: V5_INPUT_IDS.deficit },
+  { consumer: indicatorConsumer("FISCAL"), storageKey: `raw_indicator_history:${V5_INPUT_IDS.gdp}`, series: "fred:GDP", kind: "source", inputId: V5_INPUT_IDS.gdp },
+  { consumer: indicatorConsumer("VIX_TERM"), storageKey: `raw_indicator_history:${V5_INPUT_IDS.vix3m}`, series: "yahoo:^VIX3M", kind: "source", inputId: V5_INPUT_IDS.vix3m },
+  { consumer: indicatorConsumer("VIX_TERM"), storageKey: "raw_indicator_history:VIX", series: "yahoo:^VIX", kind: "source", inputId: V5_INPUT_IDS.vix },
+  { consumer: indicatorConsumer("SKEW"), storageKey: `raw_indicator_history:${V5_INPUT_IDS.skew}`, series: "yahoo:^SKEW", kind: "source", inputId: V5_INPUT_IDS.skew },
+  { consumer: indicatorConsumer("UPVOL_SHARE"), storageKey: `raw_indicator_history:${V5_INPUT_IDS.volume}`, series: "yahoo:^GSPC.volume", kind: "source", inputId: V5_INPUT_IDS.volume },
+  { consumer: indicatorConsumer("UPVOL_SHARE"), storageKey: LEDGER_EXTRA_KEYS.spx.ledgerKey, series: extraSourceId(LEDGER_EXTRA_KEYS.spx), kind: "source", inputId: V5_INPUT_IDS.close },
+] satisfies SeriesMapping[]);
+
+/** The v5 mapping: the main-line mapping, then the raw inputs of the derived indicators. */
+export const V5_SERIES_MAPPING: readonly SeriesMapping[] = Object.freeze(validateSeriesMapping([...SERIES_MAPPING, ...V5_INPUT_MAPPING]));
+
+/** An input id read from another input's stream when the input omits it: STORED_UNDER, and under v5 the VIX_TERM denominator from VIX. */
+export const V5_STORED_UNDER: Readonly<Record<string, string>> = Object.freeze({ ...STORED_UNDER, [V5_INPUT_IDS.vix]: "VIX" });
+
+// `version` is a methodology tag (analyze/regime-versions.ts REGIME_VERSIONS). It is typed
+// as a string so this module imports no calculation code: the public analytics routes read it.
+/** The storage mapping a methodology version reads (issue 1753): SERIES_MAPPING itself for v3, v4 and any other tag. */
+export function seriesMappingFor(version: string): readonly SeriesMapping[] {
+  return version === "v5" ? V5_SERIES_MAPPING : SERIES_MAPPING;
+}
+
+/** The stored-under aliases a methodology version resolves its input with: STORED_UNDER itself for v3 and v4. */
+export function storedUnderFor(version: string): Readonly<Record<string, string>> {
+  return version === "v5" ? V5_STORED_UNDER : STORED_UNDER;
+}
+
+/** The storage keys only a v5 run reads: the five collected series (the other two v5 inputs are main-line keys). */
+export const V5_ONLY_STORAGE_KEYS: readonly string[] = Object.freeze(
+  V5_INPUT_MAPPING.map((m) => m.storageKey).filter((k) => !SERIES_MAPPING.some((m) => m.storageKey === k)),
+);
+
 // RATIO LEGS (issue 1644, analytics requirements 4.3): the leg entries of
 // SERIES_MAPPING, four per ratio consumer (32 entries over 28 keys).
 const RATIO_CONSUMERS = new Set(SERIES_MAPPING.filter((m) => m.kind === "calculated").map((m) => m.consumer));
@@ -318,14 +360,19 @@ export function inputHistoryFromStorage(rows: readonly StoredObservation[], mapp
  * the same keys and the same arrays. A ratio's legs pass through under their
  * own names: transform/ratios.ts ratiosFromLegs calculates the ratio.
  */
-export function resolveInputHistory(input: RawIndicatorHistory, mapping: readonly SeriesMapping[] = SERIES_MAPPING): RawIndicatorHistory {
+export function resolveInputHistory(
+  input: RawIndicatorHistory,
+  mapping: readonly SeriesMapping[] = SERIES_MAPPING,
+  // The aliases of the mapping's version (issue 1753, storedUnderFor). Default STORED_UNDER.
+  storedUnder: Readonly<Record<string, string>> = STORED_UNDER,
+): RawIndicatorHistory {
   const resolved = new Map<string, string>(); // inputId -> the input name it is read from
   const consumed = new Set<string>();
   for (const m of mapping) {
     // A growth indicator stored under another's key (D74 amendment) is named
     // only by its own id: its storage key and source id name the base
     // indicator's stream, which feeds it below when the input omits it.
-    const aliased = Object.hasOwn(STORED_UNDER, m.inputId);
+    const aliased = Object.hasOwn(storedUnder, m.inputId);
     const names = (aliased ? [m.inputId] : [m.inputId, m.storageKey, ...(m.kind === "source" ? [m.series] : [])]).filter((n, i, a) => a.indexOf(n) === i && Object.hasOwn(input, n));
     if (names.length > 1) throw new AmbiguousInputSeriesError(m.consumer, [names[0]!, names[1]!]);
     if (names.length === 0) continue;
@@ -343,7 +390,7 @@ export function resolveInputHistory(input: RawIndicatorHistory, mapping: readonl
   // D74 amendment: an input that carries DEFI_TVL (or STABLES) and not
   // DEFI_GROWTH (or STABLES_GROWTH) feeds the growth indicator from it, the
   // series it is stored under. An input that names the growth id keeps it.
-  for (const [id, stored] of Object.entries(STORED_UNDER)) {
+  for (const [id, stored] of Object.entries(storedUnder)) {
     if (!Object.hasOwn(out, id) && Object.hasOwn(out, stored)) out[id] = out[stored]!;
   }
   return out;

@@ -196,7 +196,7 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
     path: ROUTES.dashboards.regimeSnapshots,
     summary: "Daily cross-asset risk-on / risk-off classifier",
     description:
-      "The regime classifier: a composite score in 0..1 per day, its 3-year rolling percentile, the label (risk_off, neutral or risk_on, bucketed on the percentile at 0.33 and 0.67), the macro / onchain / equity-factor indicator panels behind it, and, on request, the backtests. If all you want is today's reading it is `latest.composite` and `latest.regime`. `range` trims the history; the correlation matrices ride on `latest` whatever the range, and the backtests come only with `include=backtest`. `source` says which read path produced the response: `regime_snapshots` (the current-view table) or `ledger` (the immutable run ledger). This is where regime outputs live; the raw inputs are under /api/public/analytics/.",
+      "The regime classifier: a composite score in 0..1 per day, its 3-year rolling percentile, the label (risk_off, neutral or risk_on, bucketed on the percentile at 0.33 and 0.67), the macro / onchain / equity-factor indicator panels behind it, and, on request, the backtests. If all you want is today's reading it is `latest.composite` and `latest.regime`. `range` trims the history; the correlation matrices ride on `latest` whatever the range, and the backtests come only with `include=backtest`. `source` says which read path produced the response: `regime_snapshots` (the current-view table) or `ledger` (the immutable run ledger). `methodology` picks the line of one methodology version: without it the response is the served main line; `v5` is a methodology computed and published beside it, with its own indicators, a composite ranked against its whole record, no trailing percentile (`compositePercentile` is null) and a hypothetical backtest. A response to a request that names a methodology carries it back in `methodology`. This is where regime outputs live; the raw inputs are under /api/public/analytics/.",
     backs: ["/regime", "/regime/indicators", "/regime-detection"],
     params: [
       {
@@ -210,6 +210,12 @@ export const PUBLIC_ENDPOINTS: AgentEndpoint[] = [
         in: "query",
         description: "`backtest` adds the three backtests to `latest`.",
         example: "backtest",
+      },
+      {
+        name: "methodology",
+        in: "query",
+        description: "A regime methodology version: `v3`, `v4` or `v5`. Omitted, the served main line. `v5` is the line published beside it. Any other value is a 400 that lists the allowed values.",
+        example: "v5",
       },
     ],
     contractType: "RegimeSnapshotsResponse",

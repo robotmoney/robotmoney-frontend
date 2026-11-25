@@ -18,11 +18,19 @@ import { INDICATORS, type Indicator } from "../analyze/indicators.ts";
 
 /** The fields a fetch, store and route need. Every Indicator is one. */
 // `ratioInput` says whether a Yahoo ratio is stored (issue 1644): a collection field.
-export type SourceSeries = Pick<Indicator, "id" | "name" | "source" | "series" | "unit" | "source_url" | "description" | "ratioInput">;
+// `field` (issue 1753) is the value read of a Yahoo chart response: absent, the
+// adjusted close; "volume", the day's volume, its own series `yahoo:<SYMBOL>.volume`.
+export type SourceSeries = Pick<Indicator, "id" | "name" | "source" | "series" | "unit" | "source_url" | "description" | "ratioInput"> & { field?: "volume" };
 
 export interface CollectedSeries extends SourceSeries {
   source_url: string;
   description: string;
+}
+
+/** The source id of a single-series collected entry: `<provider>:<symbol>`, with `.volume` for a volume field. */
+export function collectedSourceId(s: SourceSeries): string {
+  if (typeof s.series !== "string") throw new Error(`collected series ${s.id}: it names no single source series`);
+  return `${s.source}:${s.series}${s.field === undefined ? "" : `.${s.field}`}`;
 }
 
 export const COLLECTED_SERIES: readonly CollectedSeries[] = [
@@ -35,6 +43,55 @@ export const COLLECTED_SERIES: readonly CollectedSeries[] = [
     source_url: "https://fred.stlouisfed.org/series/BAA10Y",
     description:
       "Moody's seasoned Baa corporate bond yield minus the 10-year Treasury constant maturity yield, published daily by FRED. Its free history starts 1986-01-02.",
+  },
+  // Issue 1753: the raw inputs of methodology v5's derived indicators
+  // (analyze/indicators.ts V5_DERIVED_SERIES). Collected by every regime run,
+  // scored by nothing on the main line. Their ids are V5_INPUT_IDS.
+  {
+    id: "FED_SURPLUS_MONTHLY",
+    name: "Monthly federal surplus or deficit",
+    source: "fred",
+    series: "MTSDS133FMS",
+    unit: "millions of dollars",
+    source_url: "https://fred.stlouisfed.org/series/MTSDS133FMS",
+    description: "The federal government's monthly surplus (positive) or deficit (negative) from the Monthly Treasury Statement, in millions of dollars, published by FRED.",
+  },
+  {
+    id: "US_GDP",
+    name: "US nominal GDP",
+    source: "fred",
+    series: "GDP",
+    unit: "billions of dollars",
+    source_url: "https://fred.stlouisfed.org/series/GDP",
+    description: "US gross domestic product, quarterly, in billions of dollars at a seasonally adjusted annual rate, published by FRED.",
+  },
+  {
+    id: "CBOE_VIX3M",
+    name: "CBOE 3-month volatility index",
+    source: "yahoo",
+    series: "^VIX3M",
+    unit: "index",
+    source_url: "https://finance.yahoo.com/quote/%5EVIX3M",
+    description: "The market's expected volatility of the S&P 500 over the next three months, from option prices (CBOE VIX3M), daily close.",
+  },
+  {
+    id: "CBOE_SKEW",
+    name: "CBOE SKEW index",
+    source: "yahoo",
+    series: "^SKEW",
+    unit: "index",
+    source_url: "https://finance.yahoo.com/quote/%5ESKEW",
+    description: "The price of protection against a large S&P 500 fall, from out-of-the-money option prices (CBOE SKEW), daily close.",
+  },
+  {
+    id: "SPX_VOLUME",
+    name: "S&P 500 daily volume",
+    source: "yahoo",
+    series: "^GSPC",
+    field: "volume",
+    unit: "shares",
+    source_url: "https://finance.yahoo.com/quote/%5EGSPC",
+    description: "The S&P 500 index's daily volume, read from the same Yahoo chart response as its close.",
   },
 ];
 

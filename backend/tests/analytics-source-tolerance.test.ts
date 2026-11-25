@@ -30,7 +30,8 @@ import { ASOF, baseObservations, capturingTelemetry, liveOn, poisonedSource, sec
 import { inventoryCollection, loadResearchSeriesInventory, collectedByInventory } from "../src/analytics/extract/model-portfolio.ts";
 import { registryRatioLegs } from "../../packages/analyst-sdk/src/extract/sources.ts";
 import { RATIO_LEG_MAPPING } from "../../packages/analyst-sdk/src/series-ids.ts";
-import { collectionRegistry } from "../../packages/analyst-sdk/src/extract/collected-series.ts";
+import { COLLECTED_SERIES, collectedSourceId, collectionRegistry } from "../../packages/analyst-sdk/src/extract/collected-series.ts";
+import { REGIME_STORAGE_KEYS, regimeStorageKeysFor } from "../src/analytics/store/run-ledger-store.ts";
 import { captureSourceAcquisition } from "../src/analytics/source-ledger.ts";
 import {
   BIN_COUNT,
@@ -112,6 +113,42 @@ describe("issue #1035 AC8: a declared tolerance for every source_key the extract
     const d56 = decisions.slice(start, decisions.indexOf("\n## D", start + 1));
     const row = d56.split("\n").find((l) => l.includes("`raw_indicator_history:BAA10Y`"));
     expect(row).toMatch(/\| fred[^|]*\| exact \|$/);
+  });
+
+  // Issue 1753: the five raw series of methodology v5's derived indicators are
+  // collected series. Every regime run acquires them under raw_indicator_history:<ID>.
+  test("issue 1753: the five collected series of methodology v5 each have a tolerance entry and a D56 row, and no main-line reader includes them", () => {
+    const five: Record<string, { sourceId: string; tolerance: { relative: number; basis: "exact" | "yahoo-float32" } }> = {
+      FED_SURPLUS_MONTHLY: { sourceId: "fred:MTSDS133FMS", tolerance: { relative: 0, basis: "exact" } },
+      US_GDP: { sourceId: "fred:GDP", tolerance: { relative: 0, basis: "exact" } },
+      CBOE_VIX3M: { sourceId: "yahoo:^VIX3M", tolerance: { relative: 1e-6, basis: "yahoo-float32" } },
+      CBOE_SKEW: { sourceId: "yahoo:^SKEW", tolerance: { relative: 1e-6, basis: "yahoo-float32" } },
+      SPX_VOLUME: { sourceId: "yahoo:^GSPC.volume", tolerance: { relative: 0, basis: "exact" } },
+    };
+    const written = extractorSourceKeys();
+    const decisions = readFileSync(join(repoRoot, "docs", "decisions.md"), "utf8");
+    const d56 = decisions.slice(decisions.indexOf("## D56 "), decisions.indexOf("\n## D", decisions.indexOf("## D56 ") + 1));
+    for (const [id, want] of Object.entries(five)) {
+      const key = `raw_indicator_history:${id}`;
+      const entry = COLLECTED_SERIES.find((s) => s.id === id)!;
+      expect({ id, declared: entry !== undefined }).toEqual({ id, declared: true });
+      expect({ id, sourceId: collectedSourceId(entry) }).toEqual({ id, sourceId: want.sourceId });
+      expect({ key, written: written.has(key) }).toEqual({ key, written: true });
+      expect({ key, tolerance: SOURCE_TOLERANCES[key] }).toEqual({ key, tolerance: want.tolerance });
+      expect({ key, row: d56.split("\n").some((l) => l.includes(`\`${key}\``) && l.includes(want.tolerance.relative === 0 ? "exact" : "1e-6")) }).toEqual({ key, row: true });
+      // No main-line scoring reader includes it: not an indicator, not a main-line storage key.
+      expect({ id, scored: INDICATORS.some((i) => i.id === id) }).toEqual({ id, scored: false });
+      expect({ key, mainLineKey: REGIME_STORAGE_KEYS.includes(key) }).toEqual({ key, mainLineKey: false });
+      expect({ key, v4Key: regimeStorageKeysFor("v4").includes(key) }).toEqual({ key, v4Key: false });
+      expect({ key, v5Key: regimeStorageKeysFor("v5").includes(key) }).toEqual({ key, v5Key: true });
+    }
+    expect(COLLECTED_SERIES.find((s) => s.id === "SPX_VOLUME")!.field).toBe("volume");
+    // v3, v4 and an unknown label read exactly the main-line keys; v5 reads them plus the five.
+    expect(regimeStorageKeysFor("v3")).toBe(REGIME_STORAGE_KEYS);
+    expect(regimeStorageKeysFor("v4")).toBe(REGIME_STORAGE_KEYS);
+    expect(regimeStorageKeysFor(undefined)).toBe(REGIME_STORAGE_KEYS);
+    expect(regimeStorageKeysFor("v-test")).toBe(REGIME_STORAGE_KEYS);
+    expect([...regimeStorageKeysFor("v5")].sort()).toEqual([...REGIME_STORAGE_KEYS, ...Object.keys(five).map((id) => `raw_indicator_history:${id}`)].sort());
   });
 
   test("the table lists no key an extractor no longer writes", () => {

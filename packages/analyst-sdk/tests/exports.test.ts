@@ -65,10 +65,33 @@ describe("package entry exports the downstream regime model surface (issue 1751)
     ] as const) {
       expect(typeof sdk[name], name).toBe("function");
     }
-    expect(Object.keys(sdk.REGIME_RULES)).toEqual(["v3", "v4"]);
-    expect(sdk.REGIME_KNOWLEDGE_TIME).toEqual({ v3: false, v4: true });
-    expect(sdk.REGIME_OBSERVATION_WINDOWS).toEqual({ v3: false, v4: true });
-    expect(sdk.REGIME_MISSING_PANEL).toEqual({ v3: "rebase", v4: "nan" });
-    expect(sdk.REGIME_LABEL_CUT).toEqual({ v3: "percentile", v4: "series" });
+    expect(Object.keys(sdk.REGIME_RULES)).toEqual(["v3", "v4", "v5"]);
+    expect(sdk.REGIME_KNOWLEDGE_TIME).toEqual({ v3: false, v4: true, v5: false });
+    expect(sdk.REGIME_OBSERVATION_WINDOWS).toEqual({ v3: false, v4: true, v5: false });
+    expect(sdk.REGIME_MISSING_PANEL).toEqual({ v3: "rebase", v4: "nan", v5: "rebase" });
+    expect(sdk.REGIME_LABEL_CUT).toEqual({ v3: "percentile", v4: "series", v5: "series" });
+  });
+});
+
+// Issue 1753: methodology v5 and its kept record are on the package entry.
+describe("package entry exports methodology v5 and the kept record (issue 1753)", () => {
+  test("the kept-record functions and the building blocks they read are functions on the package entry", () => {
+    for (const name of [
+      "computeKeptRegime", "keptRegimeRows", "withDerivedSeries", "scoreDays", "fitDay", "keptDayOf", "walkForward", "deriveKeptRecord",
+      "panelMean", "smoothRegimes", "bucketFn", "derivedInputIds", "seriesMappingFor", "storedUnderFor",
+    ] as const) {
+      expect(typeof sdk[name], name).toBe("function");
+    }
+  });
+  test("the v5 declarations are exported: the line, the registry, the derived series and the backtest rules", () => {
+    expect(sdk.REGIME_LINE).toEqual({ v3: "main", v4: "main", v5: "beside" });
+    expect(sdk.BESIDE_REGIME_VERSIONS).toEqual(["v5"]);
+    expect(sdk.REGIME_COMPOSITE_NORMALISATION).toEqual({ v3: "none", v4: "none", v5: "percentile" });
+    expect(sdk.REGIME_KEPT_HISTORY).toEqual({ v3: false, v4: false, v5: true });
+    expect(sdk.REGIME_REGISTRY.v4).toBe(sdk.INDICATORS);
+    expect(sdk.REGIME_REGISTRY.v5).toBe(sdk.V5_INDICATORS);
+    expect(sdk.REGIME_DERIVED_SERIES.v5).toBe(sdk.V5_DERIVED_SERIES);
+    expect(Object.keys(sdk.REGIME_BACKTEST_RULES)).toEqual(["v3", "v4", "v5"]);
+    expect(Object.keys(sdk.V5_INPUT_IDS)).toEqual(["deficit", "gdp", "vix3m", "vix", "skew", "volume", "close"]);
   });
 });

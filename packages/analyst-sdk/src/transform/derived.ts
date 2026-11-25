@@ -11,6 +11,7 @@ import type { Point } from "../types.ts";
 import { sum2 } from "./exact.ts";
 import { mergeRatioSeries } from "./grid.ts";
 import { publicationRuleOf, publishedOn, type PublicationRule } from "./knowledge-time.ts";
+import { V5_INPUT_IDS } from "../analyze/indicators.ts";
 
 /** The values of `input`, re-dated. */
 export interface DerivedLevel {
@@ -75,6 +76,50 @@ export class DerivedSeriesError extends Error {
   constructor(readonly seriesId: string, readonly inputId: string) {
     super(`derived series ${seriesId}: input series ${JSON.stringify(inputId)} is missing`);
     this.name = "DerivedSeriesError";
+  }
+}
+
+// ── Methodology v5 (issue 1753, decision D96) ───────────────────────────────
+// The four derived indicators of the v5 registry (analyze/indicators.ts
+// V5_INDICATORS), as declarations. The publication lag of each is stated here,
+// once, as a calendar-days rule.
+const NEXT_DAY: PublicationRule = { kind: "calendar-days", days: 1 };
+
+/** The four derived series of v5, by indicator id. */
+export const V5_DERIVED_SERIES: readonly DerivedSeries[] = Object.freeze([
+  {
+    op: "rolling-sum-over-known-level",
+    id: "FISCAL",
+    flow: V5_INPUT_IDS.deficit,
+    level: V5_INPUT_IDS.gdp,
+    periods: 12,
+    // The plain in-order sum: the published golden holds it, and a compensated sum differs in the last digit.
+    summation: "plain",
+    negate: true,
+    divisor: 1000,
+    multiplier: 100,
+    // A GDP observation is public 120 calendar days after its date; the result 43 days after the month's date.
+    levelPublication: { kind: "calendar-days", days: 120 },
+    publication: { kind: "calendar-days", days: 43 },
+  },
+  { op: "ratio", id: "VIX_TERM", numerator: V5_INPUT_IDS.vix3m, denominator: V5_INPUT_IDS.vix, publication: NEXT_DAY },
+  { op: "level", id: "SKEW", input: V5_INPUT_IDS.skew, publication: NEXT_DAY },
+  { op: "up-volume-share", id: "UPVOL_SHARE", close: V5_INPUT_IDS.close, volume: V5_INPUT_IDS.volume, window: 20, publication: NEXT_DAY },
+] satisfies DerivedSeries[]);
+
+/** The input series ids a declaration reads, in declaration order (issue 1753). */
+export function derivedInputIds(d: DerivedSeries): string[] {
+  switch (d.op) {
+    case "level":
+      return [d.input];
+    case "ratio":
+      return [d.numerator, d.denominator];
+    case "rolling-sum-over-known-level":
+      return [d.flow, d.level];
+    case "up-volume-share":
+      return [d.close, d.volume];
+    default:
+      throw new RangeError(`derived series ${(d as { id?: unknown }).id}: unknown op ${JSON.stringify((d as { op?: unknown }).op)}`);
   }
 }
 

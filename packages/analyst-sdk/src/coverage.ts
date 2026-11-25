@@ -8,7 +8,8 @@
 // With none, no day can be labelled, so there is no report to give. One empty
 // panel is not an error: the composite is built from the panels that have
 // data, as it always was, and a single indicator with no rows stays all-NaN
-// with weight 0 (docs/technical/regime-engine.md §8.1).
+// with weight 0 (docs/technical/regime-engine.md §8.1). The registry is the
+// run's own (default INDICATORS; a v5 run passes REGIME_REGISTRY.v5, issue 1753).
 //
 // OPTIONAL, with the documented missing result instead of an error:
 //   - an excluded panel (PANEL_MEMBERSHIP): display-only, its figures are null;
@@ -16,7 +17,7 @@
 //     carry no pairs or portfolios in the backend snapshot;
 //   - TBILL3M: the SDK backtest is null; the backend backtest earns no cash yield.
 import type { RawIndicatorHistory } from "./types.ts";
-import { INDICATORS, PANELS, type Panel } from "./analyze/indicators.ts";
+import { INDICATORS, PANELS, type Indicator, type Panel } from "./analyze/indicators.ts";
 
 export class CoverageError extends Error {
   constructor(
@@ -32,9 +33,9 @@ export class CoverageError extends Error {
 }
 
 /** Throws CoverageError when no composite panel has a finite observation on or before `asof`. */
-export function assertRequiredCoverage(raw: RawIndicatorHistory, asof: string, panels: readonly Panel[] = PANELS): void {
+export function assertRequiredCoverage(raw: RawIndicatorHistory, asof: string, panels: readonly Panel[] = PANELS, indicators: readonly Indicator[] = INDICATORS): void {
   const missing = panels.filter(
-    (panel) => !INDICATORS.some((ind) => ind.panel === panel && (raw[ind.id] ?? []).some((p) => p.date <= asof && Number.isFinite(p.value))),
+    (panel) => !indicators.some((ind) => ind.panel === panel && (raw[ind.id] ?? []).some((p) => p.date <= asof && Number.isFinite(p.value))),
   );
   if (missing.length === panels.length) throw new CoverageError(asof, missing);
 }

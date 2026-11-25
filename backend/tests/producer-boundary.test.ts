@@ -40,16 +40,54 @@ test("independent producer computes regime itself and receives only an HTTP pers
   const result = await runProducerOnce("regime", "2031-01-02", {
     source: hermeticDataSource,
     persistence,
-    runner: async (asof, tool, source, store) => {
+    runner: async (asof, tool, source, store, run) => {
       expect(asof).toBe("2031-01-02");
       expect(source).toBe(hermeticDataSource);
       expect(store).toBe(persistence);
-      calls.push(tool);
-      return { [tool]: { submitted: true } };
+      calls.push(`${tool}:${run?.regimeVersion ?? "main"}`);
+      return { [tool]: { submitted: true, version: run?.regimeVersion ?? "main" } };
     },
   });
-  expect(calls).toEqual(["regime"]);
-  expect(result).toEqual({ regime: { submitted: true } });
+  // Issue 1753: the main-line run first, then one run for each methodology
+  // published beside it (v5). The tick's result is the main-line run's.
+  expect(calls).toEqual(["regime:main", "regime:v5"]);
+  expect(result).toEqual({ regime: { submitted: true, version: "main" } });
+});
+
+// Issue 1753: a failed beside run never fails or changes the main-line run, a
+// failed main-line run does not stop the beside run, and the two share one
+// run-scoped source so a tick makes one provider request per series.
+test("a regime tick isolates the beside run from the main-line run and hands both one shared source", async () => {
+  const shared = { ...hermeticDataSource };
+  const source = { ...hermeticDataSource, forRun: () => shared };
+  const seen: (typeof shared | undefined)[] = [];
+  const out = await runProducerOnce("regime", "2031-01-02", {
+    source,
+    persistence,
+    runner: async (_asof, _tool, _source, _store, run) => {
+      seen.push(run?.runSource as typeof shared | undefined);
+      if (run?.regimeVersion === "v5") throw new Error("v5 failed");
+      return { regime: { submitted: true } };
+    },
+  });
+  expect(out).toEqual({ regime: { submitted: true } });
+  expect(seen.length).toBe(2);
+  expect(seen[0]).toBe(shared);
+  expect(seen[1]).toBe(shared);
+
+  const order: string[] = [];
+  await expect(
+    runProducerOnce("regime", "2031-01-02", {
+      source,
+      persistence,
+      runner: async (_asof, _tool, _source, _store, run) => {
+        order.push(run?.regimeVersion ?? "main");
+        if (run?.regimeVersion === undefined) throw new Error("main failed");
+        return { regime: { submitted: true } };
+      },
+    }),
+  ).rejects.toThrow("main failed");
+  expect(order).toEqual(["main", "v5"]);
 });
 
 // Issue #509: the research producer must invoke the orchestrator ONCE per

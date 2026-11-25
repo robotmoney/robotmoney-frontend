@@ -773,5 +773,118 @@ export const ALL_PANELS: Panel[] = Object.keys(PANEL_MEMBERSHIP) as Panel[];
 /** The panels the composite averages, 1/n each. */
 export const PANELS: Panel[] = ALL_PANELS.filter((p) => PANEL_MEMBERSHIP[p] === "included");
 
+// ── Methodology v5 (issue 1753, decision D96) ───────────────────────────────
+// The registry of the model ported from the downstream experiment-lex-equity.
+// INDICATORS is not edited: v5 reads it with VIX scored in the factor panel
+// (VIX, VIX_TERM and SKEW are all read from S&P 500 option prices), plus four
+// derived indicators. Each derived indicator is a DerivedSeries declaration
+// (V5_DERIVED_SERIES in transform/derived.ts) computed by deriveSeries from raw
+// inputs as known on the day, never from a stored derived series. The
+// publication lag of each is stated once, on its declaration, as a
+// calendar-days rule. REGIME_REGISTRY (regime-versions.ts) maps each version to
+// its list. This file imports no calculation code, so a reader of the registry
+// (the public analytics routes) reaches none.
+
+/** The input ids the v5 derived series read (extract/collected-series.ts, series-ids.ts). */
+export const V5_INPUT_IDS = Object.freeze({
+  /** FRED MTSDS133FMS: the monthly federal surplus or deficit, millions of dollars. */
+  deficit: "FED_SURPLUS_MONTHLY",
+  /** FRED GDP: nominal GDP, billions of dollars, annual rate. */
+  gdp: "US_GDP",
+  /** Yahoo ^VIX3M close. */
+  vix3m: "CBOE_VIX3M",
+  /** The stored yahoo:^VIX stream, read as the VIX_TERM denominator under its own input id (D74). */
+  vix: "VIX_TERM_DENOMINATOR",
+  /** Yahoo ^SKEW close. */
+  skew: "CBOE_SKEW",
+  /** Yahoo ^GSPC daily volume. */
+  volume: "SPX_VOLUME",
+  /** The run's own ^GSPC closes: the backtest input SPX (extras.ts). */
+  close: "SPX",
+} as const);
+
+const DERIVED_FILL_REASON = "Carried forward up to the cap the registry indicators declare";
+
+// The scoring fields of the four derived indicators. A derived value is dated
+// on the day it was public (its DerivedSeries publication rule), so here its
+// date is its knowledge date: same-day.
+const V5_DERIVED_INDICATORS: Indicator[] = [
+  {
+    id: "FISCAL",
+    name: "Federal deficit, 12 months, % of GDP",
+    panel: "macro",
+    source: "fred",
+    sign: +1,
+    transform: "level",
+    unit: "percent",
+    fill: DECLARED_FILL,
+    fillReason: DERIVED_FILL_REASON,
+    calendar: "periodic",
+    publication: SAME_DAY,
+    source_url: "https://fred.stlouisfed.org/series/MTSDS133FMS",
+    description: "The federal deficit over the last 12 months, as a share of nominal GDP.",
+    derivation:
+      "Minus the 12-month sum of FRED MTSDS133FMS (millions), in billions, over FRED GDP (billions, annual rate; each quarter used from 120 days after it starts), in percent. Each month is used from 43 days after it starts.",
+    interpretation: "A bigger deficit means more government spending flowing into company revenues: risk-on. A shrinking deficit: risk-off.",
+  },
+  {
+    id: "VIX_TERM",
+    name: "VIX term structure (3-month over 1-month)",
+    panel: "factor",
+    source: "yahoo",
+    sign: +1,
+    transform: "level",
+    unit: "ratio",
+    fill: DECLARED_FILL,
+    fillReason: DERIVED_FILL_REASON,
+    calendar: "exchange",
+    publication: SAME_DAY,
+    source_url: "https://finance.yahoo.com/quote/%5EVIX3M",
+    description: "Expected S&P 500 volatility over the next 3 months, divided by expected volatility over the next month.",
+    derivation: "Yahoo ^VIX3M close over Yahoo ^VIX close, on days both closed; used from the next day.",
+    interpretation:
+      "Above 1, traders expect calm now and more risk later, the usual state in a steady market: risk-on. Below 1, they pay more for protection now than later, which happens in sell-offs: risk-off.",
+  },
+  {
+    id: "SKEW",
+    name: "CBOE SKEW index",
+    panel: "factor",
+    source: "yahoo",
+    sign: -1,
+    transform: "level",
+    unit: "index",
+    fill: DECLARED_FILL,
+    fillReason: DERIVED_FILL_REASON,
+    calendar: "exchange",
+    publication: SAME_DAY,
+    source_url: "https://finance.yahoo.com/quote/%5ESKEW",
+    description: "How much traders pay for protection against a large S&P 500 fall, from out-of-the-money option prices.",
+    derivation: "Yahoo ^SKEW close; used from the next day.",
+    interpretation: "High SKEW means traders are buying crash protection: risk-off. Low SKEW: risk-on.",
+  },
+  {
+    id: "UPVOL_SHARE",
+    name: "S&P 500 up-volume share",
+    panel: "factor",
+    source: "yahoo",
+    sign: +1,
+    transform: "level",
+    unit: "share",
+    fill: DECLARED_FILL,
+    fillReason: DERIVED_FILL_REASON,
+    calendar: "exchange",
+    publication: SAME_DAY,
+    source_url: "https://finance.yahoo.com/quote/%5EGSPC",
+    description: "The share of the last 20 trading days' S&P 500 volume that traded on days the index rose.",
+    derivation: "Yahoo ^GSPC daily volume and the run's own ^GSPC closes (the backtest input SPX), last 20 trading days; used from the next day.",
+    interpretation: "High means most trading came on up days, buying pressure: risk-on. Low means selling pressure: risk-off.",
+  },
+];
+
+/** The v5 registry: INDICATORS in order with VIX in the factor panel, then the four derived indicators (30). */
+export const V5_INDICATORS: readonly Indicator[] = Object.freeze(
+  validateRatioDeclarations([...INDICATORS.map((ind) => (ind.id === "VIX" ? { ...ind, panel: "factor" as const } : ind)), ...V5_DERIVED_INDICATORS]),
+);
+
 export const ROLLING_WINDOW_DAYS = 365 * 3;
 export const COMPOSITE_BUCKETS = { risk_off: 0.33, risk_on: 0.67 };

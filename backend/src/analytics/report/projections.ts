@@ -12,7 +12,8 @@ import { rowToSnapshot, shapeRegimeSnapshots, type RegimeStaleness } from "./reg
 // never the newest run's recomputation the compatibility tables hold. The
 // tables are read only on a database where no run has published anything.
 import { getAnalyticsReadMode } from "../cutover/read-mode.ts";
-import { ledgerCurrentLatestResearchSignal, ledgerPublishedRegimeHistory } from "../cutover/ledger-current.ts";
+import { MAIN_REGIME_LINE, besideRegimeLine, ledgerCurrentLatestResearchSignal, ledgerPublishedRegimeHistory, type RegimeLineSelector } from "../cutover/ledger-current.ts";
+import { REGIME_LINE, type RegimeVersion } from "../analyze/regime-versions.ts";
 import type { RegimeSnapshotRow } from "./regime-projection.ts";
 import { on, registerQuery } from "../../db/registry.ts";
 
@@ -158,16 +159,33 @@ export type RegimeReadSource = "regime_snapshots" | "ledger";
 // /regime's backtest panel reads it. Off by default; the caller opts in with
 // ?include=backtest. Do-not-ship-alone: regime.js has to start asking for it
 // explicitly in the SAME release, or its backtest panel goes blank.
+//
+// `methodology` (issue 1753, decision D96): the line of one methodology
+// version, named in the response's `methodology` field. A version published
+// beside the main line (v5) is read from its own frozen artifacts
+// (`regime_beside_snapshots`); a main-line version from the main line's
+// artifacts stamped with it. Only the ledger is read, and only rows that have
+// a label are served (a beside line also keeps unlabelled rows, so a later run
+// can rebuild its record). A version that has published nothing answers
+// `latest` null and an empty history. Absent, the response is the main line,
+// byte for byte as before, with no `methodology` field.
 export async function fetchRegimeSnapshots(
   range: number,
   includeBacktest = false,
+  methodology?: RegimeVersion,
 ): Promise<{
   latest: RegimeSnapshot | null;
   history: RegimeHistoryPoint[];
   staleness: RegimeStaleness;
   source: RegimeReadSource;
+  methodology?: RegimeVersion;
 }> {
   const today = new Date().toISOString().slice(0, 10);
+  if (methodology !== undefined) {
+    const line: RegimeLineSelector = REGIME_LINE[methodology] === "beside" ? besideRegimeLine(methodology) : { ...MAIN_REGIME_LINE, version: methodology };
+    const rows = ((await ledgerPublishedRegimeHistory(today, sql, line)) ?? []).filter((r) => r.regime != null);
+    return { ...shapeRegimeSnapshots(rows.slice(-range).map(ledgerRowToSnapshot), today, includeBacktest), source: "ledger", methodology };
+  }
   // Issue 1182 (D83): every day's PUBLISHED row, selected from the frozen
   // ledger in both read modes (cutover/ledger-current.ts states the rule).
   // regime_snapshots, which every run rewrites for every day, is read only

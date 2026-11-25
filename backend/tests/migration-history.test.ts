@@ -171,6 +171,7 @@ const NOT_IN_PRODUCTION = [
   "0133_buybacks_refresh_disabled.sql",
   "0134_read_path_indexes.sql",
   "0135_drop_vintage_members_vintage_idx.sql",
+  "0136_regime_beside_snapshots.sql",
 ] as const;
 
 useCleanDatabase(import.meta.file);

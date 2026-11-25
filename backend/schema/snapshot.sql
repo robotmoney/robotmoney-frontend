@@ -104,14 +104,14 @@ CREATE FUNCTION public.rm_analytics_output_natural_keys(artifact_kind text, payl
 DECLARE
   doc jsonb;
 BEGIN
-  IF artifact_kind NOT IN ('regime_snapshots', 'research_signals') THEN
+  IF artifact_kind NOT IN ('regime_snapshots', 'regime_beside_snapshots', 'research_signals') THEN
     RETURN NULL;
   END IF;
   doc := convert_from(payload_bytes, 'UTF8')::jsonb;
   IF jsonb_typeof(doc) <> 'array' THEN
     RETURN '{}'::text[];
   END IF;
-  IF artifact_kind = 'regime_snapshots' THEN
+  IF artifact_kind IN ('regime_snapshots', 'regime_beside_snapshots') THEN
     RETURN ARRAY(
       SELECT coalesce(e.elem ->> 'date', '')
         FROM jsonb_array_elements(doc) WITH ORDINALITY AS e(elem, ord)
@@ -958,7 +958,7 @@ CREATE TABLE public.analytics_output_snapshots (
     byte_length bigint GENERATED ALWAYS AS (octet_length(payload_bytes)) STORED,
     created_at timestamp with time zone DEFAULT clock_timestamp() NOT NULL,
     natural_keys text[] GENERATED ALWAYS AS (public.rm_analytics_output_natural_keys(artifact_kind, payload_bytes)) STORED,
-    CONSTRAINT analytics_output_snapshots_artifact_kind_check CHECK ((artifact_kind = ANY (ARRAY['regime_snapshots'::text, 'research_signals'::text, 'warnings'::text, 'logs'::text, 'exceptions'::text]))),
+    CONSTRAINT analytics_output_snapshots_artifact_kind_check CHECK ((artifact_kind = ANY (ARRAY['regime_snapshots'::text, 'regime_beside_snapshots'::text, 'research_signals'::text, 'warnings'::text, 'logs'::text, 'exceptions'::text]))),
     CONSTRAINT analytics_output_snapshots_check CHECK ((encode(public.digest(payload_bytes, 'sha256'::text), 'hex'::text) = checksum)),
     CONSTRAINT analytics_output_snapshots_checksum_check CHECK ((checksum ~ '^[0-9a-f]{64}$'::text))
 );
