@@ -17,6 +17,7 @@
 // requests (lib/deposit/access.js).
 import { session, MIN_ETH } from "../../lib/deposit/session.js";
 import { MANIFEST } from "../../lib/deposit/manifest.js";
+import { addrHref, copyAddr } from "../../lib/deposit/addr.js";
 import { buildDeposit, buildRedeem, buildExitInKind } from "../../lib/deposit/builder.js";
 import { depositWait, redeemWait, fmtDuration, fmtCountdown, fmtWhenIn, fmtClock, fmtAt, timelineFor, expiresAtOf, epochOf, epochEndAt } from "../../lib/deposit/schedule.js";
 import { nextBatchFor, stageOf, canWithdrawExpired, STAGE } from "../../lib/deposit/stages.js";
@@ -175,7 +176,8 @@ export function registerDepositView(Alpine) {
       return `${fmtUsdc(this.flow().minRequestUsdc)} to ${fmtUsdc(v.maxRequestUsdc)} a request · ${fmtUsdc(v.tvlCapUsdc)} vault cap`;
     },
     fees() { return this.vault ? `Entry ${fmtFee(this.vault.entryFeeBps)} · Exit ${fmtFee(this.vault.exitFeeBps)}` : "—"; },
-    contractsLabel() { return MANIFEST.fund ? `Vault ${shortAddr(MANIFEST.fund)} · Queue ${shortAddr(MANIFEST.queue)}` : "Not on Base yet"; },
+    fundAddr() { return MANIFEST.fund || null; },
+    queueAddr() { return MANIFEST.queue || null; },
     // The (i) beside a row or a step (.rm-tip, components.css): what the label
     // means, so the panel does not spend a sentence under it (David, 17 Nov).
     receiveTip() { return "At today's price. The batch sets the price your deposit buys at."; },
@@ -536,7 +538,7 @@ export function registerDepositView(Alpine) {
       }).observe(inner);
     },
 
-    fmtUsdc, fmtShares, fmtRm, fmtPrice, fmtWhen, fmtWhenShort, fmtFee, shortHash, floorTo, tokenIcon,
+    fmtUsdc, fmtShares, fmtRm, fmtPrice, fmtWhen, fmtWhenShort, fmtFee, shortHash, shortAddr, floorTo, tokenIcon, addrHref, copyAddr,
     hashUrl(h) { return h && /^0x[0-9a-f]{64}$/i.test(h) && !session.simulated ? `${MANIFEST.explorer}/tx/${h}` : null; },
 
     // ── Simulation controls ──────────────────────────────────────────────

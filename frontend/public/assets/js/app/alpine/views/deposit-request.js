@@ -12,6 +12,7 @@
 // read lists none, and the simulator lists its own.
 import { session } from "../../lib/deposit/session.js";
 import { MANIFEST } from "../../lib/deposit/manifest.js";
+import { addrHref, copyAddr } from "../../lib/deposit/addr.js";
 import { buildCancel, buildWithdrawCredit, buildWithdrawExpired, buildGiveNotice, buildTakeBackNotice } from "../../lib/deposit/builder.js";
 import { stageOf, filledOf, outOf, canCancel, canWithdrawExpired, canGiveNotice, canTakeBack, liveRemaining, lockOf, STAGE, IN_FLIGHT } from "../../lib/deposit/stages.js";
 import { timelineOf, summaryOf, inUnit, outUnit, kindLabel, toneOf, cancelledOf, stageHelp, STAGES_TIP } from "../../lib/deposit/describe.js";
@@ -96,10 +97,12 @@ export function registerDepositRequestView(Alpine) {
       if (r.kind === "redeem") out.push({ key: "fee", label: "Exit fee", value: fmtFee(r.exitFeeBps) });
       if (liveRemaining(r) > 0 && r.kind === "deposit") out.push({ key: "exp", label: "Unfilled USDC can be taken back", value: fmtWhenIn(requestExpiresAt(r, f), this.now) });
       if (liveRemaining(r) > 0 && r.kind === "redeem" && !r.noticeAt) out.push({ key: "exp", label: "Notice possible from", value: fmtWhenIn(requestExpiresAt(r, f), this.now) });
-      out.push({ key: "owner", label: "Owner", value: shortAddr(r.owner) });
+      out.push({ key: "owner", label: "Owner", value: shortAddr(r.owner), addr: r.owner });
       return out;
     },
     events() { this.now; return this.r ? timelineOf(this.r, this.now, this.flow()) : []; },
+    // An address links to Basescan and copies in one tap (lib/deposit/addr.js).
+    shortAddr, addrHref, copyAddr,
     txs() { return (this.r?.txs || []).map((h, i) => ({ key: i, hash: h, short: shortHash(h), url: !session.simulated && /^0x[0-9a-f]{64}$/i.test(h) ? `${MANIFEST.explorer}/tx/${h}` : null })); },
 
     // The owner's actions

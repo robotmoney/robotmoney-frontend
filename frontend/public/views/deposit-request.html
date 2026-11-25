@@ -45,7 +45,8 @@
           <template x-for="f in facts()" :key="f.key">
             <div class="dp__fact"><span class="dp__lbl"><span x-text="f.label"></span><template x-if="f.labelTip"><span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="About stages">i</button><span class="rm-tip__bub" role="tooltip" x-text="f.labelTip"></span></span></template></span>
               <template x-if="f.stage"><span><span class="rm-tip rm-tip--label"><button type="button" class="rm-tip__btn dp__stage dp__pill" :class="`is-${tone()}`"><svg class="dp__tick" x-show="f.claimed" width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M1.5 5.25 4 7.75 8.75 2.5" fill="none" stroke="currentColor" stroke-width="1.5"></path></svg><i x-show="!f.claimed" aria-hidden="true"></i><span x-text="f.value"></span></button><span class="rm-tip__bub" role="tooltip" x-text="f.tip"></span></span></span></template>
-              <template x-if="!f.stage"><b x-text="f.value"></b></template>
+              <template x-if="!f.stage && f.addr"><b><span class="dp__addrx"><a :href="addrHref(f.addr)" target="_blank" rel="noopener noreferrer" x-text="shortAddr(f.addr)"></a><button type="button" class="dp__copyi" title="Copy address" aria-label="Copy address" @click.stop="copyAddr(f.addr, $el)"><svg class="dp__copyi-c" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.2" aria-hidden="true"><rect x="3.6" y="3.6" width="6.8" height="6.8"></rect><path d="M8.4 1.6H1.6v6.8"></path></svg><svg class="dp__copyi-k" width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M2 6.4 4.6 9 10 3.2"></path></svg></button></span></b></template>
+              <template x-if="!f.stage && !f.addr"><b x-text="f.value"></b></template>
             </div>
           </template>
         </div>
