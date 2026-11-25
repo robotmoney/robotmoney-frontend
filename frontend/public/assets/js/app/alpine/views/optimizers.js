@@ -18,6 +18,8 @@ const STATES = ["risk_off", "neutral", "risk_on"];
 // while it is published beside the served line; when v5 becomes the served
 // line (D96), the parameter can go and the plain request returns the same.
 const METHODOLOGY = "v5";
+// How long today's regime may take before the data file's own reading is used.
+const REGIME_WAIT_MS = 6000;
 const STATE_LABEL = { risk_off: "Risk-off", neutral: "Neutral", risk_on: "Risk-on" };
 
 // One colour per asset group, the same on every ring, bar and picture: four
@@ -64,6 +66,8 @@ function linearTicks(max) {
 function ringSvg(rows, active) {
   const R = 48, r = 33, C = 50;
   const drawn = rows.filter((x) => x.pct > 0.05);
+  // Before the data file arrives: the ring's empty track, held at its size.
+  if (!drawn.length) return `<svg class="op-donut" viewBox="0 0 100 100" aria-hidden="true" focusable="false"><circle class="op-donut__skel" cx="50" cy="50" r="${(R + r) / 2}" fill="none" stroke-width="${R - r}"/></svg>`;
   const pt = (rad, a) => [(C + rad * Math.sin(a)).toFixed(2), (C - rad * Math.cos(a)).toFixed(2)];
   let a0 = 0, arcs = "", cuts = "";
   for (const x of drawn) {
@@ -157,6 +161,14 @@ export function registerOptimizersView(Alpine) {
     focus: {},
 
     async load() {
+      // The data file and today's regime are read together and shown together:
+      // the page holds its own shape with placeholders until both are in, so
+      // nothing moves when the figures arrive (the regime read gives up after
+      // REGIME_WAIT_MS, and the data file's own reading is used).
+      const live = Promise.race([
+        api.get(ROUTES.dashboards.regimeSnapshots, { range: 1, methodology: METHODOLOGY }).catch(() => null),
+        new Promise((done) => setTimeout(() => done(null), REGIME_WAIT_MS)),
+      ]);
       try {
         const res = await fetch("/data/optimizers.json", { headers: { Accept: "application/json" } });
         if (!res.ok) throw new Error(`/data/optimizers.json (${res.status})`);
@@ -164,32 +176,30 @@ export function registerOptimizersView(Alpine) {
       } catch (e) {
         this.error = e.message;
       }
+      this.regime = this._regimeFrom(await live);
       this.loading = false;
-      // Today's regime is methodology v5, the model the backtest's labels come
-      // from (the data file's regime golden is the one v5 reproduces byte for
-      // byte, issue 1753). The API serves v5 beside the main line; the answer is
-      // used only when it says it is v5, since an API without the parameter
-      // ignores it and returns the main line. Until then, the data file's own
-      // last v5 day. Never the main line: its label would contradict the bands.
-      try {
-        const snap = await api.get(ROUTES.dashboards.regimeSnapshots, { range: 1, methodology: METHODOLOGY });
-        const l = snap?.latest;
-        if (snap?.methodology === METHODOLOGY && l && STATES.includes(l.regime)) {
-          this.regime = { state: l.regime, date: l.date, composite: l.composite ?? null, cuts: l.bucketThresholds || null };
-          return;
-        }
-      } catch {
-        // fall through to the data file
+    },
+    // Today's regime is methodology v5, the model the backtest's labels come
+    // from (the data file's regime golden is the one v5 reproduces byte for
+    // byte, issue 1753). The API serves v5 beside the main line; the answer is
+    // used only when it says it is v5, since an API without the parameter
+    // ignores it and returns the main line. Until then, the data file's own
+    // last v5 day. Never the main line: its label would contradict the bands.
+    _regimeFrom(snap) {
+      const l = snap?.latest;
+      if (snap?.methodology === METHODOLOGY && l && STATES.includes(l.regime)) {
+        return { state: l.regime, date: l.date, composite: l.composite ?? null, cuts: l.bucketThresholds || null };
       }
       const rm = this.data?.regime_model;
-      this.regime = rm && STATES.includes(rm.state) ? { state: rm.state, date: rm.date, composite: rm.composite ?? null, cuts: null } : null;
+      return rm && STATES.includes(rm.state) ? { state: rm.state, date: rm.date, composite: rm.composite ?? null, cuts: null } : null;
     },
 
     // ── the split ────────────────────────────────────────────────────────
     states() {
       return STATES.map((k) => {
-        const on = this.data?.label_share?.[k] ?? 0;
-        return { key: k, label: STATE_LABEL[k], colour: REGIME[k], riskOn: on, riskOff: 1 - on, today: this.regime?.state === k };
+        // Before the data file: no share, so no bar and no figure (pct of null is a dash).
+        const on = this.data ? this.data.label_share?.[k] ?? 0 : null;
+        return { key: k, label: STATE_LABEL[k], colour: REGIME[k], riskOn: on, riskOff: on == null ? null : 1 - on, today: this.regime?.state === k };
       });
     },
     todayLabel() { return this.regime ? STATE_LABEL[this.regime.state] : ""; },
@@ -205,12 +215,12 @@ export function registerOptimizersView(Alpine) {
 
     // ── the optimizers ──────────────────────────────────────────────────
     engine(key) { return this.data?.engines.find((e) => e.key === key) || null; },
-    rows(parts) { return RISK_ON.map((k) => ({ key: k, label: ASSET[k].label, colour: ASSET[k].colour, pct: (parts?.[k] ?? 0) * 100 })); },
+    rows(parts) { return RISK_ON.map((k) => ({ key: k, label: ASSET[k].label, colour: ASSET[k].colour, pct: parts ? (parts[k] ?? 0) * 100 : null })); },
     // Money and risk as two bars, the same three colours in the same order.
     bars(key) {
       const e = this.engine(key);
-      if (!e) return [];
-      return [{ key: "money", label: "Share of money", tip: "The share of dollars in each asset.", parts: this.rows(e.money) }, { key: "risk", label: "Share of risk", tip: "The share of the mix's total swings that each asset causes.", parts: this.rows(e.risk) }];
+      // Before the data file: both bars, empty, so the card keeps its height.
+      return [{ key: "money", label: "Share of money", tip: "The share of dollars in each asset.", parts: e ? this.rows(e.money) : [] }, { key: "risk", label: "Share of risk", tip: "The share of the mix's total swings that each asset causes.", parts: e ? this.rows(e.risk) : [] }];
     },
     focusOf(k) { return this.focus[k] || null; },
     setFocus(k, a) { this.focus[k] = a; },
@@ -241,6 +251,7 @@ export function registerOptimizersView(Alpine) {
     // share.
     wholeRows(key) {
       const e = this.engine(key);
+      if (this.loading) return [...this.rows(null), { key: "risk_off", label: ASSET.risk_off.label, colour: ASSET.risk_off.colour, pct: null }];
       if (!e || !this.regime) return [];
       const s = this.data.label_share[this.regime.state];
       return [...this.rows(e.money).map((r) => ({ ...r, pct: r.pct * s })), { key: "risk_off", label: ASSET.risk_off.label, colour: ASSET.risk_off.colour, pct: (1 - s) * 100 }];
@@ -265,6 +276,9 @@ export function registerOptimizersView(Alpine) {
     // Every line on one weekly date axis, with the regime's runs behind them.
     _bt() {
       if (memo) return memo;
+      // Before the data file: an empty chart, never cached, so the real one is
+      // built once the file is in.
+      if (!this.data) return { days: [], n: 0, idx: [], lines: [], ticks: [], runs: [] };
       const d = this.data;
       const engines = d?.engines || [];
       const ref = engines.reduce((a, e) => (e.curve.length > (a?.curve.length ?? 0) ? e : a), null);
@@ -318,7 +332,8 @@ export function registerOptimizersView(Alpine) {
     // Each line named at its right end, highest first, nudged apart so no two
     // names sit on top of each other.
     btEnds() {
-      if (!this.data) return [];
+      // Before the data file: the six names, spaced, with no figure.
+      if (!this.data) return this.loading ? Object.entries(ENGINE).map(([token, e], i) => ({ token, label: e.label, colour: e.colour, dash: null, value: "—", top: 10 + i * 14 })) : [];
       const ax = this._axis();
       const rows = this._shown().filter((l) => l.last != null).map((l) => ({ token: l.token, label: l.label, colour: l.colour, dash: l.dash, value: this.money(l.last), top: (1 - ax.f(l.last)) * 100 })).sort((a, x) => a.top - x.top);
       const gap = 7;
@@ -357,7 +372,9 @@ export function registerOptimizersView(Alpine) {
     },
     // The table: the six optimizers, then the three comparisons as baselines.
     tableRows() {
-      return this.data ? this._bt().lines.map((l) => ({ key: l.token, label: l.long, colour: l.colour, dash: l.dash, baseline: l.baseline, s: l.stats })) : [];
+      if (this.data) return this._bt().lines.map((l) => ({ key: l.token, label: l.long, colour: l.colour, dash: l.dash, baseline: l.baseline, s: l.stats }));
+      // Before the data file: the nine rows by name, with no figure.
+      return this.loading ? [...Object.entries(ENGINE).map(([key, e]) => ({ key, label: e.label, colour: e.colour, dash: null, baseline: false, s: {} })), ...Object.entries(BENCH).map(([key, x]) => ({ key, label: x.long, colour: x.colour, dash: x.dash, baseline: true, s: {} }))] : [];
     },
     money(v) { return v == null || !isFinite(v) ? "—" : `$${(+v).toFixed(2)}`; },
     fmtPct(v) { return v == null || !isFinite(v) ? "—" : `${(+v * 100).toFixed(1).replace("-", "−")}%`; },
