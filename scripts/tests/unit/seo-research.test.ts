@@ -33,7 +33,7 @@ const ORG_ID = ORIGIN + "/#org";
 const REVISED = "2026-09-24";
 const EM_DASH = "\u2014";
 
-// The 15 research and news pages and the schema.org type each one declares.
+// The 16 research and news pages and the schema.org type each one declares.
 const EXPECTED: Record<string, string> = {
   "/regime": "Dataset",
   "/regime/indicators": "TechArticle",
@@ -41,6 +41,7 @@ const EXPECTED: Record<string, string> = {
   "/smart-contract-risks": "TechArticle",
   "/research/channel-divergence": "TechArticle",
   "/research/late-cycle-signals": "TechArticle",
+  "/optimizers": "TechArticle",
   "/blog": "CollectionPage",
   "/blog/ai-ate-the-bull-market": "BlogPosting",
   "/blog/announcement": "BlogPosting",
@@ -59,6 +60,9 @@ const NEWS = new Set(["/news", "/blog/announcement", "/blog/peaq-partnership", "
 // own share card.
 const LAUNCH = "/blog/swarm-announcement";
 const LAUNCH_DATE = "2026-11-10";
+// Pages revised after the shared research date carry their own. /optimizers
+// is dated by its data file, published 2026-11-24 with prices to 2026-11-16.
+const REVISED_ON: Record<string, string> = { [LAUNCH]: LAUNCH_DATE, "/optimizers": "2026-11-24" };
 const RESEARCH = Object.keys(EXPECTED);
 const ARTICLE_TYPES = new Set(["TechArticle", "BlogPosting", "Article"]);
 
@@ -175,7 +179,7 @@ const kid = (n: XNode, name: string) => kids(n, name)[0];
 // ── Tests ──────────────────────────────────────────────────────────────────
 
 describe("the research table", () => {
-  test("seo.js describes exactly the 14 research pages", () => {
+  test("seo.js describes exactly the 15 research pages", () => {
     expect([...researchRoutes()].sort()).toEqual([...RESEARCH].sort());
   });
 
@@ -241,7 +245,7 @@ describe.each(RESEARCH)("%s", (route) => {
       expect(node.publisher["@id"]).toBe(ORG_ID);
       expect(node.mainEntityOfPage["@id"]).toBe(ORIGIN + route);
       expect(node.image).toBe(ORIGIN + (route === LAUNCH ? "/assets/img/blog/swarm-announcement-og.jpg" : "/assets/og-image.png"));
-      expect(node.dateModified).toBe(route === LAUNCH ? LAUNCH_DATE : REVISED);
+      expect(node.dateModified).toBe(REVISED_ON[route] ?? REVISED);
       if (EXPECTED[route] === "BlogPosting") expect(node.datePublished).toMatch(/^\d{4}-\d{2}-\d{2}$/);
       if (node.datePublished) expect(node.datePublished <= node.dateModified).toBe(true);
     });
@@ -265,7 +269,7 @@ describe.each(RESEARCH)("%s", (route) => {
   });
 
   test("sitemap.xml lists it with its last revision", () => {
-    expect(sitemap).toContain(`<loc>${ORIGIN}${route}</loc><lastmod>${route === LAUNCH ? LAUNCH_DATE : REVISED}</lastmod>`);
+    expect(sitemap).toContain(`<loc>${ORIGIN}${route}</loc><lastmod>${REVISED_ON[route] ?? REVISED}</lastmod>`);
   });
 });
 
