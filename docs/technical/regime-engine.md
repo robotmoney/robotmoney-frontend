@@ -192,9 +192,13 @@ a published number ships with a new methodology version.
   NaN, and its label null, on a day any included panel has no index (issue
   1741, D93, which amends D89 item 2). `v3` averages the panels finite that
   day. Today that is macro, onchain and
-  factor, one third each (D89). `analytics/index.ts` calls `computeRegime`
-  twice: `r2` over `PANELS` (the composite) and `r3` over `ALL_PANELS` (the
-  index of every panel, included or not). Before issue 1708 the composite was
+  factor, one third each (D89). `analytics/index.ts` reads two results: `r2`
+  over the included panels (the composite) and `r3` over `ALL_PANELS` (the
+  index of every panel, included or not). Since `PANELS` equals `ALL_PANELS`
+  in the same order, and the composite sums the panels in the order given,
+  the main line calls `computeRegime` once and `r3` is `r2` (issue 1765). A
+  run given another panel set (the two-panel replay below) calls it a second
+  time over `ALL_PANELS`. Before issue 1708 the composite was
   macro and onchain only. The frozen originals under
   `packages/analyst-sdk/tests/fixtures/originals` are replayed with that
   two-panel set (`runRegime(..., { panels: ["macro", "onchain"] })`, CLI
@@ -690,6 +694,16 @@ close; a raw close never changes. `COPPER_GOLD` and `BTC_ETH` (futures and crypt
 no dividends) keep the stored adjusted ratio. `SPX_TREND` reads `^GSPC`, an index
 whose adjusted close equals its close. Ingestion still stores all eight ratios
 (`STORED_RATIO_IDS`), because `v3` reads them; `v4` ignores a stored equity ratio.
+
+**Dropped ratios.** A ratio declared `"legs"` whose input carries its stored
+ratio and neither leg gets no weight and is listed in `droppedRatios` (D95 item
+12). `runRegime` records the list through the `onStoredOnly` hook of
+`ratiosFromLegs`; `runAnalytics` passes the same hook and exposes the list as
+the non-enumerable `__droppedRatios` on its results, so no report byte moves
+(issue 1765). On the platform an empty stored ratio counts as absent: a source
+cannot tell a stored but empty ratio from a missing one, so the backend drops
+it before the ratio step. A stored-declared ratio fetched empty is computed
+from its legs, and an empty ratio is never listed as dropped.
 
 **Cut at the as-of day.** `lastRaw` and every other field `prepareRegimeInputs`
 returns are cut at the as-of day (finding P1). `lastRaw` keeps the period date of

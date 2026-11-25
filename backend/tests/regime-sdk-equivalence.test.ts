@@ -41,13 +41,25 @@
 // failed on `correlations` (the 90d sample counts differed, 2923 vs 2915). To
 // repeat either: copy the old run.ts beside this file with its imports made
 // absolute, point the import below at it, and run this file alone.
-import { test, expect } from "bun:test";
+//
+// RATIO STEP (issue 1765, D-h; the describe block at the end). The backend's
+// ratio step equals the SDK's, and records droppedRatios like runRegime does
+// (results.__droppedRatios, non-enumerable, so no report byte moves). The
+// target semantics: on the platform an EMPTY stored ratio counts as ABSENT,
+// never as stored. A source cannot tell "stored but empty" from "missing":
+// runAnalytics gives every indicator `committedFloor[id] ?? []` from the
+// committed floor (index.ts), and the fixture source below returns
+// `raw[ind.id] ?? []` for every indicator. So the backend keeps its
+// empty-ratio filter, and droppedRatios lists only a ratio declared ratioInput
+// "legs" dropped for being stored-only, the definition D95 item 12 gives
+// (docs/decisions.md). See the block's own header for the two fixtures.
+import { describe, test, expect } from "bun:test";
 import { sql } from "../src/db/client.ts";
 import { runAnalytics } from "../src/analytics/index.ts";
 import { directAnalyticsPersistence } from "../src/analytics/store/direct.ts";
 import type { AnalyticsPersistence } from "../src/analytics/persistence.ts";
 import type { Point } from "../src/analytics/types.ts";
-import type { Indicator } from "../src/analytics/analyze/indicators.ts";
+import { INDICATORS, type Indicator } from "../src/analytics/analyze/indicators.ts";
 import type { AnalyticsDataSource, ResearchInputs } from "../src/analytics/access/data-source.ts";
 import { TOP7 } from "../src/analytics/analyze/research-signals.ts";
 import { RATIO_LEG_KEYS } from "../src/analytics/extras.ts";
@@ -124,14 +136,12 @@ function source(raw: Rows, extras: { spx: Point[]; eth: Point[]; tbill3m: Point[
   };
 }
 
-async function runBoth(scenario: Scenario) {
-  const { asof, raw, extras } = await build(scenario);
-  const sdkInput: Rows = { ...clone(raw), SPX: extras.spx, ETH: extras.eth, TBILL3M: extras.tbill3m };
-  // The SDK is NOT told the asof beyond the option: the future-row scenario is
-  // what makes it matter. runRegime resolves it from the option the same way
-  // the backend gets it from its argument.
-  const sdk = runRegime(sdkInput, { asof, factor: true });
+// The SDK's input for the same raw history: the extras as SPX / ETH / TBILL3M.
+const sdkInputOf = (raw: Rows, extras: { spx: Point[]; eth: Point[]; tbill3m: Point[] }): Rows => ({ ...clone(raw), SPX: extras.spx, ETH: extras.eth, TBILL3M: extras.tbill3m });
 
+// One backend run over the fixture source, capturing the regime rows handed to
+// submitTerminalRunPackage.
+async function runBackend(asof: string, raw: Rows, extras: { spx: Point[]; eth: Point[]; tbill3m: Point[] }) {
   let captured: any[] | null = null;
   const persistence: AnalyticsPersistence = {
     ...directAnalyticsPersistence,
@@ -142,7 +152,17 @@ async function runBoth(scenario: Scenario) {
   };
   const results = await runAnalytics(asof, "regime", source(raw, extras), persistence);
   expect(captured).not.toBeNull();
-  return { asof, raw, sdk, rows: captured! as any[], results: results as any };
+  return { rows: captured! as any[], results: results as any };
+}
+
+async function runBoth(scenario: Scenario) {
+  const { asof, raw, extras } = await build(scenario);
+  // The SDK is NOT told the asof beyond the option: the future-row scenario is
+  // what makes it matter. runRegime resolves it from the option the same way
+  // the backend gets it from its argument.
+  const sdk = runRegime(sdkInputOf(raw, extras), { asof, factor: true });
+  const { rows, results } = await runBackend(asof, raw, extras);
+  return { asof, raw, sdk, rows, results };
 }
 
 function assertEquivalent(asof: string, sdk: ReturnType<typeof runRegime>, rows: any[], raw: Rows) {
@@ -281,3 +301,88 @@ test("FUTURE_EXTRAS: extras rows after asof reach neither backend nor SDK correl
   const uncut = computeCorrelations(sdk.dateAxis, sdk.result, { spx: extras.spx, eth: extras.eth });
   expect(JSON.stringify(uncut)).not.toBe(JSON.stringify(sdk.correlations));
 }, TIMEOUT);
+
+// ── RATIO STEP (issue 1765, D-h; acceptance box 8) ───────────────────────────
+// Target semantics (also in the file header): on the platform an EMPTY stored
+// ratio counts as ABSENT. A source cannot tell "stored but empty" from
+// "missing" (runAnalytics reads `committedFloor[id] ?? []` for every indicator;
+// source() above returns `raw[ind.id] ?? []`), so the backend's ratio step
+// drops an empty stored ratio before ratiosFromLegs, and passes the same
+// onStoredOnly hook as runRegime to record droppedRatios.
+//
+// B is the red control. IWM_SPY, declared ratioInput "legs", arrives as its
+// stored values with neither leg: both sides drop it (weight 0) and name it in
+// droppedRatios. Before D-h the backend passed no onStoredOnly and recorded
+// nothing, so `__droppedRatios` was undefined and B failed. MTUM_SPY and
+// XLU_SPY share the SPY leg: one selected leg without the other is a
+// MissingRatioLegError, so they leave the input whole (stored ratio and legs)
+// and are plain missing inputs, which neither side lists.
+//
+// A is the documented reading of box 8 ("a fixture whose stored ratio is empty
+// while its legs exist ... droppedRatios names the ratio on both sides").
+// COPPER_GOLD, declared ratioInput "stored" under v4, is fetched as [] while
+// its legs are present. The backend rows equal runRegime on the input where
+// COPPER_GOLD is ABSENT (both compute it from the legs), and droppedRatios is
+// [] on both sides, because D95 item 12 (docs/decisions.md) defines
+// droppedRatios as listing only a legs-declared ratio dropped for being
+// stored-only: a stored-declared ratio is never dropped, and an empty one is
+// absent. The SDK keeps a PRESENT empty stored ratio as stored
+// (transform/ratios.ts), so runRegime with COPPER_GOLD: [] gives different
+// rows; that case is unreachable from a platform source.
+describe("ratio step equals the SDK (D-h)", () => {
+  const IWM_SPY_LEGS = ["yahoo:IWM.close", "yahoo:IWM.adjclose", "yahoo:SPY.close", "yahoo:SPY.adjclose"];
+  const SHARES_SPY = ["MTUM_SPY", "yahoo:MTUM.close", "yahoo:MTUM.adjclose", "XLU_SPY", "yahoo:XLU.close", "yahoo:XLU.adjclose"];
+  const COPPER_GOLD_LEGS = ["yahoo:HG=F.adjclose", "yahoo:GC=F.adjclose"];
+
+  test("B (red control): IWM_SPY stored with neither leg is dropped, and droppedRatios names it on both sides", async () => {
+    const { asof, raw: base, extras } = await build("base");
+    // Not vacuous: the fixture carries every key this removes, and the stored ratio stays.
+    for (const k of [...IWM_SPY_LEGS, ...SHARES_SPY]) expect(base[k]?.length ?? 0, k).toBeGreaterThan(1000);
+    const raw = clone(base);
+    for (const k of [...IWM_SPY_LEGS, ...SHARES_SPY]) delete raw[k];
+    expect(raw.IWM_SPY!.length).toBeGreaterThan(1000);
+
+    const sdk = runRegime(sdkInputOf(raw, extras), { asof, factor: true });
+    const { rows, results } = await runBackend(asof, raw, extras);
+    assertEquivalent(asof, sdk, rows, raw);
+    expect(sdk.droppedRatios).toEqual(["IWM_SPY"]);
+    expect(results.__droppedRatios).toEqual(sdk.droppedRatios);
+    // Off the report: the property is not enumerable, so the report bytes do not carry it.
+    expect(Object.keys(results)).not.toContain("__droppedRatios");
+    // The dropped ratio has no value on the as-of row on either side.
+    const iwm = (rows[rows.length - 1].indicators as any[]).find((x) => x.id === "IWM_SPY");
+    expect(iwm.raw_value).toBeNull();
+    expect(iwm.signed_percentile).toBeNull();
+  }, TIMEOUT);
+
+  test("A: COPPER_GOLD fetched empty with its legs present counts as absent: both compute it from the legs, droppedRatios is [] on both sides", async () => {
+    const { asof, raw: base, extras } = await build("base");
+    for (const k of ["COPPER_GOLD", ...COPPER_GOLD_LEGS]) expect(base[k]?.length ?? 0, k).toBeGreaterThan(1000);
+    const raw = clone(base);
+    delete raw.COPPER_GOLD;
+    // The backend's source fetches the stored ratio as [] (and its legs as before).
+    const fetched = await source(raw, extras).fetchIndicators(INDICATORS);
+    expect(fetched.COPPER_GOLD).toEqual([]);
+    for (const k of COPPER_GOLD_LEGS) expect(fetched[k]!.length).toBeGreaterThan(1000);
+
+    const absent = sdkInputOf(raw, extras);
+    expect(Object.hasOwn(absent, "COPPER_GOLD")).toBe(false);
+    const sdk = runRegime(absent, { asof, factor: true });
+    const { rows, results } = await runBackend(asof, raw, extras);
+    assertEquivalent(asof, sdk, rows, raw);
+    expect(sdk.droppedRatios).toEqual([]);
+    expect(results.__droppedRatios).toEqual([]);
+    // Computed from the legs on the backend: the as-of row carries a ratio value.
+    const cg = (rows[rows.length - 1].indicators as any[]).find((x) => x.id === "COPPER_GOLD");
+    expect(cg.raw_value).not.toBeNull();
+
+    // The SDK keeps a present empty stored ratio as stored (no weight), so the
+    // same input with COPPER_GOLD: [] scores differently.
+    const empty = runRegime({ ...absent, COPPER_GOLD: [] }, { asof, factor: true });
+    expect(empty.droppedRatios).toEqual([]);
+    const last = sdk.dateAxis.length - 1;
+    expect(nn(empty.result.panelIndices.macro?.[last])).not.toBe(nn(sdk.result.panelIndices.macro?.[last]));
+    expect(nn(empty.result.panelIndices.macro?.[last])).not.toBe(rows[rows.length - 1].macroIndex);
+    expect(JSON.stringify(empty.result.composite)).not.toBe(JSON.stringify(sdk.result.composite));
+  }, TIMEOUT);
+});

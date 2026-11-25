@@ -8,8 +8,10 @@
 //      the D56 tolerance (recorded in analytics_overwrite_events). Persist the merge back.
 //   4. build the 2018-01-01..asof date axis, align (fwd/zero-fill) + applyTransform
 //      (prepareRegimeInputs, shared with the analyst SDK's runRegime)
-//   5. computeRegime for the 2-panel [macro,onchain] composite AND the 3-panel
-//      [+factor] extended composite; build the rich snapshot rows and persist them
+//   5. computeRegime once over the included panels (PANELS, every panel since
+//      D89), which also gives every panel's card; a run that passes another
+//      panel set computes ALL_PANELS a second time for the cards. Build the
+//      rich snapshot rows and persist them
 //   6. compute + persist the two research signals from REAL inputs.
 //
 // Run semantics (as-of, forward-fill, replay): docs/technical/regime-engine.md
@@ -48,7 +50,7 @@ import {
   REGIME_BACKTEST_RULES,
   type BacktestPayload,
 } from "./analyze/backtest.ts";
-import { CURRENT_REGIME_VERSION, REGIME_DERIVED_SERIES, REGIME_KEPT_HISTORY, REGIME_LINE, REGIME_REGISTRY, REGIME_WEIGHT_REFRESH, type RegimeVersion } from "./analyze/regime-versions.ts";
+import { CURRENT_REGIME_VERSION, REGIME_DERIVED_SERIES, REGIME_LINE, REGIME_REGISTRY, REGIME_RULES, REGIME_WEIGHT_REFRESH, type RegimeVersion } from "./analyze/regime-versions.ts";
 import {
   liveDataSource,
   type AnalyticsDataSource,
@@ -183,8 +185,8 @@ function boundedTelemetrySummary(raw: Record<string, unknown>): Record<string, u
 // REGIME_LINE declares `beside` (v5) is a normal run: it begins a ledger run
 // stamped with that version, reads its committed inputs (the main-line regime
 // keys plus the five collected keys its derived indicators read), freezes its
-// vintage and submits one terminal package. It keeps its history
-// (REGIME_KEPT_HISTORY): the first such run finds no kept day and computes
+// vintage and submits one terminal package. It keeps its history (its rules'
+// keptHistory, REGIME_RULES): the first such run finds no kept day and computes
 // every day from the axis start one by one from its own vintage; every later
 // run reads the kept days before its as-of day (persistence.loadKeptRegimeDays),
 // computes only its own day and publishes that one row. The API freezes its
@@ -227,7 +229,9 @@ export async function runAnalytics(
   // v3 and v4), whether its history is kept, and the raw input ids its derived
   // series read beyond the registry and the price extras.
   const scoringRegistry = REGIME_REGISTRY[regimeVersion];
-  const keptHistory = REGIME_KEPT_HISTORY[regimeVersion];
+  // Issue 1765 (D-g): the version's rules pick the engine. keptHistory is
+  // set on the rules of exactly the versions REGIME_KEPT_HISTORY marks (v5).
+  const keptHistory = REGIME_RULES[regimeVersion].keptHistory === true;
   const besideLine = REGIME_LINE[regimeVersion] === "beside";
   const derivedInputs = [...new Set(REGIME_DERIVED_SERIES[regimeVersion].flatMap(derivedInputIds))];
   if (keptHistory && !persistence.loadKeptRegimeDays) {
@@ -286,6 +290,10 @@ export async function runAnalytics(
   // neither (AC2).
   let regimeSnapshotRows: RegimeSnapshotRow[] | null = null;
   const researchSignalArtifacts: ResearchSignalArtifact[] = [];
+  // Issue 1765 (D-h): the ratios the regime's ratio step dropped as stored-only,
+  // as the SDK's runRegime records droppedRatios. Set by the step whose output
+  // the regime computes from: the committed floor's, or the ledger read's.
+  let droppedRatios: string[] = [];
 
   try {
   // ══ EXTRACT ══════════════════════════════════════════════════════════════
@@ -429,7 +437,9 @@ export async function runAnalytics(
     }
     // Issue 1644: each ratio under its declared parameters, from the legs this
     // source served when the ratio is not read as stored.
-    registry = withRatios(fetched, registry, regimeVersion);
+    const floorDropped: string[] = [];
+    registry = withRatios(fetched, registry, regimeVersion, floorDropped);
+    droppedRatios = floorDropped;
     inputEvidence.registry = registryEvidence(collectedRegistry, registry);
     mergedRaw = registry;
     collector.stage("store", "ok", "persisted merged raw indicator floor and read the committed floor back", t0);
@@ -514,7 +524,9 @@ export async function runAnalytics(
     regimeVersionIds = committed.values.map((v) => v.versionId);
     // Issue 1644: each ratio under its declared parameters (transform/ratios.ts).
     const ledgerInput = inputHistoryFromStorage(committed.values, seriesMappingFor(regimeVersion));
-    const fromLedger = withRatios(ledgerInput, ledgerInput, regimeVersion);
+    const ledgerDropped: string[] = [];
+    const fromLedger = withRatios(ledgerInput, ledgerInput, regimeVersion, ledgerDropped);
+    droppedRatios = ledgerDropped;
     registry = {};
     for (const ind of INDICATORS) registry[ind.id] = fromLedger[ind.id] ?? [];
     for (const id of derivedInputs) registry[id] = fromLedger[id] ?? [];
@@ -602,12 +614,18 @@ export async function runAnalytics(
     collector.stage("transform", "ok", `built ${dateAxis.length}-day date axis and aligned/transformed ${INDICATORS.length} indicator(s)`, t0);
 
     t0 = new Date();
-    const r2 = computeRegime(transformed, dateAxis, opts.panels ?? PANELS, ages, undefined, regimeVersion, undefined, undefined, undefined, carried); // the included panels (the composite)
-    const r3 = computeRegime(transformed, dateAxis, ALL_PANELS, ages, undefined, regimeVersion, undefined, undefined, undefined, carried); // every panel, included or not
+    const included = opts.panels ?? PANELS;
+    const r2 = computeRegime(transformed, dateAxis, included, ages, undefined, regimeVersion, undefined, undefined, undefined, carried); // the included panels (the composite)
+    // Every panel, included or not. Issue 1765 (D-e): PANELS equals ALL_PANELS
+    // (D89), and computeRegime sums the panels in the order given (panelMean),
+    // so the same list in the same order is the same computation: the main
+    // line computes once. A run that passes another panel set (a replay of the
+    // two-panel composite) still computes every panel a second time.
+    const r3 = samePanelList(included, ALL_PANELS) ? r2 : computeRegime(transformed, dateAxis, ALL_PANELS, ages, undefined, regimeVersion, undefined, undefined, undefined, carried);
 
-    // Predictive correlations + regime backtest — computed from the SAME 2-panel
-    // composite the original main snapshot uses, over the chart-overlay extras
-    // extracted above. Baked onto the latest snapshot row (asof view).
+    // Predictive correlations + regime backtest — computed from the composite
+    // (r2, the included panels), over the chart-overlay extras extracted
+    // above. Baked onto the latest snapshot row (asof view).
     let backtest: BacktestPayload | null = null;
     let correlations: CorrelationsPayload | null = null;
     let analyzeStatus: "ok" | "warn" = "ok";
@@ -883,6 +901,15 @@ export async function runAnalytics(
     writable: true,
     configurable: true,
   });
+  // Issue 1765 (D-h): non-enumerable like __runLedger, so the report bytes
+  // (canonicalStringify of `results` above) and every published figure are
+  // unchanged. Empty when no ratio was dropped or the run computed no regime.
+  Object.defineProperty(results, "__droppedRatios", {
+    value: droppedRatios,
+    enumerable: false,
+    writable: true,
+    configurable: true,
+  });
 
   if (runFailed) throw runFailed;
   return results;
@@ -935,14 +962,22 @@ function recordAcquisitionEvidence(
 // `resolved` with each ratio set by its declared ratioInput and ratioClose from
 // the legs `input` carries (analytics requirements 4.3, issue 1644). A ratio
 // with nothing to read is [] (missing, no weight).
+// `dropped` (issue 1765, D-h) collects each ratio declared ratioInput "legs"
+// that is dropped because the input carries its stored ratio and neither leg,
+// through the same onStoredOnly hook the SDK's runRegime records droppedRatios
+// with (run.ts, transform/ratios.ts).
 function withRatios(
   input: Record<string, { date: string; value: number }[]>,
   resolved: Record<string, { date: string; value: number }[]>,
   version: RegimeVersion,
+  dropped?: string[],
 ): Record<string, { date: string; value: number }[]> {
-  // A stored ratio the fetch left empty is no stored ratio.
+  // A stored ratio the fetch left empty is no stored ratio: on the platform an
+  // empty stored ratio counts as absent, so it is never listed as dropped. A
+  // source cannot tell "stored but empty" from "missing" (the committed floor
+  // gives every indicator [] when it holds nothing).
   const present = Object.fromEntries(Object.entries(resolved).filter(([id, pts]) => !RATIO_IDS.has(id) || pts.length > 0));
-  const out = { ...ratiosFromLegs(input, present, ratioDeclarationsFor(version)) };
+  const out = { ...ratiosFromLegs(input, present, ratioDeclarationsFor(version), (id) => void dropped?.push(id)) };
   for (const id of RATIO_IDS) out[id] ??= [];
   return out;
 }
@@ -979,6 +1014,11 @@ function reportInputEvidence(evidence: InputEvidence, collector: TelemetryCollec
     acquiredValues: evidence.acquiredValues,
     versionsSha256: evidence.consumed.length > 0 ? sha256Hex([...evidence.consumed].sort().join(",")) : null,
   });
+}
+
+// The same panels in the same order (issue 1765, D-e).
+function samePanelList(a: readonly Panel[], b: readonly Panel[]): boolean {
+  return a.length === b.length && a.every((p, i) => p === b[i]);
 }
 
 // ─── snapshot-row builder (mirrors update.js writeFullHistoryCsv + writeSnapshot) ─
@@ -1040,8 +1080,8 @@ function buildSnapshotRows(
       source,
       percentiles,
       indicators,
-      // Panel index cards rendered by the /regime view. Three panels: the 2-panel
-      // composite (macro + on-chain) plus the display-only Equity factor index.
+      // Panel index cards rendered by the /regime view: every panel, included
+      // in the composite or not (ALL_PANELS; today all three are, D89).
       // Asof-only, matching the other dashboard-level blobs below.
       panels: isLatest ? ALL_PANELS : null,
       // Backtest + predictive correlations are asof-only (baked on the latest row,
