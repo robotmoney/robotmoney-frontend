@@ -19,6 +19,32 @@
 const u = (name, type = "uint256") => ({ name, type });
 const view = (name, inputs, outputs) => ({ type: "function", name, stateMutability: "view", inputs, outputs });
 const write = (name, inputs, outputs = []) => ({ type: "function", name, stateMutability: "nonpayable", inputs, outputs });
+const err = (name, inputs = []) => ({ type: "error", name, inputs });
+
+/**
+ * The custom errors wallet.js `errorText` puts into words (contracts 0.10.0,
+ * FlowTypes.sol and IRobotMoneyFund.sol, plus OpenZeppelin's ERC-20 ones). An
+ * ABI that lists an error lets the kit decode a revert into its name; without
+ * it, a revert is a bare selector. On both ABIs the page sends to, because the
+ * fund's errors surface through a queue call.
+ */
+const ERRORS = [
+  err("BelowMinRequest", [u("valueUsdc"), u("minRequestUsdc")]),
+  err("AbovePerDepositCap", [u("usdc"), u("cap")]),
+  err("TooManyOpenRequests", [u("owner", "address")]),
+  err("TVLCapExceeded"),
+  err("RequestLocked", [u("requestId")]),
+  err("NoticeNotReady", [u("requestId"), u("readyEpoch", "uint64")]),
+  err("NoticeAlreadyGiven", [u("requestId")]),
+  err("NotRequestOwner", [u("requestId"), u("caller", "address")]),
+  err("ZeroAmount"),
+  err("FundIsShutdown"),
+  err("DepositsArePaused"),
+  err("QueueIsPaused"),
+  err("Paused"),
+  err("ERC20InsufficientBalance", [u("sender", "address"), u("balance"), u("needed")]),
+  err("ERC20InsufficientAllowance", [u("spender", "address"), u("allowance"), u("needed")]),
+];
 const tuple = (name, components) => ({ name, type: "tuple", components });
 
 const FLOW_PARAMS = tuple("", [
@@ -103,6 +129,7 @@ export const QUEUE_ABI = [
   view("claimableRedeemRequest", [u("requestId"), u("controller", "address")], [u("shares")]),
   view("maxDeposit", [u("owner", "address")], [u("assets")]),
   view("maxRedeem", [u("owner", "address")], [u("shares")]),
+  ...ERRORS,
 ];
 
 export const FUND_ABI = [
@@ -123,6 +150,7 @@ export const FUND_ABI = [
   view("config", [], [u("tvlCap"), u("perDepositCap"), u("exitFeeBps"), u("feeRecipient", "address")]),
   // Wind-down only (D18): the fund refuses it while it runs.
   write("redeemInKind", [u("shares"), u("receiver", "address"), u("owner", "address")]),
+  ...ERRORS,
 ];
 
 export const ERC20_ABI = [

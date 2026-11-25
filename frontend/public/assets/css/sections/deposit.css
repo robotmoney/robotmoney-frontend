@@ -3,7 +3,8 @@
    tokens only, square, flat, hairlines; cyan is a line (the tab seam, a fill
    bar), green is money, Beacon is a point. One prefix, dp__, for all three. */
 .dp { min-height: 100vh; background: var(--color-void); color: var(--color-text); font-family: var(--font-sans); }
-.dp__wrap { max-width: 75rem; margin: 0 auto; padding: 8rem 1.5rem 0; }
+/* The bottom padding is the room the legal row above the site footer used to give (removed 25 Nov: the footer carries those links). */
+.dp__wrap { max-width: 75rem; margin: 0 auto; padding: 8rem 1.5rem 6rem; }
 .dp__cols { display: flex; flex-wrap: wrap; gap: 3rem; align-items: flex-start; }
 .dp__main { flex: 999 1 35rem; min-width: 0; display: flex; flex-direction: column; gap: 1.75rem; }
 .dp__aside { flex: 1 1 22.5rem; max-width: 25rem; min-width: 0; position: sticky; top: 6.5rem; }
@@ -83,15 +84,17 @@
   .dp__live { transform: none; }
   .dp__skel i, .dp__skelring, .dp__skeltitle, .dp__skelbar, .dp__fact b.is-wait::after { animation: none; }
 }
-.dp__ring { display: block; flex: none; width: 11rem; height: 11rem; }
-.dp__ring svg { width: 100%; height: 100%; }
 /* Positioned, so the visually hidden header label scrolls with the table instead of widening the page. */
 .dp__tablewrap { position: relative; min-width: 0; overflow-x: auto; }
+/* Holdings as the site's ring and legend (views.css .rr-mix), filling the section. */
+.dp__mix { flex: 1 1 100%; min-width: 0; }
+.dp__holdmore { display: inline-block; margin-top: 1rem; }
+/* Tooltips on these pages keep to two lines where there is room (David, 25 Nov): the bubble fits its text up to 26rem instead of the site's fixed 17rem. Phones keep the pinned sheet. */
+@media (min-width: 700px) { .dp .rm-tip__bub { width: max-content; max-width: min(26rem, calc(100vw - 2rem)); } }
 .dp__tbl { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
 .dp__tbl th { font-family: var(--font-mono); font-size: 0.6875rem; font-weight: 400; letter-spacing: 0.08em; text-transform: uppercase; color: var(--color-text-muted); text-align: left; padding: 0.625rem 0.5rem; border-bottom: 1px solid var(--color-border); white-space: nowrap; }
 .dp__tbl td { padding: 0.875rem 0.5rem; border-bottom: 1px solid var(--color-border); }
 .dp__tbl .n { text-align: right; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
-.dp__sw { display: inline-block; width: 0.5rem; height: 0.5rem; margin-right: 0.625rem; vertical-align: 1px; }
 .dp__steps { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border-top: 1px solid var(--color-border); }
 .dp__steps > div { padding: 1.125rem 1.25rem 0 0; }
 .dp__steps > div + div { padding-left: 1.25rem; border-left: 1px solid var(--color-border); }
@@ -115,9 +118,12 @@
 /* The wallet button's place, held while the kit reconnects, so nothing below moves when it lands. */
 .dp__chip--wait { width: 11.5rem; cursor: default; }
 /* The stage guide on Your position: the stages in order, what each means, and where this wallet's requests are. */
-.dp__life { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border-top: 1px solid var(--color-border); }
-.dp__life li { display: flex; flex-direction: column; gap: 0.5rem; padding: 1rem 1.25rem 0 0; }
-.dp__life li + li { padding-left: 1.25rem; border-left: 1px solid var(--color-border); }
+.dp__life { list-style: none; margin: 0; padding: 0; display: flex; align-items: flex-start; }
+.dp__life li { position: relative; flex: 1 1 0; display: flex; flex-direction: column; gap: 0.375rem; min-width: 0; }
+/* The line between one stage and the next fills the room after each name. */
+.dp__life .dp__stage { display: flex; align-items: center; width: 100%; }
+.dp__life li:not(:last-child) .dp__stage::after { content: ""; flex: 1 1 auto; min-width: 1rem; height: 1px; margin: 0 0.75rem; background: var(--color-border); }
+.dp__life .rm-tip__btn--text { color: inherit; }
 /* Done: a check. Here: the stage's own mark (the same one its row carries). Not reached: a dim dot, a different shape from the Pending ring. One 10px slot, so labels line up. */
 .dp__life .dp__stage { color: var(--color-text-muted); }
 .dp__life .dp__stage i { margin: 0 1.5px; }
@@ -129,9 +135,10 @@
 .dp__life li.is-here p { color: var(--color-text-soft); }
 .dp__life-n { font-family: var(--font-mono); font-size: 0.6875rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--color-text); }
 @media (max-width: 900px) {
-  .dp__life { grid-template-columns: minmax(0, 1fr); }
-  .dp__life li, .dp__life li + li { padding: 0.875rem 0; border-left: 0; }
-  .dp__life li + li { border-top: 1px solid var(--color-border); }
+  .dp__life { flex-direction: column; gap: 0.875rem; }
+  .dp__life li { flex-direction: row; align-items: baseline; justify-content: space-between; gap: 1rem; width: 100%; }
+  .dp__life li:not(:last-child) .dp__stage::after { display: none; }
+  .dp__life .dp__stage { width: auto; }
 }
 .dp__facts--plain { display: grid; grid-template-columns: repeat(2, minmax(0, max-content)); gap: 1.25rem 4rem; border: 0; padding: 0; }
 .dp__skelinline { display: inline-block; width: 4rem; height: 0.625rem; margin-left: 0.375rem; vertical-align: middle; background: var(--color-surface); animation: dp-breathe 1.8s ease-in-out infinite; }
@@ -216,9 +223,6 @@
 .dp__choice .dp__kv { padding: 0.25rem 0; }
 
 /* Footer */
-.dp__foot { display: flex; justify-content: space-between; gap: 1rem 1.5rem; flex-wrap: wrap; margin-top: 3rem; padding: 1.75rem 0 3rem; border-top: 1px solid var(--color-border); font-size: 0.75rem; color: var(--color-text-muted); }
-.dp__foot nav { display: flex; flex-wrap: wrap; gap: 1.25rem; }
-.dp__foot a { color: var(--color-text-soft); text-decoration: underline; text-decoration-color: var(--color-link-line); text-underline-offset: 3px; }
 
 /* Dialog */
 .dp__scrim { position: fixed; inset: 0; z-index: 200; display: flex; align-items: center; justify-content: center; padding: 1rem; background: rgba(6, 8, 12, 0.82); }
@@ -227,7 +231,15 @@
 .dp__dlgtitle { margin: 0; font-family: var(--font-display); font-stretch: var(--font-display-stretch); font-weight: 800; text-transform: uppercase; font-size: 1.875rem; line-height: 1; outline: none; }
 .dp__x { display: flex; padding: 0.25rem; border: 0; background: none; color: var(--color-text-muted); cursor: pointer; }
 .dp__x:hover { color: var(--color-text); }
-.dp__dlgbody { display: flex; flex-direction: column; gap: 1.125rem; }
+.dp__dlgbody { display: flex; flex-direction: column; gap: 1.125rem; animation: dp-step-in 280ms var(--ease-out-expo) both; }
+/* The dialog's head and the step on show, one column; the box around it eases its height between steps (easeDialog). */
+.dp__dlgin { display: flex; flex-direction: column; gap: 1.125rem; }
+/* Each step arrives instead of snapping in (David, 25 Nov). */
+@keyframes dp-step-in { from { opacity: 0; transform: translateY(0.375rem); } }
+@media (prefers-reduced-motion: reduce) { .dp__dlgbody { animation: none; } }
+/* The three steps after a request: the timeline list, a touch roomier. */
+.dp__tl--steps { gap: 0.875rem; }
+.dp__tl--steps li { font-size: 0.875rem; }
 /* The dialog's actions stay in reach when its content scrolls (a first deposit, with the acknowledgement, on a short screen). */
 .dp__dlgbody > .dp__btnrow:last-child { position: sticky; bottom: -1.5rem; margin: 0 -1.75rem -1.5rem; padding: 0.875rem 1.75rem 1.5rem; background: var(--color-deep); border-top: 1px solid var(--color-surface); }
 .dp__bignum { margin: 0; font-family: var(--font-mono); font-size: 2rem; line-height: 1.2; font-variant-numeric: tabular-nums; }
@@ -295,7 +307,22 @@
 .dp__bannerl p { margin: 0; font-size: 0.9375rem; line-height: 1.5; }
 .dp__bannerr { display: flex; flex-direction: column; align-items: flex-end; gap: 0.5rem; }
 .dp__h2--flush { margin: 0; }
-.dp__reqs { min-width: 46rem; }
+/* Your requests as one framed object, with a shaded head row (David, 25 Nov). No minimum width: it fits, it never scrolls sideways. */
+.dp__reqbox { border: 1px solid var(--color-border-light); overflow: visible; }
+.dp__reqbox .dp__tbl th { padding: 0.75rem 1rem; background: var(--color-surface); }
+.dp__reqbox .dp__tbl td { padding: 1rem; }
+.dp__reqbox .dp__tbl tbody tr:last-child td { border-bottom: 0; }
+.dp__stack--page { gap: 3rem; }
+/* Before you deposit, as questions closed by default. */
+.dp__faq { border-top: 1px solid var(--color-border); }
+.dp__faqrow { border-bottom: 1px solid var(--color-border); }
+.dp__faqrow summary { display: flex; justify-content: space-between; align-items: center; gap: 1rem; padding: 1rem 0; cursor: pointer; list-style: none; font-size: 0.9375rem; color: var(--color-text); }
+.dp__faqrow summary::-webkit-details-marker { display: none; }
+.dp__faqrow summary::after { content: "+"; flex: none; font-family: var(--font-mono); font-size: 1rem; line-height: 1; color: var(--color-text-muted); transition: transform 160ms var(--ease-out-expo); }
+.dp__faqrow[open] summary::after { transform: rotate(45deg); }
+.dp__faqrow summary:hover::after, .dp__faqrow summary:focus-visible::after { color: var(--color-text); }
+.dp__faqa { padding: 0 2rem 1.125rem 0; font-size: 0.875rem; line-height: 1.6; color: var(--color-text-soft); }
+.dp__faqa a { color: var(--color-text); text-decoration: underline; text-decoration-color: var(--color-link-line); text-underline-offset: 3px; }
 .dp__reqs td { vertical-align: top; }
 .dp__reqs a { color: var(--color-text); text-decoration: underline; text-decoration-color: var(--color-link-line); text-underline-offset: 3px; }
 .dp__reqs tr.is-asking td { border-bottom-color: transparent; }
@@ -321,12 +348,19 @@
    the box. The chip is the tooltip's trigger, so hovering, tapping or focusing it
    explains the stage; the Stage header's (i) explains the path (David, 23 Nov). */
 .rm-tip__btn.dp__pill { width: auto; height: auto; display: inline-flex; align-items: center; gap: 0.42rem; padding: 0.24rem 0.6rem; border: 1px solid var(--color-border-light); border-radius: 0; background: none; color: var(--color-text); font-family: var(--font-mono); font-size: 0.6875rem; line-height: 1.2; letter-spacing: 0.12em; text-transform: uppercase; white-space: nowrap; cursor: default; transition: border-color 0.14s ease; }
-.rm-tip__btn.dp__pill:hover, .rm-tip__btn.dp__pill[aria-expanded="true"] { border-color: var(--color-text-muted); color: var(--color-text); }
-.rm-tip__btn.dp__pill.is-ready { color: var(--color-text); }
-.rm-tip__btn.dp__pill.is-off { color: var(--color-text-muted); }
+/* Coloured by what the stage asks of you, so the column scans at a glance (David, 25 Nov), in the site's
+   point vocabulary: white is in motion (Pending, Filled), green is money that is yours to claim, Beacon
+   needs you (take back, withdraw), grey is closed. Outline and text carry it; only green, the money, may
+   tint the fill (cyan is a line, warm is a point). */
+.rm-tip__btn.dp__pill.is-waiting, .rm-tip__btn.dp__pill.is-hold { border-color: color-mix(in srgb, var(--color-text) 38%, transparent); color: var(--color-text); }
+.rm-tip__btn.dp__pill.is-ready { border-color: color-mix(in srgb, var(--color-green) 60%, transparent); background: color-mix(in srgb, var(--color-green) 12%, transparent); color: var(--color-green); }
+.rm-tip__btn.dp__pill.is-act { border-color: color-mix(in srgb, var(--color-beacon) 60%, transparent); color: var(--color-beacon); }
+.rm-tip__btn.dp__pill.is-off { border-color: var(--color-border); color: var(--color-text-muted); }
+.rm-tip__btn.dp__pill:hover, .rm-tip__btn.dp__pill[aria-expanded="true"] { border-color: currentColor; }
+.dp__pill.is-hold i { background: var(--color-text-soft); }
 /* A border-coloured dot vanishes inside a bordered chip (components.css, .rm-status--pending). */
 .dp__pill.is-off i { background: var(--color-text-muted); }
-.dp__pill .dp__tick { width: 9px; height: 9px; color: var(--color-text-soft); }
+.dp__pill .dp__tick { width: 9px; height: 9px; color: currentColor; }
 .dp__acts { text-align: right; white-space: nowrap; }
 .dp__acts > * + * { margin-left: 0.75rem; }
 .dp__err--cell { margin-top: 0.375rem; white-space: normal; }
@@ -391,7 +425,6 @@
 .dpg__fine { margin: 1rem 0 0; font-size: 0.9375rem; color: var(--color-text-soft); }
 .dpg__fine a { color: var(--color-link); text-decoration: underline; text-decoration-color: var(--color-link-line); text-decoration-thickness: 1px; text-underline-offset: 3px; }
 .dpg__fine a:hover { text-decoration-color: var(--color-link); }
-.dpg__foot { max-width: 75rem; margin: 0 auto; padding-inline: 1.5rem; border-top: 0; }
 @media (max-width: 640px) {
   /* Stacked on a phone: the photograph whole above, then the form on the void,
      so the doorway's light never sits behind the boxes. */
@@ -406,7 +439,6 @@
   .dpg__dash { width: 0.375rem; }
   .dpg__box { height: 3rem; font-size: 1.125rem; }
   .dpg__msg, .dpg__fine { font-size: 0.875rem; }
-  .dpg__foot { padding-inline: 1rem; }
 }
 @media (prefers-reduced-motion: reduce) { .dp__spin { animation-duration: 3s; } }
 @media (max-width: 900px) {
@@ -430,6 +462,9 @@
   .dp__reqs, .dp__reqs tbody { display: block; }
   .dp__reqs { min-width: 0; width: 100%; }
   .dp__reqs tr { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "req amt" "stage stage" "filled next" "act act"; gap: 0.75rem 1rem; padding: 1rem 0; border-bottom: 1px solid var(--color-border); }
+  .dp__reqbox .dp__reqs tr { padding: 1rem; }
+  .dp__reqbox .dp__reqs tr:last-child { border-bottom: 0; }
+  .dp__reqbox .dp__tbl td { padding: 0; }
   .dp__reqs td { display: block; padding: 0; border: 0; min-width: 0; }
   .dp__reqs td:nth-child(1) { grid-area: req; }
   .dp__reqs td:nth-child(2) { grid-area: amt; text-align: right; }

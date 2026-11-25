@@ -18,13 +18,15 @@
 import { session, MIN_ETH } from "../../lib/deposit/session.js";
 import { MANIFEST } from "../../lib/deposit/manifest.js";
 import { buildDeposit, buildRedeem, buildExitInKind } from "../../lib/deposit/builder.js";
-import { depositWait, redeemWait, fmtDuration, fmtCountdown, fmtWhenIn, fmtClock, timelineFor, expiresAtOf, epochOf, epochEndAt } from "../../lib/deposit/schedule.js";
+import { depositWait, redeemWait, fmtDuration, fmtCountdown, fmtWhenIn, fmtClock, fmtAt, timelineFor, expiresAtOf, epochOf, epochEndAt } from "../../lib/deposit/schedule.js";
 import { nextBatchFor, stageOf, canWithdrawExpired, STAGE } from "../../lib/deposit/stages.js";
-import { fmtUsdc, fmtShares, fmtRm, fmtPrice, fmtBps, fmtFee, floorTo, fmtWhen, fmtWhenShort, shortAddr, shortHash } from "../../lib/deposit/format.js";
+import { fmtUsdc, fmtUsdcFine, fmtShares, fmtRm, fmtPrice, fmtBps, fmtFee, floorTo, fmtWhen, fmtWhenShort, shortAddr, shortHash } from "../../lib/deposit/format.js";
 import { isOpen, tryCode, bodyOf } from "../../lib/deposit/access.js";
 import { stopOf } from "../../lib/deposit/describe.js";
 import { tokenIcon } from "../../lib/deposit/tokens.js";
 import { CATEGORICAL } from "../../lib/chart-theme.js";
+import { sessionSummary } from "../../lib/session-summary.js";
+import * as weightChange from "../../lib/weight-change.js";
 
 const num = (v) => { const n = Number(String(v ?? "").replace(/,/g, "")); return Number.isFinite(n) ? n : NaN; };
 const debounce = (fn, ms) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
@@ -90,6 +92,8 @@ export function registerDepositView(Alpine) {
 
     // Redeem form. "inkind" only while the vault winds down (D18).
     shares: "",
+    // Max remembers the exact balance it stood for, used while the field still reads what Max wrote.
+    maxRaw: null,
     exitMode: "queue",
     rq: null,
 
@@ -102,6 +106,8 @@ export function registerDepositView(Alpine) {
 
     async init() {
       this.now = session.now();
+      // /deposit?action=redeem opens on Redeem (the Redeem button on Your position).
+      if (new URLSearchParams(location.search).get("action") === "redeem") this.tab = "redeem";
       this._unsub = session.subscribe(() => { this.rev++; this.now = session.now(); this.refreshAccount(); this.loadVault(); });
       this._quote = debounce(() => this.loadQuote(), 250);
       this._rquote = debounce(() => this.loadRedeemQuote(), 250);
@@ -143,16 +149,19 @@ export function registerDepositView(Alpine) {
       const hs = this.vault?.holdings || [];
       return hs.map((h, i) => ({ ...h, hue: CATEGORICAL[i % CATEGORICAL.length], value: fmtUsdc(h.valueUsdc).replace(" USDC", ""), target: h.targetBps == null ? "—" : fmtBps(h.targetBps), actual: fmtBps(h.actualBps), venueLabel: /^0x/.test(h.venue) ? shortAddr(h.venue) : h.venue }));
     },
-    ringSvg() {
-      let at = 0;
-      const arcs = this.holdings().map((h) => {
-        const pct = h.actualBps / 100;
-        const arc = `<circle cx="21" cy="21" r="15.9155" fill="none" stroke="${h.hue}" stroke-width="4" stroke-dasharray="${pct} ${100 - pct}" stroke-dashoffset="${25 - at}" data-mark="series"></circle>`;
-        at += pct;
-        return arc;
-      }).join("");
-      return `<svg viewBox="0 0 42 42" width="176" height="176" role="img" aria-label="Holdings by weight"><circle cx="21" cy="21" r="15.9155" fill="none" stroke="#222a38" stroke-width="4"></circle>${arcs}</svg>`;
+    // The explorer's rows (lib/sleeve-explorer.js): each holding at its actual
+    // weight, named so the three lending positions tell apart in a legend.
+    explorerRows() {
+      return this.holdings().map((h) => ({ key: h.key, label: h.label === "USDC lending" ? `USDC on ${h.venueLabel}` : h.label, hue: h.hue, pct: h.actualBps / 100 }));
     },
+    explorerSvg() { return sessionSummary.ringSvg(this.explorerRows().map((r) => ({ key: r.key, label: r.label, pct: r.pct, colour: r.hue }))); },
+    /** At rest the centre names the largest holding. */
+    explorerCenter() {
+      const top = [...this.explorerRows()].sort((a, b) => b.pct - a.pct)[0];
+      return top && top.pct > 0 ? { value: this.fmtPctTrim(top.pct), label: top.label } : { value: "", label: "" };
+    },
+    explorerLabel() { return this.explorerRows().filter((r) => r.pct > 0).map((r) => `${r.label} ${this.fmtPctTrim(r.pct)}`).join(", "); },
+    fmtPctTrim(v) { return weightChange.fmtPctTrim(v); },
     waitLabel() { const w = depositWait(this.flow()); return `${fmtDuration(w.min)} to ${fmtDuration(w.max)}`; },
     redeemWaitLabel() { const w = redeemWait(this.flow()); return `${fmtDuration(w.min)} to ${fmtDuration(w.max)}`; },
     epochLabel() { return fmtDuration(this.flow().epochLength); },
@@ -171,11 +180,39 @@ export function registerDepositView(Alpine) {
     // means, so the panel does not spend a sentence under it (David, 17 Nov).
     receiveTip() { return "At today's price. The batch sets the price your deposit buys at."; },
     redeemReceiveTip() { return "At today's price, after the exit fee. The batch sets the price your rmFUND sells at."; },
-    cancelTip(kind = "deposit") { return `Until then, cancelling returns your ${kind === "deposit" ? "USDC" : "rmFUND"}. After it, the request is locked for its batch.`; },
-    batchTip() { return `A batch runs every ${this.epochLabel()}. It sets the price and fills the requests locked before it.`; },
-    arriveTip() { return `Your rmFUND is ready to claim ${this.holdLabel()} after its batch. One signature moves it into your wallet.`; },
-    usdcReadyTip() { return "Once its batch fills your request, the USDC is yours to claim."; },
-    priceTip() { return "The price comes from the vault's holdings at market prices, after requests lock. Only the difference between deposits and redemptions trades in the market."; },
+    cancelTip(kind = "deposit", at = Infinity) {
+      if (at <= this.now) return `A request made in the last ${Math.round((this.flow().cancelBuffer ?? 900) / 60)} minutes of the hour joins that hour's batch already locked.`;
+      return `Until ${fmtAt(at, this.now)}. Cancelling returns your ${kind === "deposit" ? "USDC" : "rmFUND"}; after that, the request is locked for its batch.`;
+    },
+    /** The cancel deadline of a request made now. Past it, a new request still joins this batch, locked from the start. */
+    cancelKv(at) { return at > this.now ? { label: "You can cancel for", value: this.soon(at) } : { label: "Cancelling", value: "Closed for this batch" }; },
+    // The panel's time rows read "~12 min"; the exact time is in the tooltip (David, 25 Nov). Tips stay within two lines.
+    batchAt() { return this.dq?.settlesAt ?? this.timeline().settlesAt; },
+    sharesAt() { return this.dq?.readyAt ?? this.timeline().sharesAt; },
+    usdcAt() { return this.rq?.readyAt ?? this.timeline().settlesAt; },
+    batchTip() { const every = this.flow().epochLength === 3600 ? "hour" : this.epochLabel(); return `At ${fmtAt(this.batchAt(), this.now)}. A batch runs every ${every}: it sets the price and fills the requests waiting for it.`; },
+    arriveTip() { return `Expected at ${fmtAt(this.sharesAt(), this.now)}, ${this.holdLabel()} after its batch. One signature then moves the rmFUND into your wallet.`; },
+    usdcReadyTip() { return `Expected at ${fmtAt(this.usdcAt(), this.now)}, when the batch fills your request. The USDC is then yours to claim.`; },
+    /** How far off a time is, as an estimate: "~12 min", "~1 h 39 min". */
+    soon(ms) {
+      this.now;
+      if (ms == null || !Number.isFinite(ms)) return "—";
+      const d = ms - this.now;
+      return d <= 0 ? "Any minute" : d < 60_000 ? "~1 min" : `~${fmtDuration(d / 1000)}`;
+    },
+    /** The exit fee in USDC as well as in percent: "~0.002 USDC · 0.1%". @param {number} n shares @param {number|null|undefined} bps */
+    exitFeeSays(n, bps) {
+      if (bps == null) return "—";
+      if (bps === 0) return "None";
+      const p = this.vault?.priceUsdc;
+      return n > 0 && p ? `~${fmtUsdcFine((n * p * bps) / 10_000)} · ${fmtFee(bps)}` : fmtFee(bps);
+    },
+    exitFeeTip(n, bps) {
+      if (!bps) return "This vault charges no exit fee.";
+      const base = `${fmtFee(bps)} of the USDC the batch pays you for your rmFUND.`;
+      return n > 0 ? `${base} At today's price, that is about ${fmtShares((n * bps) / 10_000)} rmFUND.` : base;
+    },
+    priceTip() { return "Set from the holdings at market prices, after requests lock. Only the net of deposits and redemptions trades."; },
     landTip() { return `A large deposit can fill over several batches. Anything unfilled after ${this.expiryLabel()} is yours to take back.`; },
     // The queue, for every depositor (chain.js `queue`).
     queue() { return this.vault?.queue || null; },
@@ -273,8 +310,6 @@ export function registerDepositView(Alpine) {
     estShares(n = this.amountN()) { const p = this.vault?.priceUsdc; return n > 0 && p ? fmtRm(floorTo(n / p, 4)) : "—"; },
     timeline() { return timelineFor(this.now, this.flow()); },
     lockAt() { return this.dq?.lockAt ?? this.timeline().lockAt; },
-    nextBatch() { return fmtWhenIn(this.dq?.settlesAt ?? this.timeline().settlesAt, this.now); },
-    sharesArrive() { return fmtWhenIn(this.dq?.readyAt ?? this.timeline().sharesAt, this.now); },
     /** A time and how far off it is: "14:45 · in 35 min". */
     when(ms) { this.now; return fmtWhenIn(ms, this.now); },
     canReview() { return this.connected() && this.onBase() && this.vault?.depositsOpen && this.amountN() > 0 && !this.amountError() && this.dq && !this.dqLoading; },
@@ -282,7 +317,9 @@ export function registerDepositView(Alpine) {
     // ── Redeem form ──────────────────────────────────────────────────────
     sharesN() { return num(this.shares); },
     heldShares() { return this.acctData?.shares ?? 0; },
-    redeemMax() { this.shares = String(floorTo(this.heldShares(), 4)); },
+    redeemMax() { this.shares = String(floorTo(this.heldShares(), 4)); this.maxRaw = { text: this.shares, raw: this.acctData?.sharesRaw ?? null }; },
+    /** What the redemption sends: the exact balance after Max, else the typed number. */
+    sharesArg() { return this.maxRaw?.raw != null && this.maxRaw.text === this.shares ? this.maxRaw.raw : this.sharesN(); },
     redeemError() {
       const n = this.sharesN();
       if (!this.shares) return "";
@@ -326,13 +363,14 @@ export function registerDepositView(Alpine) {
       } else if (kind === "redeem") {
         amount = this.sharesN();
         quote = this.rq;
-        calls = buildRedeem({ shares: amount, owner: from, allowance: a?.shareAllowance ?? 0n });
+        calls = buildRedeem({ shares: this.sharesArg(), owner: from, allowance: a?.shareAllowance ?? 0n });
       } else {
         amount = this.sharesN();
-        calls = buildExitInKind(amount, from);
+        calls = buildExitInKind(this.sharesArg(), from);
       }
       const batch = calls.length > 1 && !calls.some((c) => c.gas) && !session.simulated && (await session.wallet.canBatch());
-      this.dlg = { open: true, kind, phase: "review", checks: [], calls, steps: calls.map((c) => ({ label: c.label, state: "idle", hash: "" })), batch, error: "", ack: false, result: null, quote, amount };
+      // total: the steps the eyebrow counts, review plus each wallet confirmation; skip: confirmations already done before a retry.
+      this.dlg = { open: true, kind, phase: "review", checks: [], calls, steps: calls.map((c) => ({ label: c.label, state: "idle", hash: "" })), batch, error: "", ack: false, result: null, quote, amount, total: 1 + (batch ? 1 : calls.length), skip: 0 };
       session.accountSwitched = false;
       this.$nextTick(() => this.$refs.dlgTitle?.focus());
       this.runChecks();
@@ -377,7 +415,7 @@ export function registerDepositView(Alpine) {
         const src = await session.src();
         // The new request's id: from the transaction's own log on chain, from the list in the simulator.
         const id = d.kind === "inkind" ? null : session.simulated ? (await src.requestsOf(session.acct.address))[0]?.id : await session.requestIdOf(hash);
-        d.result = { hash, id: id || null };
+        d.result = { hash, id: id || null, at: this.now };
         d.phase = "requested";
         if (d.kind === "deposit") { this.amount = ""; this.dq = null; } else { this.shares = ""; this.rq = null; }
         this.refreshAccount(); this.loadVault();
@@ -391,6 +429,7 @@ export function registerDepositView(Alpine) {
     retry() {
       const d = this.dlg;
       const left = d.steps.map((st) => st.state !== "done");
+      d.skip += left.filter((x) => !x).length;
       d.calls = d.calls.filter((_, i) => left[i]);
       d.steps = d.steps.filter((_, i) => left[i]);
       d.batch = d.batch && d.calls.length > 1;
@@ -407,7 +446,7 @@ export function registerDepositView(Alpine) {
     /** What closing now leaves behind, as one line and its (i) (board 4's footnote, board 16). */
     closeNote() {
       const st = this.dlg.steps;
-      if (st.some((s) => s.state === "sent")) return { text: "Already sent. Closing this does not stop it.", tip: "Your requests shows it once Base confirms it." };
+      if (st.some((s) => s.state === "sent")) return { text: "Already sent. Closing this does not stop it.", tip: "Your position shows it once Base confirms it." };
       const approved = st.some((s, i) => s.state === "done" && this.dlg.calls[i]?.functionName === "approve");
       return approved ? { text: "Close now and nothing more is requested.", tip: "The approval stays until you use it or revoke it in your wallet." } : { text: "Close now and nothing is requested.", tip: "" };
     },
@@ -427,24 +466,74 @@ export function registerDepositView(Alpine) {
       return d.kind === "deposit" ? "Deposit requested" : d.kind === "redeem" ? "Redemption requested" : "Exit in kind done";
     },
     statusLink() { return this.dlg.result?.id ? `/deposit/requests/${this.dlg.result.id}` : "/deposit/requests"; },
-    statusUrl() { return `${location.origin}${this.statusLink()}`; },
-    async copyStatus() { try { await navigator.clipboard.writeText(this.statusUrl()); this.copied = true; setTimeout(() => (this.copied = false), 2000); } catch { /* blocked */ } },
-    readyIn() { const q = this.dlg.quote; return q ? fmtCountdown(q.readyAt - this.now) : ""; },
+    /** The three steps after a request (David, 25 Nov): made, its batch, ready to claim. Times as estimates; the exact one on hover. */
     track() {
-      const q = this.dlg.quote;
+      const d = this.dlg, q = d.quote;
       if (!q) return [];
-      const nowWhen = fmtWhen(this.now).split(" · ")[1];
-      if (this.dlg.kind === "deposit") return [
-        { key: "r", label: "Requested", when: nowWhen, done: true },
-        { key: "b", label: "Next batch", when: fmtWhenShort(q.settlesAt), done: false },
-        { key: "h", label: "Wait", when: this.holdLabel(), done: false },
-        { key: "a", label: "Ready to claim", when: fmtWhenShort(q.readyAt), done: false, money: true },
-      ];
+      const dep = d.kind === "deposit";
       return [
-        { key: "r", label: "Requested", when: nowWhen, done: true },
-        { key: "b", label: "Next batch", when: fmtWhenShort(q.settlesAt), done: false },
-        { key: "a", label: "USDC ready", when: fmtWhenShort(q.readyAt), done: false, money: true },
+        { key: "r", label: "Requested", when: fmtAt(d.result?.at ?? this.now, this.now), title: "", cls: "is-now" },
+        { key: "b", label: "Next batch", when: this.soon(q.settlesAt), title: fmtWhen(q.settlesAt), cls: "" },
+        { key: "a", label: dep ? "rmFUND ready to claim" : "USDC ready to claim", when: dep ? this.soon(q.readyAt) : "Right after", title: fmtWhen(q.readyAt), cls: "is-money" },
       ];
+    },
+    /** "Step 2 of 3": review, then each wallet confirmation. Hidden once requested. */
+    stepLabel() {
+      const d = this.dlg;
+      if (!d.total || d.total < 2 || d.phase === "requested") return "";
+      if (d.phase === "review") return `Step 1 of ${d.total}`;
+      const at = d.batch ? 0 : d.steps.findIndex((s) => s.state !== "done");
+      const i = at < 0 ? d.steps.length - 1 : at;
+      return `Step ${Math.min(d.total, 2 + d.skip + i)} of ${d.total}`;
+    },
+    /** What the wallet will ask, in one line. */
+    walletLine() {
+      const d = this.dlg;
+      if (d.kind === "inkind") return "Your wallet asks for one signature. It settles at once, straight from the vault.";
+      if (d.batch) return "Your wallet asks for one confirmation: the approval and the request go through together.";
+      const appr = d.calls.find((c) => c.functionName === "approve");
+      return appr ? `Your wallet asks for two signatures: ${appr.label.replace(/^Approve/, "approve")}, then the request.` : "Your wallet asks for one signature: the request.";
+    },
+    walletTip() { return this.dlg.calls.some((c) => c.functionName === "approve") ? "The approval lets only the Robot Money queue move that amount, nothing more." : ""; },
+    dlgEstTip() {
+      return this.dlg.kind === "deposit"
+        ? `At today's share price, ${this.price()}. The batch sets the price you buy at.`
+        : `At today's share price, ${this.price()}, after the exit fee. The batch sets the price you sell at.`;
+    },
+    dlgReadyTip() {
+      const d = this.dlg, q = d.quote, f = this.flow();
+      if (!q) return "";
+      const span = fmtDuration(f.maxRoll * f.epochLength);
+      return d.kind === "deposit"
+        ? `At ${fmtAt(q.readyAt, this.now)}: the ${fmtAt(q.settlesAt, this.now)} batch buys it, then a ${this.holdLabel()} wait. Unfilled after ${span}? The USDC can come back.`
+        : `At ${fmtAt(q.readyAt, this.now)}, when the next batch fills it at its price. Unfilled after ${span}? You can ask for it back.`;
+    },
+    /** "after a ~0.002 USDC exit fee", for the review's estimate line. */
+    exitFeeWords(n, bps) {
+      if (bps == null) return "after the exit fee";
+      if (bps === 0) return "with no exit fee";
+      const p = this.vault?.priceUsdc;
+      return p ? `after a ~${fmtUsdcFine((n * p * bps) / 10_000)} exit fee` : `after a ${fmtFee(bps)} exit fee`;
+    },
+    /**
+     * Eases the dialog's height from one step to the next instead of jumping
+     * (David, 25 Nov). Watches the inner wrapper, animates the box: animating
+     * what is watched would feed itself.
+     * @param {HTMLElement} box
+     */
+    easeDialog(box) {
+      const inner = box.firstElementChild;
+      if (!inner || typeof ResizeObserver === "undefined") return;
+      let last = 0;
+      new ResizeObserver(() => {
+        const h = box.offsetHeight;
+        if (last && h && Math.abs(h - last) > 2 && this.dlg.open && !matchMedia("(prefers-reduced-motion: reduce)").matches) {
+          box.style.overflowY = "hidden";
+          const a = box.animate([{ height: `${last}px` }, { height: `${h}px` }], { duration: 280, easing: "cubic-bezier(0.16, 1, 0.3, 1)" });
+          a.onfinish = a.oncancel = () => { box.style.overflowY = ""; };
+        }
+        last = h;
+      }).observe(inner);
     },
 
     fmtUsdc, fmtShares, fmtRm, fmtPrice, fmtWhen, fmtWhenShort, fmtFee, shortHash, floorTo, tokenIcon,

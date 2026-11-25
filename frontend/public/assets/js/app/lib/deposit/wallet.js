@@ -63,7 +63,7 @@ function boot(kit) {
     customRpcUrls,
     metadata: {
       name: "Robot Money",
-      description: "Deposit into the Robot Money model portfolio",
+      description: "Deposit into the Robot Money Vault on Base",
       url: location.origin,
       icons: [`${location.origin}/assets/icon-512.png`],
     },
@@ -185,20 +185,26 @@ function boot(kit) {
  */
 export function errorText(e) {
   const code = e?.code ?? e?.cause?.code;
-  const msg = String(e?.shortMessage || e?.details || e?.message || "");
+  // A contract's own error, by name. The kit decodes it when the ABI lists it
+  // (abi.js ERRORS) but keeps the name out of its short message.
+  const name = String(e?.walk?.((x) => x?.data?.errorName)?.data?.errorName || "");
+  const msg = `${name} ${String(e?.shortMessage || e?.details || e?.message || "")}`.trim();
   if (code === 4001 || /user rejected|denied|rejected the request/i.test(msg)) return "Nothing was sent. You declined it in your wallet.";
   if (code === -32002 || /already pending|request already/i.test(msg)) return "Your wallet has a request waiting. Open it to continue.";
   if (/insufficient funds|gas required exceeds/i.test(msg)) return "Not enough ETH on Base for the network fee.";
+  if (/ERC20InsufficientBalance/.test(name)) return "This wallet does not hold that much.";
   if (/exceeds balance|insufficient balance/i.test(msg)) return "Not enough USDC in this wallet.";
   if (/allowance/i.test(msg)) return "The approval does not cover this amount. Try again.";
   if (/BelowMinRequest/.test(msg)) return "Below the smallest request the vault takes.";
   if (/AbovePerDepositCap|PerDepositCap/.test(msg)) return "Above the largest request the vault takes.";
+  if (/TooManyOpenRequests/.test(msg)) return "This wallet has 16 open requests on this side, the most the vault allows. Cancel one or wait for a batch to fill one.";
   if (/TVLCap/.test(msg)) return "The vault is full for now.";
   if (/RequestLocked/.test(msg)) return "This request has locked for its batch, so it can no longer be cancelled.";
   if (/NoticeNotReady|NoticeAlreadyGiven/.test(msg)) return "Not yet. Notice opens once no batch has filled the request in its time.";
   if (/FundIsShutdown|FundNotShutdown/.test(msg)) return "The vault's state changed. Reload the page and try again.";
-  if (/QueuePaused|PauseActive/.test(msg)) return "The queue is paused for now. Nothing settles until it ends.";
+  if (/QueueIsPaused|QueuePaused|PauseActive/.test(msg)) return "The queue is paused for now. Nothing settles until it ends.";
   if (/Paused|DepositsArePaused|DepositsStopped/.test(msg)) return "Deposits are stopped for now. Redemptions still work.";
   if (/timeout|timed out|fetch failed|network/i.test(msg)) return "Base did not answer. Try again.";
+  if (name) return `The vault refused it (${name}).`;
   return msg ? `It did not go through: ${msg.split("\n")[0]}` : "It did not go through. Try again.";
 }

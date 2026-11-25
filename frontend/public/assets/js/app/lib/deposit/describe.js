@@ -44,7 +44,7 @@ export function splitOf(r, x) {
 }
 
 /**
- * What each stage means, in one or two sentences from the requester's side:
+ * What each stage means, in two lines at most, from the requester's side:
  * the (i) beside a stage, and the stage guide on Your position.
  * @param {string} stage @param {"deposit" | "redeem"} [kind] @param {any} [f] flow parameters
  */
@@ -57,9 +57,9 @@ export function stageHelp(stage, kind = "deposit", f = null) {
   const lead = fmtDuration((f?.cancelBuffer ?? 900) + (f?.settleWindow ?? 720));
   const span = f ? fmtDuration(f.maxRoll * f.epochLength) : "8 h";
   return {
-    [STAGE.PENDING]: `Your ${unit} waits for the next batch, which sets the price. You can cancel until it locks, ${lead} before that batch. If a batch fills only part, the rest joins the next one.`,
+    [STAGE.PENDING]: `Waits for the next batch, which sets the price. You can cancel until ${lead} before it; any unfilled rest joins the next.`,
     [STAGE.ON_HOLD]: dep
-      ? `The batch bought your rmFUND at its price. It is yours to claim ${hold} after the batch: the wait protects every holder from a manipulated price.`
+      ? `Bought at the batch's price. Yours to claim ${hold} later: the wait protects every holder from a manipulated price.`
       : "The batch sold your rmFUND at its price. Your USDC is yours to claim once its wait ends.",
     [STAGE.READY]: `Your ${out} is ready. One signature moves it into your wallet.`,
     [STAGE.CLAIMED]: `Your ${out} is in your wallet.`,
@@ -73,7 +73,7 @@ export function stageHelp(stage, kind = "deposit", f = null) {
 }
 
 /** The Stage header's (i): the path every request takes, said once for the column. */
-export const STAGES_TIP = "A deposit goes Pending, Filled, Ready to claim, Claimed. A redemption has no wait, so it goes from Pending straight to Ready to claim.";
+export const STAGES_TIP = "Deposits: Pending, Filled, Ready to claim, Claimed. Redemptions skip the wait: Pending, Ready to claim, Claimed.";
 
 /** The stages a deposit moves through, in order, for the stage guide on Your position. */
 export const LIFECYCLE = Object.freeze([
@@ -215,7 +215,7 @@ export function summaryOf(r, now, f) {
  */
 export function stopOf(v) {
   if (!v) return null;
-  if (v.windDown) return { title: "The vault is winding down", body: "Deposits and batches have stopped. Queued requests are released: withdraw them under Your requests. Holders can exit in kind, taking their slice of each holding." };
+  if (v.windDown) return { title: "The vault is winding down", body: "Deposits and batches have stopped. Queued requests are released: withdraw them under Your position. Holders can exit in kind, taking their slice of each holding." };
   if (v.queuePaused) return { title: "The queue is paused", body: `Nothing settles, and no new request can be made${v.queuePausedUntil ? ` until ${fmtWhen(v.queuePausedUntil)}` : ""}. Requests already in the queue wait for the first batch after.` };
   if (v.depositsStopped) return { title: "Deposits are stopped", body: `${v.stopCause === "paused" ? `The vault paused deposits${v.depositsPausedUntil ? ` until ${fmtWhen(v.depositsPausedUntil)}` : ""}.` : "A holding cannot be priced or paid out safely right now, so no deposit can join a batch."} Deposits already in the queue wait, and can be cancelled while this lasts. Redemptions still work.` };
   if (v.keeperSet === false) return { title: "No batch can run yet", body: "The vault has no keeper to run its batches. Requests wait until one is set." };

@@ -291,8 +291,8 @@ const META = {
   // Behind the early access gate (lib/deposit/access.js), so out of search
   // until it opens to everyone: drop `robots` when GATE_ON goes false.
   "/deposit": {
-    title: "Deposit into the Model Portfolio | Robot Money",
-    description: "Deposit USDC into Robot Money's model portfolio from any wallet on Base. Requests fill in hourly batches, and the shares are ready to claim about two hours later. Limits, fees and how to get out.",
+    title: "Deposit into the Robot Money Vault | Robot Money",
+    description: "Deposit USDC into the Robot Money Vault on Base from any wallet. It tracks the swarm's model portfolio with the assets it can hold on chain. Requests fill in hourly batches, and the shares are ready to claim about two hours later.",
     robots: "noindex, nofollow",
   },
   // A placeholder hub nothing links to since the footer became the site index

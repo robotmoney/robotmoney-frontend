@@ -4,10 +4,11 @@
 // it here; the skill and the prepare endpoint will read the same values once
 // the manifest is published at a stable URL (RM-206).
 //
-// Deploy 4 runs contracts 0.9.0 on Base: upgraded in place on 20 Nov 2026 and
-// signed off on 21 Nov at robotmoney-core tag release/v0.9.0-rc.1-rehearsal
-// (05cf204). No price limit, a cancel deadline, matched batches, redemption
-// notice. The page reads and sends to these proxies; with DEPLOY_4_LIVE off it
+// Deploy 4 runs contracts 0.10.0 on Base: upgraded in place on 25 Nov 2026
+// (robotmoney-core tag contracts-0.10.0, 28b5c93), after 0.9.0 on 20 Nov. No
+// price limit, a cancel deadline, matched batches, redemption notice; 0.10.0
+// adds a cap of 16 open requests per owner and side, and `decimals()` reports
+// the shares' real 24. The page reads and sends to these proxies; with DEPLOY_4_LIVE off it
 // runs the simulated queue instead (sim-queue.js).
 //
 // Pins: the implementation behind each proxy (its EIP-1967 slot) must be one
@@ -44,10 +45,15 @@ export const VENUES = Object.freeze({
   "0x1420381b3bf85a669a9be73bc5ec14c76a73ca24": "Compound",
 });
 
-/** The reviewed implementations (0.9.0, tag 05cf204), read on chain 23 Nov 2026. */
+/**
+ * The reviewed implementations (0.10.0, tag contracts-0.10.0), read on chain 25
+ * Nov 2026 and matched to that release: the fund has `reabsorbRemovedAsset` and
+ * the two-argument `emergencyUnwind`, the queue has `migrateV0100` and stands at
+ * initializer version 3.
+ */
 const DEPLOY_4_PINS = {
-  fund: ["0xb309256290fe5dC64b2e3069123c60CFaD22E6c1"],
-  queue: ["0x94051e739E7725bd193CB1ed743A035dE60F4Fa0"],
+  fund: ["0xd123F1c792289830415009eD66D17A5b584Aa055"],
+  queue: ["0x6475dd48823a4eb6f07f8bf4e04C00E597a36DD9"],
 };
 /** Off: the page runs the simulator. On since Deploy 4 answered `liveness()` (0.9.0). */
 const DEPLOY_4_LIVE = true;
