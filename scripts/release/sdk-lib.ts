@@ -12,6 +12,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, 
 import { homedir } from "node:os";
 import { join, relative } from "node:path";
 import { gunzipSync } from "node:zlib";
+import { BESIDE_REGIME_VERSIONS } from "../../packages/analyst-sdk/src/analyze/regime-versions.ts";
 import { getWithRetry, latestReport, listReports, noRunMessage, PUBLIC_API, sha256Hex, type Net, type ReportRow } from "./public-analytics-read.ts";
 
 export interface RunResult {
@@ -187,6 +188,46 @@ export const PRE_D78_RELEASE_COMMITS: ReadonlySet<string> = new Set([
 export interface ArchivedRun {
   readonly created: string;
   readonly buildIdentity: string;
+  /** The run's analytics_ledger_methodology_versions id, as the ledger CSV carries it. */
+  readonly methodologyVersionId?: string;
+}
+
+/**
+ * The methodology version labels (by id) in a filled archive copy
+ * (every csv/<backup>/data/analytics_ledger_methodology_versions.*.csv.gz). Only the leading
+ * `id,tool_id,version_label` columns are read; the config column after them is never parsed.
+ */
+export function archivedMethodologyLabels(copyDir: string): Map<string, string> {
+  const labels = new Map<string, string>();
+  const csv = join(copyDir, "csv");
+  if (!existsSync(csv)) return labels;
+  for (const backup of readdirSync(csv)) {
+    const data = join(csv, backup, "data");
+    if (!existsSync(data)) continue;
+    for (const f of readdirSync(data)) {
+      if (!/^analytics_ledger_methodology_versions\..*\.csv\.gz$/.test(f)) continue;
+      for (const line of gunzipSync(readFileSync(join(data, f))).toString("utf8").split("\n")) {
+        const m = /^(\d+),([^,"]+),([^,"]+),/.exec(line);
+        if (m) labels.set(m[1]!, m[3]!);
+      }
+    }
+  }
+  return labels;
+}
+
+/**
+ * PURE. The archived runs on the served (main) line: a run whose methodology label is a regime version published
+ * beside the main line (REGIME_LINE, issue 1753: v5) is left out. Its `regime_snapshots` artifact is `[]`, so it has
+ * no as-of row to replay. A run whose label is unknown stays in (the replay then says what it found).
+ */
+export function mainLineRuns(archived: ReadonlyMap<string, ArchivedRun>, labels: ReadonlyMap<string, string>): Map<string, ArchivedRun> {
+  const beside = new Set<string>(BESIDE_REGIME_VERSIONS);
+  const out = new Map<string, ArchivedRun>();
+  for (const [key, run] of archived) {
+    const label = run.methodologyVersionId === undefined ? undefined : labels.get(run.methodologyVersionId);
+    if (label === undefined || !beside.has(label)) out.set(key, run);
+  }
+  return out;
 }
 
 /** The runs (by key) in a filled archive copy's run ledger (every csv/<backup>/data/analytics_ledger_runs.*.csv.gz). */
@@ -202,7 +243,7 @@ export function archivedRuns(copyDir: string): Map<string, ArchivedRun> {
       // id,run_key,asof,tool_id,source_label,methodology_version_id,build_identity,job_id,created_at
       for (const line of gunzipSync(readFileSync(join(data, f))).toString("utf8").split("\n")) {
         const c = line.split(",");
-        if (c.length === 9 && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(c[1]!)) runs.set(c[1]!, { created: c[8]!, buildIdentity: c[6]! });
+        if (c.length === 9 && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(c[1]!)) runs.set(c[1]!, { created: c[8]!, buildIdentity: c[6]!, methodologyVersionId: c[5]! });
       }
     }
   }
@@ -364,10 +405,13 @@ export async function postSealCheck(deps: SdkDeps, commit: string): Promise<Chec
   const filled = await fillInto(deps, sdk.sdkDir, "api-copy");
   if (filled !== null) return { found, problems: [filled] };
   // The archive is sealed a UTC day at a time, so the newest published run may postdate the newest sealed backup.
-  const archived = archivedRuns(join(sdk.sdkDir, "api-copy"));
+  // Issue 1753: a run of a methodology published beside the main line (v5) has an empty regime_snapshots artifact,
+  // so only main-line runs are replayed (v0.11.0 QA).
+  const allArchived = archivedRuns(join(sdk.sdkDir, "api-copy"));
+  const archived = mainLineRuns(allArchived, archivedMethodologyLabels(join(sdk.sdkDir, "api-copy")));
   const run = newestArchivedReport(listed.reports, archived);
-  Object.assign(found, { newestPublishedRun: newest.run_key, newestPublishedAsof: newest.asof });
-  if (run === undefined) return { found, problems: [`none of the ${listed.reports.length} published run(s) is in the filled archive copy (${archived.size} run(s) in its ledger): no sealed backup holds a published run yet`] };
+  Object.assign(found, { newestPublishedRun: newest.run_key, newestPublishedAsof: newest.asof, besideLineRunsSkipped: allArchived.size - archived.size });
+  if (run === undefined) return { found, problems: [`none of the ${listed.reports.length} published run(s) is a main-line run in the filled archive copy (${archived.size} main-line run(s) of ${allArchived.size} in its ledger): no sealed backup holds a published run yet on the main line`] };
   const { run_key, asof } = run;
   const { created, buildIdentity } = archived.get(run_key)!;
   const fixed = isFixedProducer(buildIdentity);

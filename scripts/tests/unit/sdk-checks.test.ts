@@ -8,7 +8,7 @@ import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } fr
 import { join } from "node:path";
 import { latestReport, noRunMessage, retryAfterMs, sha256Hex, getWithRetry } from "../../release/public-analytics-read.ts";
 import {
-  acquireBlocks, archivedRuns, archiveRouteProblems, archiveRoutesCheck, copyDifferences, fillScript, homeScratch, isFixedProducer, newestArchivedReport, packageTestsCheck, postSealCheck, quickstartCheck,
+  acquireBlocks, archivedMethodologyLabels, archivedRuns, mainLineRuns, archiveRouteProblems, archiveRoutesCheck, copyDifferences, fillScript, homeScratch, isFixedProducer, newestArchivedReport, packageTestsCheck, postSealCheck, quickstartCheck,
   spawnRunner, sparseCloneSdk, text, type SdkDeps,
 } from "../../release/sdk-lib.ts";
 import { compareRows, comparisonProblems, publishedAsofRow } from "../../release/replay-row.ts";
@@ -430,6 +430,37 @@ describe("the quickstart replays the newest published run the archive holds", ()
     expect(isFixedProducer("8c2690bac11440a8d8ef86733a567066afaea116")).toBe(false);
     expect(isFixedProducer("4928ee57f5bb833dd4b543113b385f1570251eac")).toBe(true);
     expect(archivedRuns(join(dir, "missing")).size).toBe(0);
+  });
+
+  test("the post-seal replay picks the main line: a v5 run beside it (issue 1753) is skipped", () => {
+    const dir = homeScratch("sdk-ledger-line-test-");
+    cleanup.push(dir);
+    const data = join(dir, "csv", "2026-11-26T000000Z", "data");
+    mkdirSync(data, { recursive: true });
+    const [k1, k2] = ["5", "6"].map((d) => `${d.repeat(8)}-${d.repeat(4)}-4${d.repeat(3)}-8${d.repeat(3)}-${d.repeat(12)}`);
+    const sha = "4b4414c0759305df046a2de511bb446070ee7057";
+    writeFileSync(join(data, "analytics_ledger_runs.a_b.csv.gz"), gzipSync([
+      "id,run_key,asof,tool_id,source_label,methodology_version_id,build_identity,job_id,created_at",
+      `10,${k1},2026-11-25,regime,live,7,${sha},,2026-11-25 21:30:00.5+00`,
+      `11,${k2},2026-11-25,regime,live,8,${sha},,2026-11-25 21:31:00.5+00`,
+    ].join("\n") + "\n"));
+    writeFileSync(join(data, "analytics_ledger_methodology_versions.a_b.csv.gz"), gzipSync([
+      "id,tool_id,version_label,config,config_digest,created_at",
+      `7,regime,v4,"{""a"":1,""b"":2}",${"a".repeat(64)},2026-11-20 00:00:00+00`,
+      `8,regime,v5,"{""a"":1}",${"b".repeat(64)},2026-11-25 00:00:00+00`,
+    ].join("\n") + "\n"));
+    const all = archivedRuns(dir);
+    const labels = archivedMethodologyLabels(dir);
+    expect([labels.get("7"), labels.get("8")]).toEqual(["v4", "v5"]);
+    const row = (id: number, k: string) => ({ report_id: id, run_key: k, asof: "2026-11-25", checksum: "c", byte_length: 1 });
+    // red control: with no line filter the newest report is the v5 run, whose regime_snapshots artifact is [].
+    expect(newestArchivedReport([row(1, k1), row(2, k2)], all)?.run_key).toBe(k2);
+    // pass: the main line's newest run is the v4 one.
+    expect(newestArchivedReport([row(1, k1), row(2, k2)], mainLineRuns(all, labels))?.run_key).toBe(k1);
+    // only v5 published: nothing on the main line to replay.
+    expect(newestArchivedReport([row(2, k2)], mainLineRuns(all, labels))).toBeUndefined();
+    // an unknown label stays in.
+    expect(mainLineRuns(all, new Map()).size).toBe(2);
   });
 });
 
