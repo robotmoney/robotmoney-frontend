@@ -101,11 +101,12 @@ function dailyCashRate(quotePercent: number, basis: CashBasis): number {
 /**
  * The daily returns the Sharpe ratio reads (issue 1751): "excess" is the
  * post-cost return minus that day's cash return (the default, issue 1734);
- * "net" is the post-cost return with no cash subtraction.
+ * "returns" is the simulation's pre-cost daily return with no cash subtraction,
+ * the SDK 0.7.0 rule.
  */
-export type SharpeBasis = "excess" | "net";
+export type SharpeBasis = "excess" | "returns";
 
-const SHARPE_BASES: readonly SharpeBasis[] = ["excess", "net"];
+const SHARPE_BASES: readonly SharpeBasis[] = ["excess", "returns"];
 
 function sharpeBasisOf(v: unknown): SharpeBasis {
   if (v === undefined) return "excess";
@@ -277,8 +278,6 @@ export interface SimulationResult {
   returns: Point[];
   // Per day, the post-cost return minus that day's cash return: what Sharpe reads (issue 1734).
   excess: Point[];
-  // Per day, the post-cost return with no cash subtraction (issue 1751).
-  net: Point[];
   trades: TradeEvidence[];
   startDate: string;
   endDate: string;
@@ -293,10 +292,8 @@ export interface PeriodStatsOptions {
   trades?: TradeEvidence[];
   // In-sample end. Default BACKTEST_IN_SAMPLE_END.
   splitDate?: string;
-  // The simulation's post-cost daily returns (SimulationResult.net). Required
-  // with sharpeBasis "net".
-  net?: Point[];
-  // The returns the Sharpe ratio reads (issue 1751). Default "excess".
+  // The returns the Sharpe ratio reads (issue 1751): "excess" (default) reads
+  // `excess`, "returns" reads `returns`.
   sharpeBasis?: SharpeBasis;
 }
 
@@ -628,7 +625,6 @@ function simulate(
   const values: Point[] = [];
   const returns: Point[] = [];
   const excess: Point[] = [];
-  const net: Point[] = [];
   const trades: TradeEvidence[] = [];
   let firstActiveIdx = -1;
 
@@ -661,11 +657,7 @@ function simulate(
       tradeFraction = turnover * rate;
       trades.push({ date: dateAxis[i]!, turnover, cost: tradeFraction });
     }
-    if (dayRet != null) {
-      const netRet = netOfCost(dayRet, tradeFraction);
-      net.push({ date: dateAxis[i]!, value: netRet });
-      excess.push({ date: dateAxis[i]!, value: netRet - dayCash });
-    }
+    if (dayRet != null) excess.push({ date: dateAxis[i]!, value: netOfCost(dayRet, tradeFraction) - dayCash });
     lastWeights = w;
     values.push({ date: dateAxis[i]!, value: equity.value });
   }
@@ -674,7 +666,6 @@ function simulate(
     values,
     returns,
     excess,
-    net,
     trades,
     startDate: dateAxis[firstActiveIdx >= 0 ? firstActiveIdx : firstIdx]!,
     endDate: dateAxis[dateAxis.length - 1]!,
@@ -789,7 +780,6 @@ export function simulateDrift(
   const values: Point[] = [];
   const returns: Point[] = [];
   const excess: Point[] = [];
-  const net: Point[] = [];
   const trades: TradeEvidence[] = [];
   let firstActiveIdx = -1;
 
@@ -840,9 +830,7 @@ export function simulateDrift(
       held = { ...w };
       lastTarget = w;
     }
-    const netRet = netOfCost(portRet, tradeFraction);
-    net.push({ date, value: netRet });
-    excess.push({ date, value: netRet - dailyCash });
+    excess.push({ date, value: netOfCost(portRet, tradeFraction) - dailyCash });
     values.push({ date, value: equity.value });
   }
 
@@ -850,7 +838,6 @@ export function simulateDrift(
     values,
     returns,
     excess,
-    net,
     trades,
     startDate: dateAxis[firstActiveIdx >= 0 ? firstActiveIdx : firstIdx]!,
     endDate: dateAxis[dateAxis.length - 1]!,
@@ -867,11 +854,11 @@ export const YEAR_MS = 365.25 * 86400 * 1000;
 // exactly. `_daily` carries the window's values; stripDailyFromSnapshot drops it.
 export function periodStats(valueSeries: Point[], from: string, to: string, options: PeriodStatsOptions): BacktestMetrics {
   for (const k of Object.keys(options)) {
-    if (!["returns", "excess", "trades", "splitDate", "net", "sharpeBasis"].includes(k)) throw new RangeError(`unknown option ${JSON.stringify(k)}; expected returns, excess, trades, splitDate, net, sharpeBasis`);
+    if (!["returns", "excess", "trades", "splitDate", "sharpeBasis"].includes(k)) throw new RangeError(`unknown option ${JSON.stringify(k)}; expected returns, excess, trades, splitDate, sharpeBasis`);
   }
-  const sharpeSeries = sharpeSeriesOf(options);
   if (!Array.isArray(options.returns)) throw new RangeError("options.returns (the simulation's pre-cost daily returns) is required");
   if (!Array.isArray(options.excess)) throw new RangeError("options.excess (the simulation's post-cost daily returns in excess of cash) is required");
+  const sharpeSeries = sharpeSeriesOf(options);
   if (!ISO_DAY.test(from) || !ISO_DAY.test(to) || from > to) throw new RangeError(`period ${from}..${to} must be YYYY-MM-DD dates with from <= to`);
   const startDate = from;
   const endDate = to;
@@ -905,8 +892,8 @@ export function periodStats(valueSeries: Point[], from: string, to: string, opti
   // the sd is 0 (the old max(1, n) and max(1, n - 1) divisors); either way, and
   // whenever the returns are all equal, sd is exactly 0 and Sharpe is 0.
   // Sharpe reads the post-cost daily returns in excess of that day's cash rate
-  // (issue 1734), so an all-cash book scores 0. With sharpeBasis "net" it reads
-  // the post-cost daily returns instead (issue 1751).
+  // (issue 1734), so an all-cash book scores 0. With sharpeBasis "returns" it
+  // reads the pre-cost daily returns instead (issue 1751).
   const sharpe = sharpeOf(dailyExcess);
 
   const splitDate = options.splitDate ?? BACKTEST_IN_SAMPLE_END;
@@ -979,12 +966,10 @@ export function splitSamples(
   };
 }
 
-// The dated returns the Sharpe ratio reads: options.excess, or options.net
-// under sharpeBasis "net" (a RangeError when that series is absent).
+// The dated returns the Sharpe ratio reads: options.excess, or options.returns
+// under sharpeBasis "returns".
 function sharpeSeriesOf(options: PeriodStatsOptions): Point[] {
-  if (sharpeBasisOf(options.sharpeBasis) === "excess") return options.excess;
-  if (!Array.isArray(options.net)) throw new RangeError('options.net (the simulation\'s post-cost daily returns) is required with sharpeBasis "net"');
-  return options.net;
+  return sharpeBasisOf(options.sharpeBasis) === "returns" ? options.returns : options.excess;
 }
 
 // Annualized Sharpe of daily excess returns: compensated mean over sample sd;
@@ -1035,7 +1020,7 @@ function fullStats(sim: SimulationResult, splitDate?: string, sharpeBasis?: Shar
     excess: sim.excess,
     trades: sim.trades,
     ...(splitDate === undefined ? {} : { splitDate }),
-    ...(sharpeBasis === undefined ? {} : { net: sim.net, sharpeBasis }),
+    ...(sharpeBasis === undefined ? {} : { sharpeBasis }),
   });
 }
 

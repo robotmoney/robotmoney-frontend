@@ -6773,13 +6773,13 @@ Panel weights refit every 21 days on a fixed calendar anchored at 2018-01-01. A 
 
 ## D95 — A downstream regime model states each engine rule as an option; every default is the 0.8.0 behaviour (issue 1751)
 
-**Status:** Accepted for implementation 2026-11-25. `packages/analyst-sdk/src/analyze/backtest.ts`, `packages/analyst-sdk/src/analyze/regime-versions.ts` (`RegimeRules`, `REGIME_RULES`), `packages/analyst-sdk/src/analyze/compute.ts`, `packages/analyst-sdk/src/prepare.ts`, `packages/analyst-sdk/src/run.ts`, `packages/analyst-sdk/src/transform/derived.ts`, `packages/analyst-sdk/src/report/`, `docs/technical/analyst-sdk-requirements.md` section 8.
+**Status:** proposed. Drafted by the agent with issue 1751 (pr 1752); the owner accepts it. `packages/analyst-sdk/src/analyze/backtest.ts`, `packages/analyst-sdk/src/analyze/regime-versions.ts` (`RegimeRules`, `REGIME_RULES`), `packages/analyst-sdk/src/analyze/compute.ts`, `packages/analyst-sdk/src/prepare.ts`, `packages/analyst-sdk/src/run.ts`, `packages/analyst-sdk/src/transform/derived.ts`, `packages/analyst-sdk/src/report/`, `docs/technical/analyst-sdk-requirements.md` section 8.
 
 **Decision.**
 
 1. **Defaults.** Every option below defaults to what analyst-sdk 0.8.0 does. No published figure moves, no golden is regenerated, no methodology tag, migration or stored row changes.
 2. **Cash basis (D94 item 6 unchanged).** `simulatePortfolio`, `simulateDrift` and the reference backtest accept `cashBasis`. `discount` (default) converts the quote with `discountToYield`. `yield` compounds the quote as a yearly yield.
-3. **Sharpe basis (D94 item 5 unchanged).** `periodStats` and the reference backtest accept `sharpeBasis`. `excess` (default) reads the post-cost returns minus cash. `net` reads the post-cost returns, which the simulators return as `net`.
+3. **Sharpe basis (D94 item 5 unchanged).** `periodStats` and the reference backtest accept `sharpeBasis`. `excess` (default) reads the post-cost returns minus cash. `returns` reads the simulation's pre-cost daily returns with no cash subtraction, which is the SDK 0.7.0 rule. The basis applies to the whole window and to both sample blocks. No series is added to `SimulationResult`.
 4. **Reference backtest options.** `computeBacktest` passes `lagSessions`, `calendars`, `cashBasis` and `sharpeBasis` to every line of its grid.
 5. **Engine rules.** `RegimeRules` states the dating rule, window counting, weight refit calendar, missing-panel rule, label cut, lookback and adoption date. `REGIME_RULES.v3` and `REGIME_RULES.v4` are built from the per-version tables. The preparation and compute functions accept `rules`, and without it read the preset of `version`. An indicator's `calendar` and `publication` are checked only when the rules in force read them.
 6. **In-sample end (D94 item 3 unchanged).** `runRegime` accepts `inSampleEnd`. `current-version` (default) is the current version's adoption date. `computed-version` is the adoption date of the version computed.

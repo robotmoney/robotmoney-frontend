@@ -652,7 +652,7 @@ Every choice below is an option with a default, and every default is what 0.8.0 
 | Where | Option | Default | Other value |
 | ----- | ------ | ------- | ----------- |
 | `simulatePortfolio`, `simulateDrift`, `computeBacktest` | `cashBasis` | `"discount"`: the cash quote is a T-bill discount rate, converted with `discountToYield` | `"yield"`: the quote is compounded as a yearly yield |
-| `periodStats`, `computeBacktest` | `sharpeBasis` | `"excess"`: post-cost returns minus cash (`excess`) | `"net"`: post-cost returns (`net`, which both simulators return) |
+| `periodStats`, `computeBacktest` | `sharpeBasis` | `"excess"`: post-cost returns minus cash (`excess`) | `"returns"`: the simulation's pre-cost daily returns with no cash subtraction (`returns`), the 0.7.0 rule |
 | `computeBacktest` | `lagSessions`, `calendars` | 1, `REFERENCE_CALENDARS` | passed to every line of the grid; `calendars` is keyed `eth` and `sp500` |
 | `runRegime` | `inSampleEnd` | `"current-version"`: `BACKTEST_IN_SAMPLE_END` | `"computed-version"`: the adoption date of `version` |
 | `runRegime` | `storedOnlyRatio` | `"drop"`: the ratio gets weight 0 and is listed in `droppedRatios` | `"error"`: throws `StoredRatioOnlyError` |

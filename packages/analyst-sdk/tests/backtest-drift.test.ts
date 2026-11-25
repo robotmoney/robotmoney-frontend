@@ -323,7 +323,6 @@ describe("cash basis (issue 1751)", () => {
     expect(run({ cashBasis: "discount" })).toEqual(run());
     // Both simulators read the basis alike.
     expect(run({ cashBasis: "yield" }).values).toEqual(simulatePortfolioWithDefaults(axis, allCash, {}, tbill, { lagSessions: 0, cashBasis: "yield" }).values);
-    expect(run().net.map((p) => p.value)).toEqual(run().returns.map((p) => p.value));
   });
 
   test("a cashBasis outside discount and yield, and an unknown option key, are RangeErrors naming them", () => {

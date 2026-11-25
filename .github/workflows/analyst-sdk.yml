@@ -201,7 +201,7 @@ jobs:
           tests/panel-fit.test.ts:5
           tests/report-functions.test.ts:12
           tests/derived-series.test.ts:15
-          tests/backtest.test.ts:51
+          tests/backtest.test.ts:53
           tests/backtest-drift.test.ts:30
           tests/correlations-n-eff.test.ts:4
           tests/knowledge-time.test.ts:40
