@@ -257,9 +257,9 @@
   },
   {
     "id": "external-wallet-balances-multicall-degraded",
-    "match": "^\\s*wallet-balances: batched round-[\\w<>]+( NAV)? multicall failed, degrading all chain legs to stale:",
+    "match": "^\\s*(wallet-balances|sampleWalletSleeves): batched round-[\\w<>]+( NAV)? multicall failed, degrading all chain legs to stale:",
     "class": "external",
-    "reason": "The wallet-balances sampler's one Base RPC multicall request threw (stage 2026-10-08T09:03:12Z: the request was aborted at its timeout, a DOMException AbortError). The code marks every chain leg of that sample stale and each leg then degrades to its last persisted sample (backend/src/chain/wallet-valuation.ts aggregateAcrossBlocks); nothing is fabricated and the next scheduled sample reads again. A provider timeout, not a defect."
+    "reason": "The wallet-balances sampler's one Base RPC multicall request threw (stage 2026-10-08T09:03:12Z: the request was aborted at its timeout, a DOMException AbortError). The code marks every chain leg of that sample stale and each leg then degrades to its last persisted sample (backend/src/chain/wallet-valuation.ts aggregateAcrossBlocks); nothing is fabricated and the next scheduled sample reads again. A provider timeout, not a defect. The sleeve sampler (backend/src/worker/handlers/wallet.ts sampleWalletSleeves) logs the same headline under its own name for the same Base RPC timeout (v0.11.0 stage 2026-11-25T20:17:25Z, Q32-soak-gate)."
   },
   {
     "id": "external-wallet-balances-chain-read-unavailable",
