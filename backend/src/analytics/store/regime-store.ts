@@ -2,6 +2,13 @@
 // Upserts on the date primary key so re-running a slot overwrites rather than
 // duplicates. The only SQL write for the regime classifier.
 //
+// A row whose values are all unchanged is skipped (issue 1765 storage S1): the
+// DO UPDATE carries WHERE (old columns) IS DISTINCT FROM (EXCLUDED columns), so
+// a re-run that recomputes the same history writes no new row version for it.
+// The stored values are the same either way, and so is the overwrite evidence,
+// because the capture trigger (migration 0056) fires only WHEN (OLD IS DISTINCT
+// FROM NEW).
+//
 // The row carries the full computeRegime output: composite/percentile/regime,
 // per-panel indices + percentiles + regimes, the point-in-time
 // inverse-correlation panel weights, the methodology `version`, the
@@ -35,7 +42,8 @@ export async function saveRegimeSnapshots(
 }
 
 // The columns the upsert writes, in the statement's order. The probe below is
-// built from this list, so it cannot drift from the column list it proves.
+// built from this list, so it cannot drift from the column list it proves. Every
+// column but the `date` key is both SET and compared by the no-op guard.
 const UPSERT_COLUMNS = [
   "date", "composite", "composite_percentile", "regime",
   "macro_regime", "onchain_regime", "factor_regime",
@@ -44,6 +52,9 @@ const UPSERT_COLUMNS = [
   "panel_weights", "version", "source", "percentiles", "indicators",
   "panels", "bucket_thresholds", "backtest", "correlations", "extras",
 ] as const;
+
+// The non-key columns, in UPSERT_COLUMNS order: the SET list and both sides of the guard.
+const UPDATED_COLUMNS = UPSERT_COLUMNS.filter((c) => c !== "date");
 
 // The column definition list of the jsonb document: the column names are the document keys.
 // upsertSnapshots below spells the same list out, because a registered statement is a tagged template.
@@ -68,7 +79,9 @@ const upsertRegime = registerQuery({
     statement:
       `INSERT INTO regime_snapshots (${UPSERT_COLUMNS.join(", ")}) ` +
       `SELECT ${UPSERT_COLUMNS.join(", ")} FROM jsonb_to_recordset($1::text::jsonb) AS x(${UPSERT_RECORD_TYPES}) ` +
-      `ON CONFLICT (date) DO UPDATE SET ${UPSERT_COLUMNS.filter((c) => c !== "date").map((c) => `${c} = EXCLUDED.${c}`).join(", ")}`,
+      `ON CONFLICT (date) DO UPDATE SET ${UPDATED_COLUMNS.map((c) => `${c} = EXCLUDED.${c}`).join(", ")} ` +
+      `WHERE (${UPDATED_COLUMNS.map((c) => `regime_snapshots.${c}`).join(", ")}) ` +
+      `IS DISTINCT FROM (${UPDATED_COLUMNS.map((c) => `EXCLUDED.${c}`).join(", ")})`,
     params: ["[]"],
   },
 });
@@ -141,5 +154,22 @@ async function upsertSnapshots(rows: RegimeSnapshotRow[], db: DbHandle): Promise
         bucket_thresholds = EXCLUDED.bucket_thresholds,
         backtest = EXCLUDED.backtest,
         correlations = EXCLUDED.correlations,
-        extras = EXCLUDED.extras`;
+        extras = EXCLUDED.extras
+      WHERE (regime_snapshots.composite, regime_snapshots.composite_percentile, regime_snapshots.regime,
+             regime_snapshots.macro_regime, regime_snapshots.onchain_regime, regime_snapshots.factor_regime,
+             regime_snapshots.macro_index, regime_snapshots.onchain_index, regime_snapshots.factor_index,
+             regime_snapshots.macro_percentile, regime_snapshots.onchain_percentile, regime_snapshots.factor_percentile,
+             regime_snapshots.panel_weights, regime_snapshots.version, regime_snapshots.source,
+             regime_snapshots.percentiles, regime_snapshots.indicators,
+             regime_snapshots.panels, regime_snapshots.bucket_thresholds, regime_snapshots.backtest,
+             regime_snapshots.correlations, regime_snapshots.extras)
+        IS DISTINCT FROM
+            (EXCLUDED.composite, EXCLUDED.composite_percentile, EXCLUDED.regime,
+             EXCLUDED.macro_regime, EXCLUDED.onchain_regime, EXCLUDED.factor_regime,
+             EXCLUDED.macro_index, EXCLUDED.onchain_index, EXCLUDED.factor_index,
+             EXCLUDED.macro_percentile, EXCLUDED.onchain_percentile, EXCLUDED.factor_percentile,
+             EXCLUDED.panel_weights, EXCLUDED.version, EXCLUDED.source,
+             EXCLUDED.percentiles, EXCLUDED.indicators,
+             EXCLUDED.panels, EXCLUDED.bucket_thresholds, EXCLUDED.backtest,
+             EXCLUDED.correlations, EXCLUDED.extras)`;
 }
