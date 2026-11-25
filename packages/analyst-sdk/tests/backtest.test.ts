@@ -37,8 +37,12 @@ import {
   SparseSeriesError,
   stripDailyFromSnapshot,
   type BacktestExtras,
+  type MarketCalendar,
+  type ReferenceBacktestOptions,
   type Schedule,
+  type SimulateOptions,
 } from "../src/analyze/backtest.ts";
+import { periodicRate } from "../src/transform/exact.ts";
 import { computeBacktest as originalBacktest } from "./reference/backtest-pre-refactor.ts";
 import type { RegimeComputeResult } from "../src/analyze/compute.ts";
 import { buildReport, parseRawHistory, runRegime as runRegimeOutcome, requireComplete, toHistory } from "../src/index.ts";
@@ -644,5 +648,159 @@ describe("Sharpe, cash basis, costs and daily series (issue 1734)", () => {
     const early = periodStats(sim.values, sim.startDate, sim.endDate, { returns: sim.returns, excess: sim.excess, splitDate: "2020-01-01" });
     expect(early.in_sample.n_days).toBe(0);
     expect(early.in_sample.cagr).toBeNull();
+  });
+});
+
+// Issue 1751, gaps 1 and 2: the cash basis, the Sharpe basis, and the reference
+// backtest passing its options to every line of the grid.
+describe("cash basis, Sharpe basis and reference backtest options (issue 1751)", () => {
+  const axis = axisOf(30);
+  const q = 5.25;
+  const tbill = pts(axis, axis.map(() => q));
+  const allCash: Schedule = axis.map(() => ({ cash: 1 }));
+  const compound = (r: number) => exactCompound(axis.slice(1).map(() => r));
+  const asYield = periodicRate(q / 100, 365);
+  const asDiscount = periodicRate(discountToYield(q) / 100, 365);
+
+  test("cashBasis yield compounds the quote as a yearly yield; discount and no option convert it first, as 0.8.0", () => {
+    expect(asYield).not.toBe(asDiscount);
+    // Held from the same close, so the book earns cash on every later axis day.
+    const run = (o?: SimulateOptions) => simulateWithDefaults(axis, allCash, {}, tbill, { lagSessions: 0, ...o });
+    const end = (o?: SimulateOptions) => run(o).values.at(-1)!.value;
+    expect(end({ cashBasis: "yield" })).toBe(compound(asYield));
+    expect(end({ cashBasis: "yield" })).toBeCloseTo((1 + asYield) ** (axis.length - 1), 14);
+    expect(run({ cashBasis: "yield" }).returns.every((r) => r.value === asYield)).toBe(true);
+    expect(end({ cashBasis: "discount" })).toBe(compound(asDiscount));
+    expect(end()).toBe(compound(asDiscount));
+    expect(run({ cashBasis: "discount" })).toEqual(run());
+    expect(run().returns.every((r) => r.value === asDiscount)).toBe(true);
+  });
+
+  test("a cashBasis outside discount and yield, and an unknown option key, are RangeErrors naming them", () => {
+    const bad = (o: unknown, field: RegExp) => {
+      const call = () => simulateWithDefaults(axis, allCash, {}, tbill, o as SimulateOptions);
+      expect(call).toThrow(RangeError);
+      expect(call).toThrow(field);
+    };
+    bad({ cashBasis: "other" }, /cashBasis/);
+    bad({ cashbasis: "yield" }, /cashbasis/);
+    bad({ sharpeBasis: "net" }, /sharpeBasis/);
+  });
+
+  test("net is the post-cost return with no cash subtraction; periodStats sharpeBasis net reads it, and refuses when it is absent", () => {
+    const A = pts(axis, axis.map((_, i) => 100 + i + 3 * Math.sin(i)));
+    const sched: Schedule = axis.map((_, i): Record<string, number> => (i % 9 < 4 ? { cash: 1 } : { cash: 0.5, A: 0.5 }));
+    const sim = simulateWithDefaults(axis, sched, { A }, tbill, { lagSessions: 0 });
+    expect(sim.trades.length).toBeGreaterThan(2);
+    expect(sim.net.map((p) => p.date)).toEqual(sim.returns.map((p) => p.date));
+    const cost = new Map(sim.trades.map((t) => [t.date, t.cost]));
+    for (let i = 0; i < sim.net.length; i++) {
+      const { date, value } = sim.returns[i]!;
+      const c = cost.get(date) ?? 0;
+      expect(sim.net[i]!.value).toBe(c === 0 ? value : (1 + value) * (1 - c) - 1);
+    }
+    expect(sim.net).not.toEqual(sim.excess);
+    const base = { returns: sim.returns, excess: sim.excess, trades: sim.trades };
+    const stats = (o: object) => periodStats(sim.values, sim.startDate, sim.endDate, { ...base, ...o });
+    const net = stats({ net: sim.net, sharpeBasis: "net" });
+    expect(net.sharpe).toBeCloseTo(exactSharpe(sim.net.map((p) => p.value), 365), 12);
+    // The same number as passing the net returns in the excess slot, and not the default's.
+    expect(net.sharpe).toBe(periodStats(sim.values, sim.startDate, sim.endDate, { ...base, excess: sim.net }).sharpe);
+    expect(net.sharpe).not.toBe(stats({}).sharpe);
+    expect(stats({ sharpeBasis: "excess" })).toEqual(stats({}));
+    expect(stats({ net: sim.net })).toEqual(stats({}));
+    const { sharpe: _s, in_sample: _i, out_of_sample: _o, ...restNet } = net;
+    const { sharpe: _s2, in_sample: _i2, out_of_sample: _o2, ...restDefault } = stats({});
+    expect(restNet).toEqual(restDefault);
+    expect(() => stats({ sharpeBasis: "net" })).toThrow(RangeError);
+    expect(() => stats({ sharpeBasis: "net" })).toThrow(/options\.net/);
+    expect(() => stats({ sharpeBasis: "gross" })).toThrow(/sharpeBasis/);
+    expect(() => stats({ sharpe: "net" })).toThrow(/unknown option "sharpe"/);
+  });
+
+  describe("the reference grid", () => {
+    const raw = toHistory(parseRawHistory(readFileSync(join(DIR, "fixtures/raw-indicator-history.csv"), "utf8")));
+    const extras: BacktestExtras = { spx: raw.SPX!, eth: raw.ETH!, tbill3m: raw.TBILL3M! };
+    const run = runRegime(raw);
+    const shipped = computeBacktest(run.dateAxis, run.result, extras);
+
+    // Every line of every market through simulatePortfolio and periodStats
+    // called directly with the options, on the schedules computeBacktest builds.
+    function direct(options: ReferenceBacktestOptions & { calendars: Record<string, MarketCalendar> }) {
+      const { dateAxis } = run;
+      const price: Record<string, Point[]> = { eth: extras.eth, sp500: extras.spx };
+      const strategies = referenceStrategies(run.result);
+      const out: Record<string, Record<string, unknown>> = {};
+      for (const [pKey, spec] of Object.entries(PORTFOLIO_SPECS)) {
+        const prices: Record<string, Point[]> = {};
+        const calendars: Record<string, MarketCalendar> = {};
+        for (const a of spec.risky) {
+          prices[a] = price[a]!;
+          calendars[a] = options.calendars[a]!;
+        }
+        const priced = dateAxis.findIndex((_, i) => spec.risky.every((a) => price[a]!.some((p) => p.date <= dateAxis[i]! && Number.isFinite(p.value))));
+        const schedules: Record<string, Schedule> = {};
+        for (const [name, labels] of Object.entries(strategies)) schedules[name] = scheduleFromLabels(labels, spec.weights);
+        const start = Math.max(-1, ...Object.values(schedules).map((s) => s.findIndex((w, i) => i >= priced && w != null)));
+        schedules[spec.hodl.key] = dateAxis.map(() => spec.hodl.weights);
+        schedules.stables_only = dateAxis.map(() => ({ cash: 1 }));
+        const port: Record<string, unknown> = {};
+        for (const [name, s] of Object.entries(schedules)) {
+          const sim = simulateWithDefaults(dateAxis, start < 0 ? s : s.map((w, i) => (i < start ? null : w)), prices, extras.tbill3m, {
+            lagSessions: options.lagSessions,
+            calendars,
+            cashBasis: options.cashBasis,
+          });
+          port[name] = periodStats(sim.values, sim.startDate, sim.endDate, {
+            returns: sim.returns,
+            excess: sim.excess,
+            trades: sim.trades,
+            ...(options.sharpeBasis === undefined ? {} : { net: sim.net, sharpeBasis: options.sharpeBasis }),
+          });
+        }
+        out[pKey] = port;
+      }
+      return out;
+    }
+
+    test("computeBacktest with lagSessions 0, calendars and cashBasis yield equals periodStats over simulatePortfolio called directly, for every market and line", () => {
+      const options = { lagSessions: 0, calendars: { eth: "continuous", sp500: "weekdays" } as Record<string, MarketCalendar>, cashBasis: "yield" as const };
+      const got = computeBacktest(run.dateAxis, run.result, extras, options);
+      const want = direct(options);
+      expect(Object.keys(got)).toEqual(["eth", "sp500", "mixed"]);
+      for (const m of Object.keys(got)) expect(Object.keys(got[m]!)).toEqual(Object.keys(shipped[m]!));
+      expect(JSON.stringify(got)).toBe(JSON.stringify(want));
+      // Each option changes the output, so the comparison is not vacuous.
+      expect(got).not.toEqual(shipped);
+      expect(computeBacktest(run.dateAxis, run.result, extras, { cashBasis: "yield" })).not.toEqual(shipped);
+      expect(computeBacktest(run.dateAxis, run.result, extras, { lagSessions: 0 })).not.toEqual(shipped);
+      expect(computeBacktest(run.dateAxis, run.result, extras, { calendars: { eth: "continuous", sp500: "continuous" } })).not.toEqual(shipped);
+    });
+
+    test("sharpeBasis net reaches every line; with no options the payload is the 0.8.0 one", () => {
+      const options = { lagSessions: 1, calendars: { ...REFERENCE_CALENDARS }, sharpeBasis: "net" as const };
+      const got = computeBacktest(run.dateAxis, run.result, extras, options);
+      expect(JSON.stringify(got)).toBe(JSON.stringify(direct(options)));
+      expect(got.eth!.stables_only!.sharpe).not.toBe(0);
+      expect(shipped.eth!.stables_only!.sharpe).toBe(0);
+      // No options, an empty object, and the defaults spelled out are one payload: the golden's.
+      expect(computeBacktest(run.dateAxis, run.result, extras, {})).toEqual(shipped);
+      expect(computeBacktest(run.dateAxis, run.result, extras, { lagSessions: 1, calendars: { ...REFERENCE_CALENDARS }, cashBasis: "discount", sharpeBasis: "excess" })).toEqual(shipped);
+      expect(computeBacktestWithFill(run.dateAxis, run.result, extras, REFERENCE_FILL_POLICIES, { cashBasis: "yield" })).toEqual(computeBacktest(run.dateAxis, run.result, extras, { cashBasis: "yield" }));
+    });
+
+    test("an unknown reference option, calendar asset or basis is a RangeError naming it", () => {
+      const bad = (o: unknown, field: RegExp) => {
+        const call = () => computeBacktest(run.dateAxis, run.result, extras, o as ReferenceBacktestOptions);
+        expect(call).toThrow(RangeError);
+        expect(call).toThrow(field);
+      };
+      bad({ lag: 0 }, /unknown option "lag"/);
+      bad({ calendars: { spx: "weekdays" } }, /"spx"/);
+      bad({ calendars: { eth: "sometimes" } }, /calendar for "eth"/);
+      bad({ cashBasis: "other" }, /cashBasis/);
+      bad({ sharpeBasis: "gross" }, /sharpeBasis/);
+      bad({ lagSessions: -1 }, /lagSessions/);
+    });
   });
 });

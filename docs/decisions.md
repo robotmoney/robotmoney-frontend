@@ -6770,3 +6770,26 @@ Panel weights refit every 21 days on a fixed calendar anchored at 2018-01-01. A 
 **Why.** The audit found the backtest traded day i's label at day i's close and earned day i+1's return, traded the S&P 500 at Friday's close on a weekend change, mixed in-sample and out-of-sample years without saying so, and scored Sharpe on pre-cost returns with no risk-free subtraction.
 
 **Rejected.** A legacy switch that keeps same-close execution: the original numbers stay in the frozen reference code only. Restating published reports.
+
+## D95 — A downstream regime model states each engine rule as an option; every default is the 0.8.0 behaviour (issue 1751)
+
+**Status:** Accepted for implementation 2026-11-25. `packages/analyst-sdk/src/analyze/backtest.ts`, `packages/analyst-sdk/src/analyze/regime-versions.ts` (`RegimeRules`, `REGIME_RULES`), `packages/analyst-sdk/src/analyze/compute.ts`, `packages/analyst-sdk/src/prepare.ts`, `packages/analyst-sdk/src/run.ts`, `packages/analyst-sdk/src/transform/derived.ts`, `packages/analyst-sdk/src/report/`, `docs/technical/analyst-sdk-requirements.md` section 8.
+
+**Decision.**
+
+1. **Defaults.** Every option below defaults to what analyst-sdk 0.8.0 does. No published figure moves, no golden is regenerated, no methodology tag, migration or stored row changes.
+2. **Cash basis (D94 item 6 unchanged).** `simulatePortfolio`, `simulateDrift` and the reference backtest accept `cashBasis`. `discount` (default) converts the quote with `discountToYield`. `yield` compounds the quote as a yearly yield.
+3. **Sharpe basis (D94 item 5 unchanged).** `periodStats` and the reference backtest accept `sharpeBasis`. `excess` (default) reads the post-cost returns minus cash. `net` reads the post-cost returns, which the simulators return as `net`.
+4. **Reference backtest options.** `computeBacktest` passes `lagSessions`, `calendars`, `cashBasis` and `sharpeBasis` to every line of its grid.
+5. **Engine rules.** `RegimeRules` states the dating rule, window counting, weight refit calendar, missing-panel rule, label cut, lookback and adoption date. `REGIME_RULES.v3` and `REGIME_RULES.v4` are built from the per-version tables. The preparation and compute functions accept `rules`, and without it read the preset of `version`. An indicator's `calendar` and `publication` are checked only when the rules in force read them.
+6. **In-sample end (D94 item 3 unchanged).** `runRegime` accepts `inSampleEnd`. `current-version` (default) is the current version's adoption date. `computed-version` is the adoption date of the version computed.
+7. **One-day fit.** `fitPanelWeights` and `weightedMeanOnDay` are exported, and `computeRegime` calls them.
+8. **Report functions (D83 unchanged).** The publication rule, the regime-snapshots shaping, the stored row shape with canonical JSON and the per-indicator rows are pure SDK functions under `src/report/`. The backend imports them and keeps the database reads. The SDK declares the response shapes itself, and a backend test holds them assignable to the contract's in both directions.
+9. **Derived series.** `PublicationRule` gains `calendar-days`. `deriveSeries` computes a declared series from supplementary series (a level, a ratio, a rolling sum over the latest public level, an up-volume share), with plain in-order summation available. No derived series joins the shipped registry.
+10. **Fetcher field.** `fetchSupplementary` and `bun run fetch` accept `field` (`adjclose`, `close`, `volume`) for Yahoo. Each field is its own series.
+11. **Vintage member read.** `collectRunInputs` reads the `analytics_vintage_members` files one at a time and keeps the rows of the run's vintage.
+12. **Stored-only ratio.** A ratio declared `ratioInput: "legs"` whose input carries only the stored ratio is still dropped with weight 0, and `runRegime` now lists it in `droppedRatios`. `storedOnlyRatio: "error"` throws `StoredRatioOnlyError`.
+
+**Why.** A downstream model that moved from 0.7.0 to 0.8.0 reproduced its frozen figures only by copying SDK logic for these ten things. The SDK requirements promise that constants are options with defaults and that building blocks are exported.
+
+**Rejected.** Changing any default: an error by default for a stored-only ratio would break v4 replays of archive runs before 2026-11-17, and an in-sample end that follows the computed version by default would move published backtest blocks. Adding `cashBasis` or `sharpeBasis` to `markowitzBacktest` and the research comparisons. A release tag or version bump in the same change.

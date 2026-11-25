@@ -6,7 +6,7 @@ import { sql } from "../../db/client.ts";
 import type { RegimeHistoryPoint, RegimeSnapshot } from "@robotmoney/contract";
 // The row→DTO projection lives in a pure, DB-free module so the offline
 // eq-snapshot mapper can reuse the EXACT same projection (see regime-projection.ts).
-import { rowToSnapshot, forHistory, computeRegimeSnapshotStaleness, type RegimeStaleness } from "./regime-projection.ts";
+import { rowToSnapshot, shapeRegimeSnapshots, type RegimeStaleness } from "./regime-projection.ts";
 // Issue 1182 (D83): in BOTH read modes these two reads serve the PUBLISHED
 // figures, selected from the frozen run ledger (cutover/ledger-current.ts),
 // never the newest run's recomputation the compatibility tables hold. The
@@ -186,13 +186,11 @@ export async function fetchRegimeSnapshots(
     LIMIT ${range}
   `
         ).map(rowToSnapshot).reverse(); // chronological
-  const latestFull = full.length ? full[full.length - 1] : null;
-  const staleness = computeRegimeSnapshotStaleness(latestFull?.indicators ?? null, today);
   // `latest` keeps every field except backtest, opt-in via includeBacktest
   // (issue #866b); history rows are projected via forHistory (issue #866a),
   // which also ends the double-serialization the old `history[-1] === latest`
   // aliasing caused — they're now separate objects, one full (minus backtest
   // unless asked for) and one projected, rather than the same object twice.
-  const latest = latestFull && !includeBacktest ? { ...latestFull, backtest: null } : latestFull;
-  return { latest, history: full.map(forHistory), staleness, source };
+  // The shaping is the SDK's shapeRegimeSnapshots (issue 1751).
+  return { ...shapeRegimeSnapshots(full, today, includeBacktest), source };
 }

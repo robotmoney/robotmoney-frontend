@@ -51,6 +51,21 @@ export function parseYahooClose(j: unknown): Point[] {
   return out;
 }
 
+// The day's volume, `indicators.quote[0].volume` (issue 1751). A row whose volume
+// is null or not finite is dropped.
+export function parseYahooVolume(j: unknown): Point[] {
+  const res = (j as any)?.chart?.result?.[0];
+  const ts: number[] = res?.timestamp;
+  const volume: number[] = res?.indicators?.quote?.[0]?.volume;
+  if (!Array.isArray(ts) || !Array.isArray(volume) || volume.length === 0) throw new Error("yahoo: missing timestamp/volume");
+  const out: Point[] = [];
+  for (let i = 0; i < ts.length; i++) {
+    if (!Number.isFinite(volume[i])) continue;
+    out.push({ date: isoDay(ts[i] * 1000), value: Number(volume[i]) });
+  }
+  return out;
+}
+
 // Full-history v8 chart URL. period1=0 → earliest available; events=history for
 // dividend/split-adjusted closes.
 export const yfUrl = (

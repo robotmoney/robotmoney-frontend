@@ -8,12 +8,26 @@ export {
   PublicationRuleError, publicationRuleOf, publishedOn, knownOn, isProvisional, knowledgeTimeSeries,
   type PublicationRule, type VersionedPoint, type KnownPoint,
 } from "./transform/knowledge-time.ts";
-export { computeRegime, regimeLabels, WeightAnchorOutOfRangeError, type RegimeComputeResult } from "./analyze/compute.ts";
+export {
+  deriveSeries, DerivedSeriesError,
+  type DerivedSeries, type DerivedLevel, type DerivedRatio, type DerivedRollingSumOverKnownLevel, type DerivedUpVolumeShare,
+} from "./transform/derived.ts";
+export { computeRegime, regimeLabels, fitPanelWeights, weightedMeanOnDay, WeightAnchorOutOfRangeError, type RegimeComputeResult } from "./analyze/compute.ts";
 export {
   INDICATORS, PANELS, ALL_PANELS, PANEL_MEMBERSHIP, FillPolicyError, fillPolicyOf, fillMaxAgeDays, DAY_RULE, DAY_RULES,
-  type Indicator, type Panel, type PanelMembership, type FillPolicy, type DayRule,
+  CalendarError, calendarOf,
+  type Indicator, type Panel, type PanelMembership, type FillPolicy, type DayRule, type Calendar,
 } from "./analyze/indicators.ts";
-export { computeCorrelations, type CorrelationsPayload } from "./analyze/correlations.ts";
+// The report functions the backend shares (issue 1751): one copy, pure.
+export { selectPublications, publishesOver, type PublicationCandidate } from "./report/publication.ts";
+export { canonicalStringify, canonicalArtifactBytes, type RegimeSnapshotRow } from "./report/canonical.ts";
+export {
+  rowToSnapshot, forHistory, shapeRegimeSnapshots, computeRegimeSnapshotStaleness, computeRegimeStaleness, panelObservationDates,
+  overallObservationDate, REGIME_STALE_THRESHOLD_DAYS,
+  type RegimeSnapshot, type RegimeHistoryPoint, type RegimeStaleness, type RegimeIndicator,
+} from "./report/regime-snapshots.ts";
+export { buildRichIndicators, monthlySparkline } from "./report/indicator-rows.ts";
+export { computeCorrelations, type CorrelationsPayload, type CorrelationInput } from "./analyze/correlations.ts";
 export {
   computeBacktest, stripDailyFromSnapshot, simulatePortfolio, simulateDrift, periodStats, scheduleFromLabels, PORTFOLIO_SPECS,
   BACKTEST_COST_PER_REBALANCE, BACKTEST_IN_SAMPLE_END, YEAR_MS,
@@ -21,6 +35,7 @@ export {
   type BacktestLabels, type DeclaredFill, type SimulatorFill, type UnknownLabelRule,
   type BacktestPayload, type BacktestMetrics, type Weights, type Schedule, type SimulateOptions, type SimulationResult,
   type TradeEvidence, type PeriodStatsOptions, type SampleBlock, type ReferenceBacktestOptions, type MarketCalendar, type CostBps, type DriftOptions, type RebalanceFrequency,
+  type CashBasis, type SharpeBasis,
 } from "./analyze/backtest.ts";
 export * from "./input/manifest.ts";
 export {
@@ -28,7 +43,7 @@ export {
   ArchiveError, INPUT_TABLES, type BackupRecord, type FileRecord, type GeneratedRow, type RunIdentity, type RunInputs,
 } from "./archive/format1.ts";
 export {
-  openArchive, collectRunInputs, type ArchiveFiles, type Archive, type RevisedTable, type LatestValue,
+  openArchive, collectRunInputs, runVintageMembers, type ArchiveFiles, type Archive, type RevisedTable, type LatestValue,
 } from "./archive/reader.ts";
 export type { Row as ArchiveRow } from "./archive/format1.ts";
 export {
@@ -36,6 +51,12 @@ export {
   REGIME_LOOKBACK,
   REGIME_VERSIONS,
   REGIME_WEIGHT_REFRESH,
+  REGIME_KNOWLEDGE_TIME,
+  REGIME_OBSERVATION_WINDOWS,
+  REGIME_MISSING_PANEL,
+  REGIME_LABEL_CUT,
+  REGIME_RULES,
+  regimeRulesOf,
   isRefreshDate,
   isRegimeVersion,
   refreshDateOn,
@@ -43,6 +64,9 @@ export {
   AdoptionDateError,
   REGIME_ADOPTION_DATE,
   type WeightRefresh,
+  type MissingPanelRule,
+  type LabelCut,
+  type RegimeRules,
   type LookbackWindow,
   type RegimeLookback,
   type RegimeVersion,

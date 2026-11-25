@@ -22,12 +22,14 @@ export const MAX_FORWARD_FILL_DAYS = 120;
  *   business-days: `days` business days (Monday to Friday) after it.
  *   next-weekday:  on the first `weekday` (0 Sunday .. 6 Saturday) strictly after it.
  *   months-later:  on the 1st of the month `months` after the period's month.
+ *   calendar-days: `days` calendar days after it, a positive integer (issue 1751).
  */
 export type PublicationRule =
   | { kind: "same-day" }
   | { kind: "business-days"; days: number }
   | { kind: "next-weekday"; weekday: number }
-  | { kind: "months-later"; months: number };
+  | { kind: "months-later"; months: number }
+  | { kind: "calendar-days"; days: number };
 
 export type Panel = "macro" | "onchain" | "factor";
 export type RatioInput = "stored" | "legs";

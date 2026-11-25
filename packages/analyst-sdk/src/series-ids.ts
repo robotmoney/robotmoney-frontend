@@ -77,6 +77,14 @@ export class MissingRatioLegError extends Error {
   }
 }
 
+/** A ratio declared ratioInput "legs" has only its stored ratio in the input (issue 1751, runRegime storedOnlyRatio "error"). */
+export class StoredRatioOnlyError extends Error {
+  override readonly name = "StoredRatioOnlyError";
+  constructor(readonly ratio: string) {
+    super(`ratio ${ratio}: it is calculated from its legs, and the input carries only the stored ${ratio}; supply both legs, or the ratio is dropped with weight 0`);
+  }
+}
+
 export class UnknownSeriesMappingError extends Error {
   override readonly name = "UnknownSeriesMappingError";
   constructor(readonly consumer: string, readonly series: string) {

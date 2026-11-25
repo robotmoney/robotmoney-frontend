@@ -35,6 +35,7 @@
 // selection below in both read modes (report/projections.ts).
 import { sql, type DbHandle } from "../../db/client.ts";
 import type { RegimeSnapshotRow } from "../report/regime-projection.ts";
+import { selectPublications, type PublicationCandidate } from "../../../../packages/analyst-sdk/src/report/publication.ts";
 import type { ResearchPayload } from "../analyze/research.ts";
 import { on, registerQuery } from "../../db/registry.ts";
 
@@ -319,38 +320,10 @@ async function loadArtifact<T>(db: DbHandle, id: string): Promise<T[]> {
 
 // ── Which artifact publishes a natural key (issue 1182, D83) ────────────────
 
-/** One frozen artifact's claim to publish one natural key (a regime day, or a signal's day). */
-export interface PublicationCandidate {
-  /** The natural key: a regime day, or `<signal>\u0000<day>`. */
-  key: string;
-  /** The day it is a figure for (YYYY-MM-DD). */
-  date: string;
-  runId: number;
-  artifactId: number;
-  /** The UTC day the artifact was written (analytics_output_snapshots.created_at). */
-  writtenOn: string;
-}
-
-/**
- * THE RULE (D83), pure: for each key, the last candidate written during its
- * day (by run, then artifact); when none was, the first written after it.
- */
-export function selectPublications<T extends PublicationCandidate>(candidates: Iterable<T>): Map<string, T> {
-  const chosen = new Map<string, T>();
-  for (const c of candidates) {
-    const held = chosen.get(c.key);
-    if (!held || publishesOver(c, held)) chosen.set(c.key, c);
-  }
-  return chosen;
-}
-
-function publishesOver(a: PublicationCandidate, b: PublicationCandidate): boolean {
-  const aDuring = a.writtenOn <= a.date;
-  const bDuring = b.writtenOn <= b.date;
-  if (aDuring !== bDuring) return aDuring;
-  const order = a.runId - b.runId || a.artifactId - b.artifactId;
-  return aDuring ? order > 0 : order < 0;
-}
+// THE RULE (D83) is the SDK's selectPublications (issue 1751): for each key,
+// the last candidate written during its day (by run, then artifact); when none
+// was, the first written after it.
+export { selectPublications, type PublicationCandidate };
 
 // ── The cache ───────────────────────────────────────────────────────────────
 // Every fact cached here is about an immutable artifact (keyed by its sha256

@@ -4,13 +4,14 @@
 // in fixtures/extract/ through configureHttp; the spawned command is only ever
 // given input it rejects before its first request.
 import { afterAll, afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { assertSupplementaryDir, listSupplementary, readSupplementary, supplementaryFiles, writeSupplementary } from "../bin/supplementary-dir.ts";
 import { configureHttp } from "../src/extract/http.ts";
 import { fredUrl } from "../src/extract/fred.ts";
 import { NoObservationsError } from "../src/extract/model-portfolio.ts";
-import { fetchSupplementary } from "../src/extract/supplementary.ts";
+import { fetchSupplementary, supplementarySeriesId } from "../src/extract/supplementary.ts";
+import { parseYahoo } from "../src/extract/yahoo.ts";
 import { InputRowError } from "../src/input/load.ts";
 import {
   formatSupplementaryCsv,
@@ -180,6 +181,114 @@ describe("fetchSupplementary", () => {
     recorded();
     await expect(fetchSupplementary("yahoo:^VIX", { start: "1990-01-01", end: "1990-01-31" })).rejects.toThrow(NoObservationsError);
     await expect(fetchSupplementary("coinmetrics:btc.PriceUSD", { start: "2016-01-01", end: "2016-02-01" })).rejects.toThrow("no source client");
+  });
+});
+
+// Issue 1751 (gap 8): a Yahoo series is the adjusted close, the raw close or the
+// volume. yahoo-GSPC.json is the chart Yahoo served for ^GSPC, 2024-01-02 to
+// 2024-01-12, recorded 2026-11-25.
+describe("fetchSupplementary field (issue 1751)", () => {
+  const chart = JSON.parse(readFileSync(join(FIX, "yahoo-GSPC.json"), "utf8"));
+  const res = chart.chart.result[0];
+  const quote = res.indicators.quote[0] as { close: number[]; volume: number[] };
+  const dates = (res.timestamp as number[]).map((t) => new Date(t * 1000).toISOString().slice(0, 10));
+  const window = { start: "2024-01-02", end: "2024-01-12" };
+  const recorded = () => {
+    const urls: string[] = [];
+    configureHttp({
+      fetch: (async (input: string) => {
+        urls.push(String(input));
+        return new Response(JSON.stringify(chart), { headers: { "content-type": "application/json" } });
+      }) as unknown as typeof fetch,
+    });
+    return urls;
+  };
+
+  test("volume is indicators.quote[0].volume per date, close the raw close, each through one request", async () => {
+    const urls = recorded();
+    expect(dates).toHaveLength(9);
+    const volume = await fetchSupplementary("yahoo:^GSPC", window, { field: "volume" });
+    expect(volume.points).toEqual(dates.map((date, i) => ({ date, value: quote.volume[i]! })));
+    expect(volume.points[0]).toEqual({ date: "2024-01-02", value: 3743050000 });
+    expect(volume.field).toBe("volume");
+    const close = await fetchSupplementary("yahoo:^GSPC", window, { field: "close" });
+    expect(close.points).toEqual(dates.map((date, i) => ({ date, value: quote.close[i]! })));
+    expect(close.field).toBe("close");
+    expect(urls).toHaveLength(2);
+    expect(urls[0]).toContain("/v8/finance/chart/%5EGSPC?period1=");
+    expect(urls[1]).toBe(urls[0]!);
+  });
+  test("the default call and field adjclose return the 0.8.0 points and field", async () => {
+    recorded();
+    const v080 = parseYahoo(chart); // the 0.8.0 path: fetchYahoo is parseYahoo of the chart
+    const byDefault = await fetchSupplementary("yahoo:^GSPC", window);
+    expect(byDefault.points).toEqual(v080);
+    expect(byDefault.field).toBe("adjusted close (the close where Yahoo gives no adjusted close)");
+    expect(await fetchSupplementary("yahoo:^GSPC", window, {})).toEqual(byDefault);
+    expect(await fetchSupplementary("yahoo:^GSPC", window, { field: "adjclose" })).toEqual(byDefault);
+    expect(byDefault.points).not.toEqual((await fetchSupplementary("yahoo:^GSPC", window, { field: "volume" })).points);
+  });
+  test("an unknown field is a RangeError naming field, a field on FRED is refused, both before any request", async () => {
+    const urls = recorded();
+    const unknown = await fetchSupplementary("yahoo:^GSPC", window, { field: "open" as never }).catch((e) => e);
+    expect(unknown).toBeInstanceOf(RangeError);
+    expect(unknown.message).toContain("field must be one of adjclose, close, volume");
+    await expect(fetchSupplementary("fred:DTB3", window, { field: "volume" })).rejects.toThrow(SupplementaryError);
+    await expect(fetchSupplementary("fred:DTB3", window, { field: "adjclose" })).rejects.toThrow("yahoo series only");
+    expect(urls).toHaveLength(0);
+  });
+  test("a field is its own series and file, beside the default one", () => {
+    expect(supplementarySeriesId("yahoo:^GSPC")).toBe("yahoo:^GSPC");
+    expect(supplementarySeriesId("yahoo:^GSPC", "adjclose")).toBe("yahoo:^GSPC");
+    expect(supplementarySeriesId("yahoo:^GSPC", "close")).toBe("yahoo:^GSPC.close");
+    expect(supplementarySeriesId("yahoo:^GSPC", "volume")).toBe("yahoo:^GSPC.volume");
+    expect(supplementaryPaths("yahoo:^GSPC.volume")).toEqual({ file: "yahoo/%5EGSPC.volume.csv", manifest: "yahoo/%5EGSPC.volume.manifest.json" });
+    expect(sourceIdOfPath("yahoo/%5EGSPC.volume.csv")).toBe("yahoo:^GSPC.volume");
+    expect(sourceIdOfPath("yahoo/%5EGSPC.csv")).toBe("yahoo:^GSPC");
+  });
+});
+
+describe("bun run fetch --field (issue 1751)", () => {
+  // The spawned command answers its request from the recorded chart, installed on the HTTP seam by the preload.
+  const run = async (...args: string[]) => {
+    const p = Bun.spawn(["bun", "--preload", join(FIX, "fetch-recorded-yahoo.ts"), join(PKG, "bin/fetch.ts"), ...args], { cwd: TMP, stdout: "pipe", stderr: "pipe" });
+    return { code: await p.exited, err: await new Response(p.stderr).text() };
+  };
+  const window = ["--start", "2024-01-02", "--end", "2024-01-12"];
+
+  test("--field volume writes yahoo/%5EGSPC.volume.csv with manifest field volume; the default file is unchanged beside it", async () => {
+    const dir = join(TMP, "field-store");
+    const r = await run("--into", dir, ...window, "--field", "volume", "yahoo:^GSPC");
+    expect(r).toMatchObject({ code: 0 });
+    expect(r.err).toContain("yahoo:^GSPC: 9 rows, 2024-01-02 .. 2024-01-12 -> yahoo/%5EGSPC.volume.csv");
+    expect(existsSync(join(dir, "yahoo/%5EGSPC.csv"))).toBe(false);
+    const csv = readFileSync(join(dir, "yahoo/%5EGSPC.volume.csv"), "utf8");
+    expect(csv.split("\n").slice(0, 2)).toEqual(["date,series,value", "2024-01-02,yahoo:^GSPC.volume,3743050000"]);
+    const manifest = JSON.parse(readFileSync(join(dir, "yahoo/%5EGSPC.volume.manifest.json"), "utf8"));
+    expect(manifest).toMatchObject({ series: "yahoo:^GSPC.volume", field: "volume", row_count: 9 });
+
+    expect(await run("--into", dir, ...window, "yahoo:^GSPC")).toMatchObject({ code: 0 });
+    expect(await run("--into", dir, ...window, "--field", "close", "yahoo:^GSPC")).toMatchObject({ code: 0 });
+    expect(listSupplementary(dir)).toEqual(["yahoo:^GSPC", "yahoo:^GSPC.close", "yahoo:^GSPC.volume"]);
+    const chart = JSON.parse(readFileSync(join(FIX, "yahoo-GSPC.json"), "utf8"));
+    const byDefault = readSupplementary(dir, "yahoo:^GSPC");
+    expect(byDefault.points).toEqual(parseYahoo(chart));
+    expect(byDefault.manifest.field).toBe("adjusted close (the close where Yahoo gives no adjusted close)");
+    expect(readSupplementary(dir, "yahoo:^GSPC.volume").points.map((p) => p.value)).toEqual(chart.chart.result[0].indicators.quote[0].volume);
+    expect(readSupplementary(dir, "yahoo:^GSPC.close").manifest.field).toBe("close");
+  });
+  test("--field volume fred:DTB3 and an unknown field exit 2 before any request", async () => {
+    const dir = join(TMP, "field-refused");
+    const fred = await run("--into", dir, "--field", "volume", "fred:DTB3");
+    expect(fred.code).toBe(2);
+    expect(fred.err).toContain("--field: fred:DTB3: field applies to yahoo series only");
+    const mixed = await run("--into", dir, "--field", "volume", "yahoo:^GSPC", "fred:DTB3");
+    expect(mixed.code).toBe(2);
+    const unknown = await run("--into", dir, "--field", "open", "yahoo:^GSPC");
+    expect(unknown.code).toBe(2);
+    expect(unknown.err).toContain("field must be one of adjclose, close, volume");
+    // nothing was fetched: a request would have been answered by the preload and written a file
+    expect(existsSync(dir)).toBe(false);
   });
 });
 

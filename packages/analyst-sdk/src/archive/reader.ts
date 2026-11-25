@@ -86,6 +86,9 @@ export interface Archive {
   files(table: string): FileRecord[];
   // One file's rows, verified before they are returned.
   readRows(f: FileRecord): Row[];
+  // One file's rows, verified, and not kept by the archive: for a table too large
+  // to hold whole (issue 1751). The caller drops them before reading the next file.
+  scanRows(f: FileRecord): Row[];
   // Every source_value_versions file's rows, read once on the first call.
   versions(): Row[][];
   // A revised table as of the archive's as-of backup (see the header).
@@ -158,6 +161,7 @@ export function openArchive(fs: ArchiveFiles, asOf?: string): Archive {
     if (rows === undefined) rowsOf.set(f.path, (rows = toObjects(readCsv(f))));
     return rows;
   };
+  const scanRows = (f: FileRecord): Row[] => rowsOf.get(f.path) ?? toObjects(readCsv(f));
 
   const files = (table: string) => all.filter((f) => tableOf(f) === table && f.path.includes("/data/"));
   const tableRows = new Map<string, Row[]>();
@@ -252,10 +256,24 @@ export function openArchive(fs: ArchiveFiles, asOf?: string): Archive {
     table,
     files,
     readRows,
+    scanRows,
     versions,
     revisedTable,
     latestValues,
   };
+}
+
+// The analytics_vintage_members rows of one run's vintage, in file order (issue
+// 1751). The table is read one file at a time and never through table(): a
+// production copy holds about 29 million member rows, and one run reads a few.
+export function runVintageMembers(archive: Archive, runKey: string): Row[] {
+  const runIds = new Set(archive.table("analytics_ledger_runs").filter((r) => r.run_key === runKey).map((r) => r.id));
+  const vintageIds = new Set(archive.table("analytics_data_vintages").filter((v) => runIds.has(v.run_id)).map((v) => v.id));
+  const members: Row[] = [];
+  for (const f of archive.files("analytics_vintage_members")) {
+    for (const m of archive.scanRows(f)) if (vintageIds.has(m.vintage_id)) members.push(m);
+  }
+  return members;
 }
 
 // One run's frozen inputs from an open archive (exactly its vintage).
@@ -264,7 +282,7 @@ export function collectRunInputs(archive: Archive, runKey: string): RunInputs {
     runs: archive.table("analytics_ledger_runs"),
     methodologies: archive.table("analytics_ledger_methodology_versions"),
     vintages: archive.table("analytics_data_vintages"),
-    members: archive.table("analytics_vintage_members"),
+    members: runVintageMembers(archive, runKey),
   });
   const vfiles = archive.files("source_value_versions");
   archive.versions().forEach((rows, i) => collector.addVersions(rows, `${archive.root.replace(/\/+$/, "")}/${vfiles[i]!.path}`));

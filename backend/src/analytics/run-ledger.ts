@@ -4,6 +4,7 @@
 // the SQL writer). The SQL writer for this module is
 // store/run-ledger-store.ts.
 import { createHash } from "node:crypto";
+import { canonicalStringify } from "../../../packages/analyst-sdk/src/report/canonical.ts";
 
 export type RunLifecycleEvent = "started" | "succeeded" | "degraded" | "failed";
 
@@ -44,39 +45,10 @@ export function sha256Hex(bytes: string | Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
-// Deterministic JSON: every object's keys sorted, recursively. The ONLY
-// mechanism that makes canonicalization independent of input array order is
-// sorting the ARRAY of members before this is ever called (see
-// sortedMembers/buildVintageManifest below) — this function alone only
-// guarantees key order within one object.
-export function canonicalStringify(value: unknown): string {
-  return JSON.stringify(sortKeysDeep(value));
-}
-
-function sortKeysDeep(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(sortKeysDeep);
-  // A Date has to be a LEAF, checked before the generic object branch below:
-  // Object.keys() on a Date instance is always [] (its instant lives in an
-  // internal slot, not an enumerable own property), so recursing into it the
-  // same way as a plain object silently rebuilds it as `{}` — discarding the
-  // date entirely rather than canonicalizing it. Plain JSON.stringify never
-  // has this problem (it calls Date.prototype.toJSON() before this function
-  // ever runs), so anything that round-trips through an ORDINARY jsonb write
-  // (postgres.js's .json(), used by every compatibility-table writer in this
-  // repo) serializes a Date correctly while a naive canonicalStringify of the
-  // exact same object silently zeroed it — found via issue #979's dual-write
-  // parity check on a real published swarm brief (its embedded
-  // `regime.date` is a raw Postgres Date).
-  if (value instanceof Date) return value.toISOString();
-  if (value !== null && typeof value === "object") {
-    const out: Record<string, unknown> = {};
-    for (const key of Object.keys(value as Record<string, unknown>).sort()) {
-      out[key] = sortKeysDeep((value as Record<string, unknown>)[key]);
-    }
-    return out;
-  }
-  return value;
-}
+// Deterministic JSON (every object's keys sorted, recursively; a Date written
+// as its ISO string) lives in the SDK (issue 1751). Re-exported for the
+// backend's importers.
+export { canonicalStringify };
 
 // A total order over members that does not depend on input array order:
 // (sourceKey, coordinate, versionId). `versionId` (a Postgres bigint,

@@ -644,6 +644,85 @@ solver that returns a negative or over-budget weight throws `RangeError`. `marko
 `markowitzSchedule`, `simulateDrift`, `periodStats` and every solver return plain data, so
 you can also compose them yourself.
 
+## Build your own regime model: rules, options and building blocks
+
+Every choice below is an option with a default, and every default is what 0.8.0 does
+(decision D95). A model that needs another rule states it; it copies no SDK code.
+
+| Where | Option | Default | Other value |
+| ----- | ------ | ------- | ----------- |
+| `simulatePortfolio`, `simulateDrift`, `computeBacktest` | `cashBasis` | `"discount"`: the cash quote is a T-bill discount rate, converted with `discountToYield` | `"yield"`: the quote is compounded as a yearly yield |
+| `periodStats`, `computeBacktest` | `sharpeBasis` | `"excess"`: post-cost returns minus cash (`excess`) | `"net"`: post-cost returns (`net`, which both simulators return) |
+| `computeBacktest` | `lagSessions`, `calendars` | 1, `REFERENCE_CALENDARS` | passed to every line of the grid; `calendars` is keyed `eth` and `sp500` |
+| `runRegime` | `inSampleEnd` | `"current-version"`: `BACKTEST_IN_SAMPLE_END` | `"computed-version"`: the adoption date of `version` |
+| `runRegime` | `storedOnlyRatio` | `"drop"`: the ratio gets weight 0 and is listed in `droppedRatios` | `"error"`: throws `StoredRatioOnlyError` |
+| `prepareRegimeInputs`, `knowledgeTimeHistory`, `latestCompleteDay`, `missingOnDay`, `computeRegime`, `regimeLabels` | `rules` | the preset of `version` | any `RegimeRules` object |
+
+`droppedRatios` names each ratio that is calculated from its legs (`ratioInput: "legs"`)
+when the input carries only the stored ratio. Under v4 that is the six equity ratios of any
+archive run before 2026-11-17.
+
+A `RegimeRules` object states every engine rule: `knowledgeTime` (read each value from the
+day it was published), `observationWindows` (an `exchange` series counts its own
+observation days), `weightRefresh` (the refit calendar), `missingPanel` (`"nan"` or
+`"rebase"`), `labelCut` (`"series"` or `"percentile"`), `lookback` and `adoptionDate`.
+`REGIME_RULES.v3` and `REGIME_RULES.v4` are the presets. An indicator's `calendar` is
+checked only when `observationWindows` is true, and its `publication` only when
+`knowledgeTime` is true.
+
+```ts
+import { REGIME_RULES, computeRegime, fitPanelWeights, prepareRegimeInputs, weightedMeanOnDay, PANELS, INDICATORS } from "@robotmoney/analyst-sdk";
+
+// v4 with one rule changed: average the panels that have an index.
+const rules = { ...REGIME_RULES.v4, missingPanel: "rebase" as const };
+const p = prepareRegimeInputs(raw, { start: "2018-01-01", asof, rules });
+const run = computeRegime(p.transformed, p.dateAxis, PANELS, p.ages, undefined, "v4", undefined, undefined, { rules }, p.carried);
+
+// One day's fit from scores computed once: the two functions computeRegime itself calls.
+const macro = INDICATORS.filter((i) => i.panel === "macro");
+const day = p.dateAxis.length - 1;
+const weights = fitPanelWeights(run.signed, macro, day, { rules, carried: p.carried });
+const index = weightedMeanOnDay(run.signed, weights, macro, day);
+```
+
+`computeCorrelations` reads only `{ composite, panelIndices, panels }` (`CorrelationInput`),
+so those three fields are all it needs.
+
+**Derived series.** `deriveSeries(declaration, inputs)` computes a series from supplementary
+series as plain data. `op` is `"level"` (the input), `"ratio"` (`mergeRatioSeries` of two
+inputs), `"rolling-sum-over-known-level"` (a sum of the last `periods` observations of a
+flow over the latest level value that was public, with `summation: "plain"` for in-order
+addition or `"compensated"`) or `"up-volume-share"` (the share of volume on up days over
+`window` rows). Each takes a `publication` rule that dates the result; the rule
+`{ kind: "calendar-days", days }` adds that many calendar days. A missing input throws
+`DerivedSeriesError` naming it.
+
+```ts
+import { deriveSeries } from "@robotmoney/analyst-sdk";
+
+const vixTerm = deriveSeries(
+  { op: "ratio", id: "VIX_TERM", numerator: "yahoo:^VIX3M", denominator: "yahoo:^VIX", publication: { kind: "calendar-days", days: 1 } },
+  supplementary,
+);
+```
+
+`bun run fetch --field adjclose|close|volume` (and `fetchSupplementary(id, window, { field })`)
+picks the value of a Yahoo series. The default adjusted close stays `yahoo/<symbol>.csv`;
+a close or volume is its own series, for example `yahoo:^GSPC.volume` in
+`yahoo/%5EGSPC.volume.csv` with manifest field `volume`.
+
+**Report functions.** The functions the platform shapes its published report with are in
+the SDK as pure functions, and the backend runs the same copy: `selectPublications` (which
+run a day shows, decision D83), `canonicalStringify` and `canonicalArtifactBytes` (the
+stored artifact's canonical JSON), `rowToSnapshot`, `forHistory` and `shapeRegimeSnapshots`
+(the regime-snapshots response from stored rows, typed `RegimeSnapshotRow`,
+`RegimeSnapshot` and `RegimeHistoryPoint`), and `buildRichIndicators` and
+`monthlySparkline` (the per-indicator rows).
+
+`collectRunInputs` reads the `analytics_vintage_members` files one at a time through
+`Archive.scanRows` and keeps only the rows of the run's vintage, so the whole table is
+never held in memory.
+
 ## What changes after publication, and why
 
 `regime_snapshots` is a current view. The ledger is the record. A figure you saw on day

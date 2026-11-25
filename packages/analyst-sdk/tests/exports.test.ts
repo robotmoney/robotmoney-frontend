@@ -50,3 +50,25 @@ describe("package entry exports the backtest client helpers", () => {
     expect("computeBacktestWithFill" in sdk).toBe(false);
   });
 });
+
+// Issue 1751: the options and building blocks a downstream regime model needs
+// are on the package entry.
+describe("package entry exports the downstream regime model surface (issue 1751)", () => {
+  test("fitPanelWeights and weightedMeanOnDay are functions on the package entry", () => {
+    for (const name of ["fitPanelWeights", "weightedMeanOnDay"] as const) expect(typeof sdk[name]).toBe("function");
+  });
+  test("the rules, the derived series, the report functions and the archive member read are exported", () => {
+    for (const name of [
+      "regimeRulesOf", "deriveSeries", "DerivedSeriesError", "StoredRatioOnlyError", "selectPublications", "publishesOver", "canonicalStringify",
+      "shapeRegimeSnapshots", "rowToSnapshot", "forHistory", "computeRegimeSnapshotStaleness", "buildRichIndicators", "monthlySparkline",
+      "runVintageMembers", "CalendarError", "calendarOf",
+    ] as const) {
+      expect(typeof sdk[name], name).toBe("function");
+    }
+    expect(Object.keys(sdk.REGIME_RULES)).toEqual(["v3", "v4"]);
+    expect(sdk.REGIME_KNOWLEDGE_TIME).toEqual({ v3: false, v4: true });
+    expect(sdk.REGIME_OBSERVATION_WINDOWS).toEqual({ v3: false, v4: true });
+    expect(sdk.REGIME_MISSING_PANEL).toEqual({ v3: "rebase", v4: "nan" });
+    expect(sdk.REGIME_LABEL_CUT).toEqual({ v3: "percentile", v4: "series" });
+  });
+});

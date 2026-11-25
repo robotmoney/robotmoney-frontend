@@ -11,7 +11,8 @@
 // bytes" a real proof rather than a tautology. A report's bytes are never
 // re-serialized: they are exactly what the caller submitted, so a byte
 // comparison against the original fixture is meaningful.
-import { canonicalStringify, sha256Hex } from "./run-ledger.ts";
+import { sha256Hex } from "./run-ledger.ts";
+import { canonicalArtifactBytes, canonicalStringify } from "../../../packages/analyst-sdk/src/report/canonical.ts";
 import type { RegimeSnapshotRow } from "./report/regime-projection.ts";
 import type { ResearchPayload } from "./analyze/research.ts";
 
@@ -42,10 +43,8 @@ export interface ExceptionArtifact {
 // The canonical bytes for one artifact kind. Deterministic key order
 // (canonicalStringify, shared with the #977 run ledger) so the same logical
 // content always produces the same bytes regardless of how the caller built
-// the array in memory.
-export function canonicalArtifactBytes(rows: readonly unknown[]): Uint8Array {
-  return new TextEncoder().encode(canonicalStringify(rows));
-}
+// the array in memory. The function lives in the SDK (issue 1751).
+export { canonicalArtifactBytes };
 
 export interface OutputArtifact {
   kind: OutputArtifactKind;

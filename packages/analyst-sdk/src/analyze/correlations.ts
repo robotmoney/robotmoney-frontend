@@ -11,7 +11,6 @@
 //               (the PREDICTIVE measure).
 //   concurrent: today's asset log-price level (an alignment sanity check).
 // `spearman` returns NaN for <10 pairs; rho is nulled via nullIfNaN.
-import type { RegimeComputeResult } from "./compute.ts";
 import type { Point } from "../types.ts";
 import { PANELS } from "./indicators.ts";
 import { correlation } from "../transform/exact.ts";
@@ -42,11 +41,20 @@ export interface CorrelationExtras {
   eth: Point[];
 }
 
+// What computeCorrelations reads of a regime result (issue 1751): the composite,
+// the panel indices and, optionally, which panels (default PANELS). A whole
+// RegimeComputeResult has this shape.
+export interface CorrelationInput {
+  composite: number[];
+  panelIndices: Record<string, number[]>;
+  panels?: readonly string[];
+}
+
 const nullIfNaN = (v: number): number | null => (Number.isFinite(v) ? v : null);
 
 export function computeCorrelations(
   dateAxis: string[],
-  result: RegimeComputeResult,
+  result: CorrelationInput,
   extras: CorrelationExtras,
 ): CorrelationsPayload {
   const indices: Record<string, number[]> = { composite: result.composite };

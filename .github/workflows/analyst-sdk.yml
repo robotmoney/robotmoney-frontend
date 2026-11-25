@@ -190,6 +190,25 @@ jobs:
           tests/input-rule.test.ts:11
           tests/regime.test.ts:22
           tests/prepare.test.ts:7
+      # Issue 1751: the downstream regime model suites ran (the rules presets and
+      # the in-sample end, the one-day panel fit, the report functions the backend
+      # shares, the derived series), and the suites the same issue extended ran
+      # their added cases; a renamed or emptied file is red, never green.
+      - name: Downstream regime model suites ran (issue 1751)
+        run: >-
+          bun scripts/checks/assert-junit-suites.ts "$RUNNER_TEMP/analyst-sdk.junit.xml"
+          tests/regime-rules.test.ts:10
+          tests/panel-fit.test.ts:5
+          tests/report-functions.test.ts:12
+          tests/derived-series.test.ts:15
+          tests/backtest.test.ts:51
+          tests/backtest-drift.test.ts:30
+          tests/correlations-n-eff.test.ts:4
+          tests/knowledge-time.test.ts:40
+          tests/supplementary.test.ts:23
+          tests/archive-reader.test.ts:39
+          tests/ratio-close.test.ts:6
+          tests/exports.test.ts:7
       # Export ONLY the package's tracked files (no node_modules from the install
       # above) into a fresh directory, install from the lockfile, and diff the CLI
       # output against the committed golden. Fails if the SDK reaches outside
