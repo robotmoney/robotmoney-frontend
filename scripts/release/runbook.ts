@@ -204,6 +204,13 @@ export function parseStep(raw: unknown, where: string): { step: RunbookStep } | 
  * descriptions differ by construction and are not compared; every other field
  * is, with phase letters and numbers stripped from the step ids it names.
  */
+/**
+ * Step names whose QA step and production twin may run different commands (owner, 2026-11-20): stage's
+ * backup hard-links the dump Q02-dump used, so a stage run takes no second capture of production; the
+ * production backup still captures fresh. The order and the twin pairing still hold.
+ */
+export const TWIN_COMMANDS_MAY_DIFFER: readonly string[] = ["backup"];
+
 export function twinProblems(steps: readonly RunbookStep[], where: string): string[] {
   const out: string[] = [];
   const norm = (v: unknown): unknown => {
@@ -227,7 +234,7 @@ export function twinProblems(steps: readonly RunbookStep[], where: string): stri
     if (PROD_ONLY_NAMES.includes(n)) continue;
     const twin = qaByName.get(n);
     if (twin === undefined) out.push(`${where}: ${s.id} has no QA twin named ${n}; production runs only what stage ran`);
-    else if (body(twin) !== body(s)) out.push(`${where}: ${twin.id} and ${s.id} differ; a QA step and its production twin run the same commands`);
+    else if (!TWIN_COMMANDS_MAY_DIFFER.includes(n) && body(twin) !== body(s)) out.push(`${where}: ${twin.id} and ${s.id} differ; a QA step and its production twin run the same commands`);
   }
   for (const s of qa) {
     const n = stepNameOf(s.id);

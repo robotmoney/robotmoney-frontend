@@ -1,3 +1,4 @@
+import { flowConfigured, flowDisabled } from "./flow-config.ts";
 import { sql } from "../../db/client.ts";
 import { on, registerQuery } from "../../db/registry.ts";
 import { flowCheckpoints, flowDeployment } from "../../pipeline/stores/flow-index.ts";
@@ -12,6 +13,7 @@ const reply = (status: number, body: unknown) => Response.json(body, { status, h
 export async function handleFlowPrices(req: Request, url: URL, ip: string): Promise<Response> {
   if (limiter.check(ip).limited) return reply(429, { error: "rate limit exceeded" });
   if (req.method !== "GET") return reply(405, { error: "method not allowed" });
+  if (!flowConfigured()) return flowDisabled();
   const block = Number(url.searchParams.get("afterBlock") ?? 0), index = Number(url.searchParams.get("afterLogIndex") ?? -1);
   if (!Number.isSafeInteger(block) || block < 0 || !Number.isSafeInteger(index) || index < -1) return reply(400, { error: "invalid cursor" });
   try {

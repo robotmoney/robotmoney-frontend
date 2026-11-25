@@ -1,3 +1,4 @@
+import { flowConfigured, flowDisabled } from "./flow-config.ts";
 import { sql } from "../../db/client.ts";
 import { on, registerQuery } from "../../db/registry.ts";
 import { decodeFlowEvent } from "../../chain/flow-events.ts";
@@ -12,6 +13,7 @@ export async function handleFlowEvents(req: Request, url: URL, ip: string): Prom
   const headers = { "Cache-Control": "no-store" };
   if (limiter.check(ip).limited) return Response.json({ error: "rate limit exceeded" }, { status: 429, headers });
   if (req.method !== "GET") return Response.json({ error: "method not allowed" }, { status: 405, headers });
+  if (!flowConfigured()) return flowDisabled();
   const block = Number(url.searchParams.get("afterBlock") ?? 0);
   const index = Number(url.searchParams.get("afterLogIndex") ?? -1);
   if (!Number.isSafeInteger(block) || block < 0 || !Number.isSafeInteger(index) || index < -1) return Response.json({ error: "invalid cursor" }, { status: 400, headers });
