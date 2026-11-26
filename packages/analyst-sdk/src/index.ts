@@ -11,6 +11,7 @@ export {
 export {
   deriveSeries, derivedInputIds, DerivedSeriesError, V5_DERIVED_SERIES,
   type DerivedSeries, type DerivedLevel, type DerivedRatio, type DerivedRollingSumOverKnownLevel, type DerivedUpVolumeShare,
+  type DerivedCustom, type DeriveOptions,
 } from "./transform/derived.ts";
 export {
   computeRegime, regimeLabels, fitPanelWeights, weightedMeanOnDay, panelMean, smoothRegimes, bucketFn, WeightAnchorOutOfRangeError,
@@ -24,6 +25,10 @@ export {
   type RunModelOptions, type ModelRun, type PanelSetRun, type StageCache, type StageName, type StageScores, type PanelFit, type Combined,
   type CombineOptions, type RecomputeInputs, type RecomputeOptions, type KeptSettings,
 } from "./engine/index.ts";
+// The research driver (issue 1765, phase 5): screen over a rule grid with one
+// shared stage cache (stageCache is exported with the engine above), and the
+// custom DerivedSeries op (DerivedCustom, with the derived series above).
+export { screen, type RuleVariant, type ScreenEntry, type ScreenMetric, type ScreenOptions } from "./research/index.ts";
 // The kept record of a methodology that keeps its history (v5, issue 1753).
 export {
   computeKeptRegime, keptRegimeRows, withDerivedSeries, scoreDays, fitDay, keptDayOf, walkForward, deriveKeptRecord,
