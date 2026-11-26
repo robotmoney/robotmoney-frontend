@@ -5,11 +5,18 @@
 //   ledgerRepo()  the run ledger (regime and research runs with an outage streak, a missed day, an unfinished run),
 //                 each regime run's published payload, the regime_snapshots table now, and the revision log.
 //   replayRepo()  two regime runs with frozen vintages over the SDK's raw-history fixture, each with the payload the
-//                 SDK computes from exactly that vintage (the published record a replay must reproduce).
+//                 SDK computes from exactly that vintage (the published record a replay must reproduce): the rows of
+//                 the SDK's publishedRows, as the producer freezes them, with their payload_sha256.
+//
+// Each backup record lists its files with bytes_raw and sha256_raw, as csvb writes them, so the SDK's own archive
+// reader (which the audit replay opens the repo with) verifies them. The repos carry no methodology table: every run
+// is on the main line and replays under the SDK's current version.
+import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { gzipSync } from "node:zlib";
 import { encodeCsvRow } from "@robotmoney/analyst-sdk/src/archive/format1.ts";
+import { REGIME_ARTIFACT_KIND } from "@robotmoney/analyst-sdk/src/analyze/regime-versions.ts";
 
 type Cell = string | number | null;
 interface AppendTable {
@@ -24,6 +31,9 @@ interface RevisedTableData {
 
 const text = (v: Cell): string | null => (v === null ? null : String(v));
 const csv = (header: string[], rows: Cell[][]): Buffer => Buffer.from(encodeCsvRow(header) + rows.map((r) => encodeCsvRow(r.map(text))).join(""), "utf8");
+const sha256 = (b: string | Buffer): string => createHash("sha256").update(b).digest("hex");
+/** A listed file: its path, rows, uncompressed size and hash. */
+const listed = (path: string, raw: Buffer, rows: number) => ({ path, rows, bytes_raw: raw.length, sha256_raw: sha256(raw) });
 
 /** Write one backup holding these tables, in the format 1 layout the audits read. */
 export function writeBackupRepo(root: string, backup: string, append: Record<string, AppendTable>, revised: Record<string, RevisedTableData>): void {
@@ -33,14 +43,16 @@ export function writeBackupRepo(root: string, backup: string, append: Record<str
   const append_only: Record<string, unknown> = {};
   for (const [table, t] of Object.entries(append)) {
     const path = `csv/${backup}/data/${table}.2026-01-01T000000Z_2026-01-01T000000Z.csv.gz`;
-    writeFileSync(join(root, path), gzipSync(csv(t.header, t.rows)));
-    append_only[table] = { watermark_before: null, watermark_after: String(t.rows.length), rows_added: t.rows.length, files: [{ path, rows: t.rows.length }] };
+    const raw = csv(t.header, t.rows);
+    writeFileSync(join(root, path), gzipSync(raw));
+    append_only[table] = { watermark_before: null, watermark_after: String(t.rows.length), rows_added: t.rows.length, files: [listed(path, raw, t.rows.length)] };
   }
   const revisions: Record<string, unknown> = {};
   for (const [table, t] of Object.entries(revised)) {
     const path = `csv/${backup}/revisions/${table}.csv.gz`;
-    writeFileSync(join(root, path), gzipSync(csv(["_backup", "_op", ...t.header], t.rows.map((r) => [backup, "upsert", ...r]))));
-    revisions[table] = { key: t.key, file: { path, rows: t.rows.length }, upserts: t.rows.length, deletes: 0, rows_in_state: t.rows.length };
+    const raw = csv(["_backup", "_op", ...t.header], t.rows.map((r) => [backup, "upsert", ...r]));
+    writeFileSync(join(root, path), gzipSync(raw));
+    revisions[table] = { key: t.key, file: listed(path, raw, t.rows.length), upserts: t.rows.length, deletes: 0, rows_in_state: t.rows.length };
   }
   const record = { format: 1, backup, snapshot: { exported_at_db: "2026-09-27 00:00:00+00", replica_replay_ts: null, db_user: "test", was_replica: false }, tool: { name: "audit-fixture", commit: null }, append_only, revisions };
   writeFileSync(join(dir, "backup.json"), JSON.stringify(record, null, 2) + "\n");
@@ -107,7 +119,8 @@ export function ledgerRepo(root: string): void {
         return { date, composite, regime: label(composite) };
       });
     published += 1;
-    outputs.push([outputs.length + 1, id, "regime_snapshots", JSON.stringify(rows), at]);
+    const payload = JSON.stringify(rows);
+    outputs.push([outputs.length + 1, id, REGIME_ARTIFACT_KIND.main, payload, sha256(payload), at]);
   }
   // The table now: every day revised to its base plus 0.010, except the newest, which is its own last run's.
   const regime = Object.keys(BASE).map((date) => {
@@ -130,7 +143,7 @@ export function ledgerRepo(root: string): void {
     root,
     LEDGER_BACKUP,
     {
-      analytics_output_snapshots: { header: ["id", "run_id", "artifact_kind", "payload_json", "created_at"], rows: outputs },
+      analytics_output_snapshots: { header: ["id", "run_id", "artifact_kind", "payload_json", "payload_sha256", "created_at"], rows: outputs },
       analytics_ledger_runs: { header: ["id", "run_key", "asof", "tool_id", "source_label", "methodology_version_id", "build_identity", "job_id", "created_at"], rows: runs },
       analytics_ledger_run_events: { header: ["id", "run_id", "event_type", "detail", "knowledge_time"], rows: events },
       analytics_overwrite_events: { header: ["id", "table_name", "operation", "natural_key", "previous_row", "replacement_row", "recorded_at"], rows: ovw },
@@ -152,6 +165,7 @@ export async function replayRepo(root: string, sdkDir: string): Promise<{ member
     runRegime: (raw: unknown, o: unknown) => any;
     inputHistoryFromStorage: (rows: { sourceKey: string; marketDate: string | null; value: number }[]) => Record<string, { date: string; value: number }[]>;
   };
+  const { publishedRows } = (await import(join(sdkDir, "src/replay/index.ts"))) as { publishedRows: (run: unknown, o?: { source?: string | null }) => { date: string }[] };
   const lines = readFileSync(join(sdkDir, "tests/fixtures/raw-indicator-history.csv"), "utf8").split("\n").slice(1).filter(Boolean);
   // As on production, the vintage still carries the retired DEFI_GROWTH and STABLES_GROWTH keys (D74 amendment: the
   // growth indicators read DEFI_TVL and STABLES, and their own stored history reaches no consumer). Their stale
@@ -179,31 +193,13 @@ export async function replayRepo(root: string, sdkDir: string): Promise<{ member
     members[run.id] = inVintage.length;
     vintages.push([100 + run.id, run.id, "regime", "2026-08-15 23:00:00+00", run.asof, inVintage.length, "digest", "2026-08-16 00:00:00+00"]);
     // The payload the SDK computes from exactly this vintage, as the pipeline publishes it: the run reads its ledger
-    // heads through the SDK's storage mapping (backend/src/analytics/index.ts, loadCommittedInputs).
+    // heads through the SDK's storage mapping (backend/src/analytics/index.ts, loadCommittedInputs), and its rows are
+    // the SDK's publishedRows (the one row builder the producer freezes). The payload keeps the last days only.
     const raw = sdk.inputHistoryFromStorage(inVintage.map((o) => ({ sourceKey: o.key, marketDate: o.date, value: Number(o.value) })));
-    const r = sdk.runRegime(raw, { asof: run.asof, factor: true });
-    const axis: string[] = r.dateAxis;
-    const rows = axis.slice(-PUBLISHED_DAYS).map((date) => {
-      const i = axis.indexOf(date);
-      const row: Record<string, unknown> = {
-        date,
-        composite: r.result.composite[i],
-        compositePercentile: r.result.compositePercentile[i],
-        regime: r.result.regime[i] ?? null,
-        macroIndex: r.result.panelIndices.macro[i],
-        macroPercentile: r.result.panelPercentiles.macro[i],
-        macroRegime: r.result.panelRegimes.macro?.[i] ?? null,
-        onchainIndex: r.result.panelIndices.onchain[i],
-        onchainPercentile: r.result.panelPercentiles.onchain[i],
-        onchainRegime: r.result.panelRegimes.onchain?.[i] ?? null,
-        factorIndex: r.factor?.panelIndices.factor[i],
-        factorPercentile: r.factor?.panelPercentiles.factor[i],
-        factorRegime: r.factor?.panelRegimes.factor?.[i] ?? null,
-      };
-      if (date === run.asof) Object.assign(row, { correlations: r.correlations, backtest: r.backtest });
-      return row;
-    });
-    outputs.push([outputs.length + 1, run.id, "regime_snapshots", JSON.stringify(rows), "2026-08-16 00:00:00+00"]);
+    const rows = publishedRows(sdk.runRegime(raw, { asof: run.asof, factor: true }), { source: "live" }).slice(-PUBLISHED_DAYS);
+    if (rows.length !== PUBLISHED_DAYS || rows.at(-1)!.date !== run.asof) throw new Error(`the SDK published ${rows.length} rows through ${rows.at(-1)?.date} for run ${run.id}, not ${PUBLISHED_DAYS} through ${run.asof}`);
+    const payload = JSON.stringify(rows);
+    outputs.push([outputs.length + 1, run.id, REGIME_ARTIFACT_KIND.main, payload, sha256(payload), "2026-08-16 00:00:00+00"]);
   }
   const runs: Cell[][] = [
     [REPLAY_RUNS.oldest.id, "replay-1", REPLAY_RUNS.oldest.asof, "regime", "live", 1, "build", null, "2026-07-01 00:00:00+00"],
@@ -222,7 +218,7 @@ export async function replayRepo(root: string, sdkDir: string): Promise<{ member
     root,
     REPLAY_BACKUP,
     {
-      analytics_output_snapshots: { header: ["id", "run_id", "artifact_kind", "payload_json", "created_at"], rows: outputs },
+      analytics_output_snapshots: { header: ["id", "run_id", "artifact_kind", "payload_json", "payload_sha256", "created_at"], rows: outputs },
       source_value_versions: { header: ["id", "source_key", "market_date", "value", "knowledge_time"], rows: svv },
       analytics_ledger_runs: { header: ["id", "run_key", "asof", "tool_id", "source_label", "methodology_version_id", "build_identity", "job_id", "created_at"], rows: runs },
       analytics_ledger_run_events: { header: ["id", "run_id", "event_type", "detail", "knowledge_time"], rows: events },

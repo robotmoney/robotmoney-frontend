@@ -2,22 +2,30 @@
 //
 // Every regime run freezes the exact source values it used as a data vintage: `analytics_data_vintages` names the
 // run's knowledge-time cutoff, and `analytics_vintage_members` lists the source value versions it contains as runs of
-// consecutive ids. From those ids this rebuilds the run's raw indicator history and its backtest price series
-// exactly, replays the regime computation over them, and compares every published day with the replay.
+// consecutive ids. The replay rebuilds the run's raw indicator history and its backtest price series from them
+// exactly, computes every day the run publishes, and compares every published day with the computed row of that day.
 //
-// The computation is not reimplemented here: it is the analyst SDK in `robotmoney-frontend` (`packages/analyst-sdk`),
-// given as `--sdk`, so the audit checks the code that is actually deployed. Optionally the original JavaScript
-// reference (`backend/scripts/vendor/regime-reference-js`, `--reference-js`) is run as an independent check.
+// The replay is not reimplemented here: it is the analyst SDK's replay module (`src/replay`, issue 1765) in
+// `robotmoney-frontend` (`packages/analyst-sdk`), given as `--sdk`, so the audit checks the code that is actually
+// deployed. The backups are opened with that SDK's own archive reader (`bin/backups-dir.ts`) as of the audit's
+// backup, and its replayRun reads the run's vintage, its methodology label (the version it replays under and the
+// panels that version's published runs average) and the rows the run published under its line's artifact kind,
+// each payload checked against its payload_sha256. An SDK commit without `src/replay` predates issue 1765 and is
+// refused by name. Optionally the original JavaScript reference (`backend/scripts/vendor/regime-reference-js`,
+// `--reference-js`) is run as an independent check.
 import { execFileSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join, resolve } from "node:path";
+import type { Archive } from "@robotmoney/analyst-sdk/src/archive/reader.ts";
+import type { PublishedRunCandidate, ReplayOptions, ReplayResult as SdkReplayResult } from "@robotmoney/analyst-sdk/src/replay/index.ts";
 import { loadRuns } from "./runs.ts";
-import { loadTable, num, scanTable, type Ctx } from "./data.ts";
+import { loadTable, type Ctx } from "./data.ts";
 
 type Point = { date: string; value: number };
 
-/** A stored source value, as the SDK's `inputHistoryFromStorage` takes it. */
-type Stored = { sourceKey: string; marketDate: string | null; value: number; versionId: string };
+/** The refusal of an --sdk commit older than the SDK's replay module. */
+export const SDK_TOO_OLD = "this SDK predates its replay module (issue 1765); audit replay needs an SDK commit that has src/replay";
 
 export interface MetricStat {
   metric: string;
@@ -40,12 +48,16 @@ export interface DayDiff {
 
 export interface ReplayResult {
   run: { id: number; asof: string; createdAt: string };
+  /** The run's methodology label, and the version, line and panels the SDK replayed it under. */
+  methodology: { label: string | null; version: string | null; line: string | null; panels: string[] };
   vintage: { id: string; knowledgeCutoff: string; marketCutoff: string; memberCount: number; manifestDigest: string };
   inputs: { memberRows: number; sourceValueVersions: number; indicators: number; extras: Record<string, number> };
   sdk: { dir: string; commit: string | null };
   daysCompared: number;
   metrics: MetricStat[];
   diffs: DayDiff[];
+  /** The SDK's comparison of the as-of rows (compareRows, every compared field exactly). */
+  asofDiff: { match: boolean; differing: string[]; beyondRounding: string[] } | null;
   backtestCorrelations: { leaves: number; exact: number; different: number; examples: string[] } | null;
   reference: { dir: string; metrics: MetricStat[]; vsSdkMaxAbsDiff: number } | null;
   notes: string[];
@@ -53,6 +65,8 @@ export interface ReplayResult {
 
 const NUMERIC = ["composite", "compositePercentile", "macroIndex", "macroPercentile", "onchainIndex", "onchainPercentile", "factorIndex", "factorPercentile"] as const;
 const LABELS = ["regime", "macroRegime", "onchainRegime", "factorRegime"] as const;
+/** The backtest price series a run reads besides its indicators. */
+const EXTRAS = ["SPX", "ETH", "TBILL3M"] as const;
 
 const isMissing = (v: unknown): boolean => v === null || v === undefined || (typeof v === "number" && !Number.isFinite(v));
 
@@ -91,96 +105,97 @@ function leaves(a: unknown, b: unknown, path: string, out: { n: number; exact: n
   else if (out.examples.length < 10) out.examples.push(`${path}: published ${JSON.stringify(a)} vs replay ${JSON.stringify(b)}`);
 }
 
+/** What the audit uses of the SDK at --sdk: its archive reader and its replay module. */
+interface ReplaySdk {
+  openBackupsDir(root: string, asOf?: string): Archive;
+  replayRun(archive: Archive, runKey: string, opts?: ReplayOptions): SdkReplayResult;
+  publicationCandidates(archive: Archive, toolId: string, opts?: { line?: "main" | "beside"; methodology?: string }): PublishedRunCandidate[];
+}
+
+/** The SDK at `sdkDir`; an SDK commit without src/replay (before issue 1765) is refused by name. */
+async function loadReplaySdk(sdkDir: string): Promise<ReplaySdk> {
+  if (!existsSync(join(sdkDir, "src", "replay", "index.ts"))) throw new Error(`${SDK_TOO_OLD} (--sdk ${sdkDir})`);
+  const [replay, local] = await Promise.all([import(join(sdkDir, "src/replay/index.ts")), import(join(sdkDir, "bin/backups-dir.ts"))]);
+  if (typeof replay.replayRun !== "function" || typeof replay.publicationCandidates !== "function") throw new Error(`${sdkDir}/src/replay/index.ts does not export replayRun and publicationCandidates; is --sdk the analyst-sdk package directory?`);
+  if (typeof local.openBackupsDir !== "function") throw new Error(`${sdkDir}/bin/backups-dir.ts does not export openBackupsDir; is --sdk the analyst-sdk package directory?`);
+  return { openBackupsDir: local.openBackupsDir, replayRun: replay.replayRun, publicationCandidates: replay.publicationCandidates };
+}
+
+/**
+ * Replay one regime run of the backups through the SDK and compare every day it published. With `runId`, that run
+ * (a succeeded regime run with a vintage). Without, the newest succeeded run with a vintage that published on the
+ * main line: the line of its methodology label (the served one), and every run of a copy with no methodology table.
+ */
 export async function replayRun(ctx: Ctx, o: { sdkDir: string; referenceJsDir?: string; runId?: number }): Promise<ReplayResult> {
+  const sdkDir = resolve(o.sdkDir);
+  const sdk = await loadReplaySdk(sdkDir);
+  const archive = sdk.openBackupsDir(ctx.layout.root, ctx.asOf.backup);
   const notes: string[] = [];
-  // 1. The run, its vintage and its published payload.
+
+  // 1. The run and its vintage.
   const runs = (await loadRuns(ctx)).filter((r) => r.tool === "regime" && r.status === "succeeded");
   const vintages = await loadTable(ctx, "analytics_data_vintages", (v) => v.tool_id === "regime");
   const hasVintage = new Set(vintages.map((v) => Number(v.run_id)));
-  const run = o.runId ? runs.find((r) => r.id === o.runId) : [...runs].reverse().find((r) => hasVintage.has(r.id));
-  if (!run) throw new Error(o.runId ? `run ${o.runId} is not a succeeded regime run with a vintage` : "no succeeded regime run with a vintage");
+  let run: (typeof runs)[number] | undefined;
+  if (o.runId) run = runs.find((r) => r.id === o.runId);
+  else {
+    const mainLine = new Set(sdk.publicationCandidates(archive, "regime", { line: "main" }).map((c) => Number(c.runId)));
+    run = [...runs].reverse().find((r) => hasVintage.has(r.id) && mainLine.has(r.id));
+  }
+  if (!run) throw new Error(o.runId ? `run ${o.runId} is not a succeeded regime run with a vintage` : "no succeeded regime run with a vintage that published on the main line");
   const vin = vintages.find((v) => Number(v.run_id) === run.id);
   if (!vin) throw new Error(`run ${run.id} has no frozen vintage`);
+  const runKey = archive.table("analytics_ledger_runs").find((r) => Number(r.id) === run.id)?.run_key;
+  if (!runKey) throw new Error(`run ${run.id} is not in the SDK reader's run ledger as of backup ${ctx.asOf.backup}`);
 
-  let payload: { date: string; [k: string]: unknown }[] | null = null;
-  await scanTable(ctx, "analytics_output_snapshots", (s) => {
-    if (Number(s.run_id) === run.id && s.artifact_kind === "regime_snapshots") payload = JSON.parse(s.payload_json!);
-  });
-  if (!payload || !(payload as unknown[]).length) throw new Error(`run ${run.id} has no published regime payload`);
-  const published = new Map((payload as { date: string }[]).map((r) => [r.date, r as Record<string, unknown>]));
-
-  const sdkDir = resolve(o.sdkDir);
-  const sdk = (await import(join(sdkDir, "src/index.ts"))) as Record<string, any>;
-  if (typeof sdk.runRegime !== "function") throw new Error(`${sdkDir}/src/index.ts does not export runRegime; is --sdk the analyst-sdk package directory?`);
-  if (typeof sdk.inputHistoryFromStorage !== "function") throw new Error(`${sdkDir}/src/index.ts does not export inputHistoryFromStorage; the replay needs the SDK's storage mapping (D74)`);
-
-  const { raw, extras, found, expected, members } = await frozenInputs(ctx, vin, sdk.inputHistoryFromStorage, sdk.LEDGER_EXTRA_KEYS);
-  if (found !== expected) notes.push(`the vintage says ${expected} members; ${found} source value versions were found in the backups for its ranges`);
+  // 2. The SDK's replay: the run's vintage, its published rows (payload verified) and every day it computes.
+  const r = sdk.replayRun(archive, runKey);
+  if (r.problems.length > 0) throw new Error(`the SDK could not replay run ${run.id}: ${r.problems.join("; ")}`);
+  if (!r.published.rows?.length) throw new Error(`run ${run.id} has no published regime payload`);
+  if (r.inputs === null) throw new Error(`the SDK replayed run ${run.id} without its inputs`);
+  notes.push(...r.notes);
+  const raw = r.inputs.history as Record<string, Point[]>;
   const tooRecent = Object.values(raw).some((pts) => pts.some((p) => p.date > run.asof));
   if (tooRecent) notes.push(`some inputs are dated after the run's as-of day ${run.asof}; the SDK ignores them for the regime`);
 
-  // 4. Replay through the SDK.
-  let sdkRun: any;
-  try {
-    sdkRun = sdk.runRegime(raw, { asof: run.asof, factor: true });
-  } catch (e) {
-    throw new Error(`the SDK refused the replay (${(e as Error).message}). It needs the version with the asof and factor options (robotmoney-frontend feat/1095 branch, 78efcc3d or later)`);
-  }
-  const axis: string[] = sdkRun.dateAxis;
-  const res = sdkRun.result;
-  const fac = sdkRun.factor;
-  const idx = new Map(axis.map((d, i) => [d, i]));
-  const rep = (date: string): Record<string, unknown> | null => {
-    const i = idx.get(date);
-    if (i === undefined) return null;
-    const m = res.panelRegimes;
-    return {
-      composite: res.composite[i],
-      compositePercentile: res.compositePercentile[i],
-      regime: res.regime[i] ?? null,
-      macroIndex: res.panelIndices.macro[i],
-      macroPercentile: res.panelPercentiles.macro[i],
-      macroRegime: m.macro?.[i] ?? null,
-      onchainIndex: res.panelIndices.onchain[i],
-      onchainPercentile: res.panelPercentiles.onchain[i],
-      onchainRegime: m.onchain?.[i] ?? null,
-      factorIndex: fac?.panelIndices.factor[i],
-      factorPercentile: fac?.panelPercentiles.factor[i],
-      factorRegime: fac?.panelRegimes.factor?.[i] ?? null,
-    };
-  };
-
+  // 3. Every published day against the computed row of that day.
+  const computed = new Map(r.computed.rows.map((x) => [x.date, x as unknown as Record<string, unknown>]));
+  const rep = (date: string): Record<string, unknown> | null => computed.get(date) ?? null;
+  const published = new Map(r.published.rows.map((x) => [x.date, x as unknown as Record<string, unknown>]));
   const pairs: Record<string, [unknown, unknown][]> = {};
   const diffs: DayDiff[] = [];
   let days = 0;
   for (const [date, pub] of published) {
-    const r = rep(date);
-    if (!r) {
-      notes.push(`published day ${date} is not on the replay's date axis`);
+    const row = rep(date);
+    if (!row) {
+      notes.push(`published day ${date} has no computed row (not on the replay's date axis, or not labelled)`);
       continue;
     }
     days += 1;
     for (const k of [...NUMERIC, ...LABELS]) {
-      (pairs[k] ??= []).push([pub[k], r[k]]);
-      const same = pub[k] === r[k] || (isMissing(pub[k]) && isMissing(r[k]));
-      if (!same && diffs.length < 5000) diffs.push({ date, metric: k, published: String(pub[k] ?? ""), replay: String(r[k] ?? "") });
+      (pairs[k] ??= []).push([pub[k], row[k]]);
+      const same = pub[k] === row[k] || (isMissing(pub[k]) && isMissing(row[k]));
+      if (!same && diffs.length < 5000) diffs.push({ date, metric: k, published: String(pub[k] ?? ""), replay: String(row[k] ?? "") });
     }
   }
   const metrics = [...NUMERIC.map((k) => stat(k, pairs[k] ?? [], false)), ...LABELS.map((k) => stat(k, pairs[k] ?? [], true))];
+  const asofDiff = r.diff === null ? null : { match: r.diff.match, differing: r.diff.differing, beyondRounding: r.diff.beyondRounding };
+  if (asofDiff) notes.push(asofDiff.match ? "as-of row: every compared field equal (the SDK's compareRows)" : `as-of row: differs in ${asofDiff.differing.join(", ")} (the SDK's compareRows)`);
 
-  // 5. Correlations and backtest, published on the run's own as-of row.
+  // 4. Correlations and backtest, published on the run's own as-of row.
   let backtestCorrelations: ReplayResult["backtestCorrelations"] = null;
-  const own = published.get(run.asof) as { correlations?: unknown; backtest?: unknown } | undefined;
-  if (own && (own.correlations || own.backtest) && (sdkRun.correlations || sdkRun.backtest)) {
+  const own = r.published.asof as { correlations?: unknown; backtest?: unknown } | null;
+  const mine = r.computed.asof as { correlations?: unknown; backtest?: unknown } | null;
+  if (own && (own.correlations || own.backtest) && mine && (mine.correlations || mine.backtest)) {
     const out = { n: 0, exact: 0, examples: [] as string[] };
     // Round-trip through JSON so NaN and undefined are compared the way they were stored.
     const norm = (x: unknown) => JSON.parse(JSON.stringify(x ?? null));
-    leaves(norm(own.correlations), norm(sdkRun.correlations), "correlations", out);
-    leaves(norm(own.backtest), norm(sdkRun.backtest), "backtest", out);
+    leaves(norm(own.correlations), norm(mine.correlations), "correlations", out);
+    leaves(norm(own.backtest), norm(mine.backtest), "backtest", out);
     backtestCorrelations = { leaves: out.n, exact: out.exact, different: out.n - out.exact, examples: out.examples };
   } else notes.push("correlations and backtest were not compared (not on the published as-of row, or no price series in the vintage)");
 
-  // 6. Independent reference (the original JavaScript), if given.
+  // 5. Independent reference (the original JavaScript), if given.
   let reference: ReplayResult["reference"] = null;
   if (o.referenceJsDir) reference = referenceReplay(resolve(o.referenceJsDir), raw, run.asof, published, rep);
 
@@ -190,14 +205,20 @@ export async function replayRun(ctx: Ctx, o: { sdkDir: string; referenceJsDir?: 
   } catch {
     commit = null;
   }
+  const members = await loadTable(ctx, "analytics_vintage_members", (m) => m.vintage_id === vin.id);
+  const extras: Record<string, number> = {};
+  for (const id of EXTRAS) if (raw[id]?.length) extras[id] = raw[id]!.length;
   return {
     run: { id: run.id, asof: run.asof, createdAt: run.createdAt },
-    vintage: { id: vin.id!, knowledgeCutoff: vin.knowledge_time_cutoff!, marketCutoff: vin.market_time_cutoff!, memberCount: expected, manifestDigest: vin.manifest_digest ?? "" },
-    inputs: { memberRows: members, sourceValueVersions: found, indicators: Object.keys(raw).filter((k) => !(k in { SPX: 1, ETH: 1, TBILL3M: 1 })).length, extras },
+    methodology: { label: r.run.methodology.label, version: r.version, line: r.line, panels: [...r.panels] },
+    vintage: { id: vin.id!, knowledgeCutoff: vin.knowledge_time_cutoff!, marketCutoff: vin.market_time_cutoff!, memberCount: Number(vin.member_count), manifestDigest: vin.manifest_digest ?? "" },
+    // The SDK's reader generates the input only when every member of the vintage is in the backups.
+    inputs: { memberRows: members.length, sourceValueVersions: r.inputs.identity?.memberCount ?? 0, indicators: Object.keys(raw).filter((k) => !(EXTRAS as readonly string[]).includes(k)).length, extras },
     sdk: { dir: sdkDir, commit },
     daysCompared: days,
     metrics,
     diffs,
+    asofDiff,
     backtestCorrelations,
     reference,
     notes,
@@ -246,50 +267,4 @@ function referenceReplay(dir: string, raw: Record<string, Point[]>, asof: string
     metrics.push(stat(pubKey, pairs, isLabel));
   }
   return { dir, metrics, vsSdkMaxAbsDiff: vsSdk };
-}
-
-/**
- * A run's exact inputs, rebuilt from its data vintage: the member id ranges of `analytics_vintage_members` select
- * rows of `source_value_versions`. Those rows become the raw history keyed by SDK input id (indicators, and
- * SPX/ETH/TBILL3M for the backtest) through the SDK's own `inputHistoryFromStorage`, the mapping the run itself reads
- * its ledger heads through. A second mapping here would drift from the run's: the vintage still holds the retired
- * `raw_indicator_history:DEFI_GROWTH` and `:STABLES_GROWTH` keys, which no consumer reads since D74's amendment
- * (the growth indicators read DEFI_TVL and STABLES), and feeding them in moved the on-chain index (issue 1182).
- */
-export async function frozenInputs(
-  ctx: Ctx,
-  vin: Record<string, string | null>,
-  toInputs: (rows: Stored[]) => Record<string, Point[]>,
-  ledgerExtras: Record<string, { ledgerKey: string; inputId: string }>,
-): Promise<{ raw: Record<string, Point[]>; extras: Record<string, number>; found: number; expected: number; members: number }> {
-  // The vintage's member ranges, as a bitmap over source value version ids.
-  const members = await loadTable(ctx, "analytics_vintage_members", (m) => m.vintage_id === vin.id);
-  const ranges = members.map((m) => [Number(m.source_value_version_id), Number(m.last_source_value_version_id ?? m.source_value_version_id)] as const);
-  let lo = Infinity;
-  let hi = -Infinity;
-  for (const [a, b] of ranges) {
-    if (a < lo) lo = a;
-    if (b > hi) hi = b;
-  }
-  const inVintage = new Uint8Array(hi - lo + 1);
-  for (const [a, b] of ranges) inVintage.fill(1, a - lo, b - lo + 1);
-
-  // The source value versions in those ranges: the run's exact inputs.
-  const extraKeys = new Map(Object.values(ledgerExtras).map((x) => [x.ledgerKey, x.inputId]));
-  const rows: Stored[] = [];
-  const extras: Record<string, number> = {};
-  let found = 0;
-  await scanTable(ctx, "source_value_versions", (r) => {
-    const id = Number(r.id);
-    if (id < lo || id > hi || !inVintage[id - lo]) return;
-    found += 1;
-    const value = num(r.value);
-    if (!r.market_date || !Number.isFinite(value)) return;
-    const extra = extraKeys.get(r.source_key!);
-    if (extra) extras[extra] = (extras[extra] ?? 0) + 1;
-    rows.push({ sourceKey: r.source_key!, marketDate: r.market_date, value, versionId: r.id! });
-  });
-  // Version ids ascend with knowledge time; a repeated (key, date) keeps the last row, the loader's rule.
-  rows.sort((a, b) => Number(a.versionId) - Number(b.versionId));
-  return { raw: toInputs(rows), extras, found, expected: Number(vin.member_count), members: members.length };
 }

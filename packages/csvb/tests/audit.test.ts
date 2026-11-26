@@ -4,16 +4,20 @@
 // chosen by hand: a change to the analysis code that alters a finding fails here. The replay runs the analyst SDK
 // beside this package (packages/analyst-sdk), so it is never skipped.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { cpSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { gunzipSync, gzipSync } from "node:zlib";
+import { encodeCsvRow, parseCopyCsv, toObjects } from "@robotmoney/analyst-sdk/src/archive/format1.ts";
 import { openCtx } from "../src/audit/data.ts";
 import { analyseDrift } from "../src/audit/drift.ts";
 import { writeReport } from "../src/audit/report.ts";
-import { replayRun } from "../src/audit/replay.ts";
+import { replayRun, SDK_TOO_OLD } from "../src/audit/replay.ts";
+import { CURRENT_REGIME_VERSION, REGIME_PUBLISHED_PANELS } from "@robotmoney/analyst-sdk/src/analyze/regime-versions.ts";
 import { analyseRevisions } from "../src/audit/revisions.ts";
 import { analyseRuns, loadRuns } from "../src/audit/runs.ts";
-import { LEDGER_BACKUP, ledgerRepo, PUBLISHED_DAYS, REPLAY_RUNS, replayRepo } from "./support/audit-fixture.ts";
+import { LEDGER_BACKUP, ledgerRepo, PUBLISHED_DAYS, REPLAY_BACKUP, REPLAY_RUNS, replayRepo } from "./support/audit-fixture.ts";
 
 const PKG = join(import.meta.dir, "..");
 const SDK = resolve(PKG, "..", "analyst-sdk");
@@ -110,8 +114,9 @@ describe("the report", () => {
   });
 });
 
-// The replay runs the analyst SDK in packages/analyst-sdk over each run's frozen vintage and compares the payload the
-// fixture published (computed by that SDK from exactly that vintage).
+// The replay runs the analyst SDK's replay module in packages/analyst-sdk over each run's frozen vintage (the repo
+// opened with that SDK's archive reader) and compares the payload the fixture published (the SDK's publishedRows from
+// exactly that vintage, with its payload_sha256) day by day with the rows the SDK computes.
 describe("replay from the frozen vintage", () => {
   const REPLAY = join(tempDir("csvb-audit-replay-"), "repo");
   let members: Record<number, number> = {};
@@ -131,10 +136,45 @@ describe("replay from the frozen vintage", () => {
     for (const m of r.metrics) expect({ metric: m.metric, exact: m.exact }).toEqual({ metric: m.metric, exact: m.compared });
     expect(r.backtestCorrelations!.leaves).toBeGreaterThan(0);
     expect(r.backtestCorrelations).toMatchObject({ exact: r.backtestCorrelations!.leaves, different: 0 });
+    // The SDK's own comparison of the as-of rows (every compared field, exactly).
+    expect(r.asofDiff).toEqual({ match: true, differing: [], beyondRounding: [] });
+    // No methodology table: the run is on the main line and replays under the current version and its published panels.
+    expect(r.methodology).toEqual({ label: null, version: CURRENT_REGIME_VERSION, line: "main", panels: [...REGIME_PUBLISHED_PANELS[CURRENT_REGIME_VERSION]] });
   }, 180_000);
 
   test("a run that failed has no vintage, and is refused with a clear message", async () => {
     await expect(replayRun(rctx, { sdkDir: SDK, runId: REPLAY_RUNS.failed.id })).rejects.toThrow("not a succeeded regime run with a vintage");
+  }, 60_000);
+
+  test("red control: a published payload whose bytes do not match its payload_sha256 is refused, never compared", async () => {
+    const tampered = join(tempDir("csvb-audit-tampered-"), "repo");
+    cpSync(REPLAY, tampered, { recursive: true });
+    const recPath = join(tampered, "csv", REPLAY_BACKUP, "backup.json");
+    const rec = JSON.parse(readFileSync(recPath, "utf8"));
+    const file = rec.append_only.analytics_output_snapshots.files[0];
+    const table = parseCopyCsv(gunzipSync(readFileSync(join(tampered, file.path))).toString("utf8"));
+    const rows = toObjects(table).map((o) => (Number(o.run_id) === REPLAY_RUNS.newest.id ? { ...o, payload_sha256: "0".repeat(64) } : o));
+    const raw = Buffer.from([encodeCsvRow(table.header), ...rows.map((o) => encodeCsvRow(table.header.map((h) => o[h] ?? null)))].join(""), "utf8");
+    writeFileSync(join(tampered, file.path), gzipSync(raw));
+    Object.assign(file, { bytes_raw: raw.length, sha256_raw: createHash("sha256").update(raw).digest("hex") });
+    writeFileSync(recPath, JSON.stringify(rec, null, 2));
+    await expect(replayRun(openCtx(tampered), { sdkDir: SDK })).rejects.toThrow("does not match its stored payload_sha256");
+  }, 120_000);
+
+  test("an --sdk dir without src/replay/index.ts (an SDK before issue 1765) is refused with the named message", async () => {
+    // The SDK's src/ and bin/ without the replay module, as a commit before issue 1765 has them.
+    const old = join(tempDir("csvb-audit-old-sdk-"), "analyst-sdk");
+    cpSync(join(SDK, "src"), join(old, "src"), { recursive: true, filter: (p) => p !== join(SDK, "src", "replay") });
+    cpSync(join(SDK, "bin"), join(old, "bin"), { recursive: true });
+    expect(existsSync(join(old, "src", "index.ts"))).toBe(true);
+    expect(existsSync(join(old, "src", "replay", "index.ts"))).toBe(false);
+    await expect(replayRun(rctx, { sdkDir: old })).rejects.toThrow(SDK_TOO_OLD);
+    // The command refuses it the same way, before it writes a report.
+    const out = join(tempDir("csvb-audit-old-sdk-report-"), "r");
+    const p = Bun.spawnSync(["bun", "run", "src/cli.ts", "audit", "replay", "--repo", REPLAY, "--sdk", old, "--out", out], { cwd: PKG, stdout: "pipe", stderr: "pipe" });
+    expect(p.exitCode).toBe(1);
+    expect(p.stderr.toString()).toContain(SDK_TOO_OLD);
+    expect(existsSync(out)).toBe(false);
   }, 60_000);
 
   test("the oldest run replays from its own frozen vintage too (every member of that vintage is found)", async () => {
