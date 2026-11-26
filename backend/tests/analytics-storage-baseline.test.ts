@@ -16,6 +16,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { sql } from "../src/db/client.ts";
+import { REGIME_ARTIFACT_KIND } from "../src/analytics/output-snapshots.ts";
 import { saveRawIndicatorHistory } from "../src/analytics/store/raw-history-store.ts";
 import { beginRun, freezeVintage } from "../src/analytics/store/run-ledger-store.ts";
 import { openReadOnly, proveReadOnly, type ReadOnlySession } from "../../scripts/release/db-read.ts";
@@ -157,7 +158,7 @@ describe("issue 1765 storage S0: the analytics storage baseline", () => {
     const outputs = entry("analytics_output_snapshots").growth!;
     expect(outputs.mode).toBe("daily");
     if (outputs.mode !== "daily") throw new Error("unreachable");
-    expect(outputs.days.some((d) => d.artifact_kind === "regime_snapshots" && Number(d.rows) >= 2)).toBe(true);
+    expect(outputs.days.some((d) => d.artifact_kind === REGIME_ARTIFACT_KIND.main && Number(d.rows) >= 2)).toBe(true);
 
     const members = entry("analytics_vintage_members").growth!;
     expect(members).toMatchObject({ mode: "daily", by: "analytics_data_vintages.created_at" });
@@ -176,7 +177,7 @@ describe("issue 1765 storage S0: the analytics storage baseline", () => {
   });
 
   test("a seeded regime artifact reports an as-of versus history split in [0, 1]", () => {
-    const split = report.artifact_split.find((s) => s.artifact_kind === "regime_snapshots");
+    const split = report.artifact_split.find((s) => s.artifact_kind === REGIME_ARTIFACT_KIND.main);
     expect(split).toBeDefined();
     expect(split!.artifacts).toBeGreaterThanOrEqual(2);
     expect(split!.asof_bytes).toBeGreaterThan(0);
