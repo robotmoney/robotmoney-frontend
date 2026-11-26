@@ -10,6 +10,7 @@
   "scripts": {
     "regime": "bun bin/regime.ts",
     "inputs": "bun bin/inputs.ts",
+    "replay": "bun bin/replay.ts",
     "fetch": "bun bin/fetch.ts",
     "backtest": "bun bin/backtest.ts",
     "golden:regenerate": "bun run scripts/golden-regenerate.ts",
