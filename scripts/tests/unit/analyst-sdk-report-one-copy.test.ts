@@ -6,9 +6,11 @@
 //
 // Issue 1765 (phase 1): the row builder (publishedRows, src/replay/rows.ts) and
 // the snapshot column table (SNAPSHOT_COLUMNS) live once too. The backend
-// reaches both through one shim (report/published-rows.ts). index.ts builds its
-// rows with publishedRows and holds no row builder of its own: it no longer
-// imports buildRichIndicators, which only the SDK's row builder calls.
+// reaches both through one shim (report/published-rows.ts). Since phase 3 the
+// backend's compute stage (compute.ts) builds a run's rows with one
+// publishedRows call, and neither it nor the thin orchestrator (index.ts) holds
+// a row builder of its own: neither imports buildRichIndicators, which only the
+// SDK's row builder calls.
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -36,6 +38,7 @@ const MOVED: Moved[] = [
   { file: "report/published-rows.ts", sdk: "snapshot-columns.ts", imported: ["SNAPSHOT_COLUMNS"] },
   // The row builder and the indicator detail it writes are the SDK's alone (issue 1765).
   { file: "index.ts", sdk: "indicator-rows.ts", imported: [], notDeclared: ["buildSnapshotRows", "buildRichIndicators", "monthlySparkline", "keptRegimeRows", "publishedRows"] },
+  { file: "compute.ts", sdk: "indicator-rows.ts", imported: [], notDeclared: ["buildSnapshotRows", "buildRichIndicators", "monthlySparkline", "keptRegimeRows", "publishedRows"] },
 ];
 
 const withoutComments = (text: string): string => text.replace(/\/\*[\s\S]*?\*\//g, " ").replace(/^\s*\/\/.*$/gm, "");
@@ -77,12 +80,14 @@ describe("issue 1751: the backend holds no second copy of the SDK report functio
     });
   }
 
-  test("index.ts builds its rows with publishedRows from the shim, and the shim re-exports the SDK's builder", () => {
-    const code = withoutComments(readFileSync(join(root, BA, "index.ts"), "utf8"));
+  test("compute.ts builds its rows with one publishedRows call from the shim, and the shim re-exports the SDK's builder", () => {
+    const code = withoutComments(readFileSync(join(root, BA, "compute.ts"), "utf8"));
     expect(code).toMatch(/import\s*\{\s*publishedRows\s*\}\s*from\s*"\.\/report\/published-rows\.ts"/);
-    // Both regime branches: the kept run and the recomputing run.
-    expect(code.match(/\bpublishedRows\(/g)?.length).toBe(2);
+    // One call for every model: the run's model value picks the kept or the recomputed rows.
+    expect(code.match(/\bpublishedRows\(/g)?.length).toBe(1);
     expect(code).not.toMatch(/indicator-rows\.ts|\bkeptRegimeRows\b/);
+    const index = withoutComments(readFileSync(join(root, BA, "index.ts"), "utf8"));
+    expect(index).not.toMatch(/\bpublishedRows\(|indicator-rows\.ts|\bkeptRegimeRows\b/);
     const shim = withoutComments(readFileSync(join(root, BA, "report/published-rows.ts"), "utf8"));
     expect(shim).toMatch(/export\s*\{\s*publishedRows\b[^}]*\}\s*from\s*"(?:\.\.\/)+packages\/analyst-sdk\/src\/replay\/rows\.ts"/);
     expect(declares(shim, "publishedRows")).toBe(false);

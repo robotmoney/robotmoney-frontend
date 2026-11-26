@@ -213,6 +213,21 @@ test("no analytics/** module transitively reachable from src/worker/ ever import
   expect(violations).toEqual([]);
 });
 
+// Issue 1765 (phase 3): the producer's regime tick runs the analytics stages
+// itself (extract.ts, inputs.ts, compute.ts, publish.ts) and filters each
+// model's share of the one committed read with the SDK's readKeysOf, never the
+// API-owned run ledger store. The producer has no DATABASE_URL: nothing it
+// reaches, however many hops away, may import an analytics store module,
+// db/client.ts or postgres.
+test("the producer's regime tick reaches no analytics store, db/client or postgres module (issue 1765)", () => {
+  const reachable = [...transitiveClosure([join(SRC, "producer", "index.ts")])];
+  const rel = reachable.map((f) => relative(SRC, f).replaceAll("\\", "/"));
+  // Canary: the walk reached the tick's stage modules.
+  for (const stage of ["analytics/extract.ts", "analytics/inputs.ts", "analytics/compute.ts", "analytics/publish.ts"]) expect(rel, stage).toContain(stage);
+  expect(rel.filter((f) => f.startsWith("analytics/store/"))).toEqual([]);
+  expect(scan(reachable, [IMPORT_DB_CLIENT, IMPORT_POSTGRES, IMPORT_STORE])).toEqual([]);
+});
+
 test("only API persistence + migration/smoke tooling import the analytics store writers", () => {
   // analytics/cutover/ (issue #979) is allowlisted for the same reason it is
   // excluded from the zero-db-access sweep above: it legitimately reads
