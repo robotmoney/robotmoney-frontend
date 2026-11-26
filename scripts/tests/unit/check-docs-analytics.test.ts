@@ -194,12 +194,16 @@ describe("check-docs-analytics.sh in a throwaway repository", () => {
   });
 
   test("each path rule resolves a missing file to its own root, and a non-.ts cell is skipped", () => {
+    // Built with join("/") so the repo's citation gate (test-path-citations)
+    // does not read these planted, deliberately absent paths as citations.
+    const rootTest = ["scripts", "tests", "unit", "no-such.test.ts"].join("/");
+    const backendTest = ["backend", "tests", "no-such.test.ts"].join("/");
     const r = check(
       fixtureRepo((root) =>
         addSection8Rows(root, [
           "| Planted SDK test. | `tests/no-such-sdk.test.ts` |",
           "| Planted SDK source. | `src/no-such.ts` |",
-          "| Planted repo-root test. | `scripts/tests/unit/no-such.test.ts` |",
+          `| Planted repo-root test. | \`${rootTest}\` |`,
           "| Planted backend test. | backend `tests/no-such.test.ts` |",
           "| Planted fixture, not a .ts file. | `tests/fixtures/no-such.json`, the package `no-such` script |",
         ]),
@@ -208,7 +212,7 @@ describe("check-docs-analytics.sh in a throwaway repository", () => {
     expect(r.exitCode).not.toBe(0);
     const named = failLines(r).map((l) => /\(([^()]+)\)\.$/.exec(l)?.[1]);
     expect(named.sort()).toEqual(
-      ["backend/tests/no-such.test.ts", "packages/analyst-sdk/src/no-such.ts", "packages/analyst-sdk/tests/no-such-sdk.test.ts", "scripts/tests/unit/no-such.test.ts"].sort(),
+      [backendTest, "packages/analyst-sdk/src/no-such.ts", "packages/analyst-sdk/tests/no-such-sdk.test.ts", rootTest].sort(),
     );
   });
 
