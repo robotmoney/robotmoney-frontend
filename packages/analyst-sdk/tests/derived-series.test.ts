@@ -1,8 +1,12 @@
 // Derived series (issue 1751, gap 7): deriveSeries reproduces the downstream
 // FISCAL, VIX_TERM, SKEW and UPVOL_SHARE series bit for bit. Every expected
 // value is computed here with plain in-order arithmetic, never with the SDK.
+//
+// Issue 1765 (phase 5): the custom op, a pure function with a declared
+// publication lag, is called once per calendar day with its inputs cut at the
+// day minus the lag. The four other ops ignore deriveSeries' options.
 import { describe, expect, test } from "bun:test";
-import { DerivedSeriesError, deriveSeries, type DerivedSeries } from "../src/transform/derived.ts";
+import { DerivedSeriesError, V5_DERIVED_SERIES, deriveSeries, derivedInputIds, type DerivedCustom, type DerivedSeries } from "../src/transform/derived.ts";
 import { mergeRatioSeries } from "../src/transform/grid.ts";
 import { PublicationRuleError } from "../src/transform/knowledge-time.ts";
 import type { Point } from "../src/types.ts";
@@ -285,5 +289,102 @@ describe("a malformed declaration or a missing input is refused", () => {
   test("a malformed publication rule throws PublicationRuleError naming the derived series", () => {
     expect(() => deriveSeries({ op: "level", id: "SKEW", input: "a", publication: { kind: "calendar-days", days: 0 } }, { a: some })).toThrow(PublicationRuleError);
     expect(() => deriveSeries({ op: "level", id: "SKEW", input: "a", publication: { kind: "calendar-days", days: 0 } }, { a: some })).toThrow(/series SKEW/);
+  });
+});
+
+describe("the custom op: a pure function with a declared publication lag (issue 1765)", () => {
+  // Gaps on purpose: 01-04, 01-06 to 01-09 have no point.
+  const A = points([["2024-01-02", 1], ["2024-01-03", 2], ["2024-01-05", 3], ["2024-01-10", 4]]);
+  const B = points([["2024-01-03", 10], ["2024-01-08", 20]]);
+  type Call = { day: string; a: string[]; b: string[] };
+  const op = (lagDays: number, calls: Call[] = [], fn?: DerivedCustom["fn"]): DerivedCustom => ({
+    op: "custom",
+    id: "A_PLUS_B",
+    version: "1",
+    inputs: ["a", "b"],
+    lagDays,
+    fn: fn ?? ((inputs, day) => {
+      calls.push({ day, a: inputs.a!.map((p) => p.date), b: inputs.b!.map((p) => p.date) });
+      const a = inputs.a!.at(-1);
+      const b = inputs.b!.at(-1);
+      return a && b ? a.value + b.value : null;
+    }),
+  });
+
+  test("fn runs on every calendar day from the first known day to the newest input date plus the lag, seeing only points dated on or before the day minus the lag", () => {
+    const calls: Call[] = [];
+    const out = deriveSeries(op(2, calls), { a: A, b: B });
+    // The first point (01-02) is known on 01-04; the newest (01-10) on 01-12.
+    expect(calls.map((c) => c.day)).toEqual(["04", "05", "06", "07", "08", "09", "10", "11", "12"].map((d) => `2024-01-${d}`));
+    for (const c of calls) {
+      const cutoff = addDays(c.day, -2);
+      expect(c.a).toEqual(A.filter((p) => p.date <= cutoff).map((p) => p.date));
+      expect(c.b).toEqual(B.filter((p) => p.date <= cutoff).map((p) => p.date));
+    }
+    // Each value is dated on its own day; a null (no B known on 01-04) gives no point.
+    expect(out).toEqual([
+      { date: "2024-01-05", value: 12 }, { date: "2024-01-06", value: 12 }, { date: "2024-01-07", value: 13 }, { date: "2024-01-08", value: 13 },
+      { date: "2024-01-09", value: 13 }, { date: "2024-01-10", value: 23 }, { date: "2024-01-11", value: 23 }, { date: "2024-01-12", value: 24 },
+    ]);
+  });
+
+  test("negative control: with lag 0 fn sees the day's own point", () => {
+    const calls: Call[] = [];
+    deriveSeries(op(0, calls), { a: A, b: B });
+    expect(calls[0]!.day).toBe("2024-01-02");
+    for (const p of A) expect(calls.find((c) => c.day === p.date)!.a.at(-1)).toBe(p.date);
+  });
+
+  test("through sets the last day; the inputs may come in any date order and are not changed", () => {
+    const calls: Call[] = [];
+    const shuffled = [A[3]!, A[0]!, A[2]!, A[1]!];
+    const before = JSON.stringify(shuffled);
+    const out = deriveSeries(op(2, calls), { a: shuffled, b: B }, { through: "2024-01-20" });
+    expect(calls.at(-1)!.day).toBe("2024-01-20");
+    expect(out.at(-1)).toEqual({ date: "2024-01-20", value: 24 });
+    expect(out.slice(0, 8)).toEqual(deriveSeries(op(2), { a: A, b: B }));
+    expect(JSON.stringify(shuffled)).toBe(before);
+    expect(deriveSeries(op(2), { a: A, b: B }, { through: "2024-01-03" })).toEqual([]);
+    expect(deriveSeries(op(2), { a: [], b: [] })).toEqual([]);
+  });
+
+  test("fn cannot change what it is given: the arrays and the points are frozen", () => {
+    const push = op(0, [], (inputs) => (inputs.a!.push({ date: "2099-01-01", value: 1 }), 1));
+    expect(() => deriveSeries(push, { a: A, b: B })).toThrow(TypeError);
+    const write = op(0, [], (inputs) => (inputs.a!.length > 0 ? ((inputs.a![0]!.value = 99), 1) : null));
+    expect(() => deriveSeries(write, { a: A, b: B })).toThrow(TypeError);
+    expect(A[0]!.value).toBe(1);
+  });
+
+  test("a null or a non-finite value gives no point; any other non-number is a RangeError", () => {
+    expect(deriveSeries(op(0, [], () => null), { a: A, b: B })).toEqual([]);
+    expect(deriveSeries(op(0, [], () => NaN), { a: A, b: B })).toEqual([]);
+    expect(deriveSeries(op(0, [], (_i, day) => (day === "2024-01-03" ? Infinity : 1)), { a: A, b: B }).map((p) => p.date)).not.toContain("2024-01-03");
+    expect(() => deriveSeries(op(0, [], () => "1" as unknown as number), { a: A, b: B })).toThrow(/fn must return a number or null/);
+  });
+
+  test("derivedInputIds lists its inputs; a missing input is a DerivedSeriesError; a malformed declaration is a RangeError naming the field", () => {
+    expect(derivedInputIds(op(1))).toEqual(["a", "b"]);
+    let caught: unknown;
+    try { deriveSeries(op(1), { a: A }); } catch (e) { caught = e; }
+    expect(caught).toBeInstanceOf(DerivedSeriesError);
+    expect((caught as DerivedSeriesError).inputId).toBe("b");
+    expect((caught as DerivedSeriesError).seriesId).toBe("A_PLUS_B");
+    const bad = (patch: Record<string, unknown>) => ({ ...op(1), ...patch }) as unknown as DerivedSeries;
+    expect(() => deriveSeries(bad({ version: "" }), { a: A, b: B })).toThrow(/version/);
+    expect(() => deriveSeries(bad({ version: 1 }), { a: A, b: B })).toThrow(/version/);
+    expect(() => deriveSeries(bad({ lagDays: -1 }), { a: A, b: B })).toThrow(/lagDays/);
+    expect(() => deriveSeries(bad({ lagDays: 1.5 }), { a: A, b: B })).toThrow(/lagDays/);
+    expect(() => deriveSeries(bad({ inputs: [] }), { a: A, b: B })).toThrow(/inputs/);
+    expect(() => deriveSeries(bad({ inputs: ["a", "a"] }), { a: A, b: B })).toThrow(/twice/);
+    expect(() => deriveSeries(bad({ fn: 1 }), { a: A, b: B })).toThrow(/fn must be a function/);
+    expect(() => derivedInputIds(bad({ inputs: "a" }))).toThrow(/inputs/);
+    expect(() => deriveSeries(op(1), { a: A, b: B }, { through: "Jan 20" })).toThrow(/through/);
+  });
+
+  test("the four other ops ignore deriveSeries' options: the v5 series keep their exact output", () => {
+    const inputs: Record<string, Point[]> = {};
+    for (const d of V5_DERIVED_SERIES) for (const id of derivedInputIds(d)) inputs[id] = points([["2024-01-02", 2], ["2024-02-01", 3], ["2024-03-01", 5]]);
+    for (const d of V5_DERIVED_SERIES) expect(deriveSeries(d, inputs, { through: "2000-01-01" })).toEqual(deriveSeries(d, inputs));
   });
 });

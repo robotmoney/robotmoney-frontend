@@ -16,8 +16,14 @@
 // two outputs apart. In a key, a NaN, an infinity or a negative zero is written
 // as a tagged string for the same reason.
 //
-// Cached values are shared: every run that hits an entry reads the same arrays
-// and objects, so no caller may write to a run's result.
+// A function in the params (the fn of a custom DerivedSeries op,
+// transform/derived.ts) cannot be digested by value, so a key writes it as a
+// tag and never its body. A custom op is named in the key by its declared id
+// and version only. A caller who changes fn without bumping its version gets
+// the stale stages the old fn computed.
+//
+// Cached values are shared by reference: every run that hits an entry reads
+// the same arrays and objects, so no caller may write to a run's result.
 import { sha256 } from "../hash.ts";
 import { canonicalStringify } from "../report/canonical.ts";
 import type { RawIndicatorHistory } from "../types.ts";
@@ -80,8 +86,12 @@ const digests = new WeakMap<object, string>();
 // A number as a key writes it: canonical JSON for a finite one, a tag for the rest.
 const tagNumber = (v: number): string | number => (Number.isNaN(v) ? "\u0000NaN" : v === Infinity ? "\u0000+Infinity" : v === -Infinity ? "\u0000-Infinity" : Object.is(v, -0) ? "\u0000-0" : v);
 
+// How a key writes a function: one tag for every function, never its body (the declared id and version beside it name it).
+const FUNCTION_TAG = "\u0000function";
+
 function tagged(value: unknown): unknown {
   if (typeof value === "number") return tagNumber(value);
+  if (typeof value === "function") return FUNCTION_TAG;
   if (Array.isArray(value)) return value.map(tagged);
   if (value !== null && typeof value === "object" && !(value instanceof Date)) {
     const out: Record<string, unknown> = {};
