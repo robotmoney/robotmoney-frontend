@@ -10,12 +10,13 @@
 //
 // Each backup record lists its files with bytes_raw and sha256_raw, as csvb writes them, so the SDK's own archive
 // reader (which the audit replay opens the repo with) verifies them. The repos carry no methodology table: every run
-// is on the main line and replays under the SDK's current version.
+// is on the main line and replays under the SDK's current version. A test edits a copy of a repo (a methodology table,
+// a missing member, a tampered hash) with readAppendTable and putAppendTable.
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { gzipSync } from "node:zlib";
-import { encodeCsvRow } from "@robotmoney/analyst-sdk/src/archive/format1.ts";
+import { gunzipSync, gzipSync } from "node:zlib";
+import { encodeCsvRow, parseCopyCsv } from "@robotmoney/analyst-sdk/src/archive/format1.ts";
 import { REGIME_ARTIFACT_KIND } from "@robotmoney/analyst-sdk/src/analyze/regime-versions.ts";
 
 type Cell = string | number | null;
@@ -35,18 +36,21 @@ const sha256 = (b: string | Buffer): string => createHash("sha256").update(b).di
 /** A listed file: its path, rows, uncompressed size and hash. */
 const listed = (path: string, raw: Buffer, rows: number) => ({ path, rows, bytes_raw: raw.length, sha256_raw: sha256(raw) });
 
+/** Write one append-only table of a backup as its single data file, and return the table's entry of the backup record. */
+function appendFile(root: string, backup: string, table: string, t: AppendTable): Record<string, unknown> {
+  const path = `csv/${backup}/data/${table}.2026-01-01T000000Z_2026-01-01T000000Z.csv.gz`;
+  const raw = csv(t.header, t.rows);
+  writeFileSync(join(root, path), gzipSync(raw));
+  return { watermark_before: null, watermark_after: String(t.rows.length), rows_added: t.rows.length, files: [listed(path, raw, t.rows.length)] };
+}
+
 /** Write one backup holding these tables, in the format 1 layout the audits read. */
 export function writeBackupRepo(root: string, backup: string, append: Record<string, AppendTable>, revised: Record<string, RevisedTableData>): void {
   const dir = join(root, "csv", backup);
   mkdirSync(join(dir, "data"), { recursive: true });
   mkdirSync(join(dir, "revisions"), { recursive: true });
   const append_only: Record<string, unknown> = {};
-  for (const [table, t] of Object.entries(append)) {
-    const path = `csv/${backup}/data/${table}.2026-01-01T000000Z_2026-01-01T000000Z.csv.gz`;
-    const raw = csv(t.header, t.rows);
-    writeFileSync(join(root, path), gzipSync(raw));
-    append_only[table] = { watermark_before: null, watermark_after: String(t.rows.length), rows_added: t.rows.length, files: [listed(path, raw, t.rows.length)] };
-  }
+  for (const [table, t] of Object.entries(append)) append_only[table] = appendFile(root, backup, table, t);
   const revisions: Record<string, unknown> = {};
   for (const [table, t] of Object.entries(revised)) {
     const path = `csv/${backup}/revisions/${table}.csv.gz`;
@@ -56,6 +60,23 @@ export function writeBackupRepo(root: string, backup: string, append: Record<str
   }
   const record = { format: 1, backup, snapshot: { exported_at_db: "2026-09-27 00:00:00+00", replica_replay_ts: null, db_user: "test", was_replica: false }, tool: { name: "audit-fixture", commit: null }, append_only, revisions };
   writeFileSync(join(dir, "backup.json"), JSON.stringify(record, null, 2) + "\n");
+}
+
+/** One append-only table of a written backup: its header and its rows in file order (a test edits a copy of a repo with it). */
+export function readAppendTable(root: string, backup: string, table: string): AppendTable {
+  const rec = JSON.parse(readFileSync(join(root, "csv", backup, "backup.json"), "utf8"));
+  const files: { path: string }[] = rec.append_only[table]?.files ?? [];
+  if (files.length !== 1) throw new Error(`backup ${backup} lists ${files.length} files of ${table}, not 1`);
+  const t = parseCopyCsv(gunzipSync(readFileSync(join(root, files[0]!.path))).toString("utf8"));
+  return { header: t.header, rows: t.rows };
+}
+
+/** Replace, or add, one append-only table of a written backup: its data file and its entry of the backup record, sizes and hash. */
+export function putAppendTable(root: string, backup: string, table: string, t: AppendTable): void {
+  const recPath = join(root, "csv", backup, "backup.json");
+  const rec = JSON.parse(readFileSync(recPath, "utf8"));
+  rec.append_only[table] = appendFile(root, backup, table, t);
+  writeFileSync(recPath, JSON.stringify(rec, null, 2) + "\n");
 }
 
 // ── the run ledger, the payloads and the revision log ─────────────────────────────────────────────

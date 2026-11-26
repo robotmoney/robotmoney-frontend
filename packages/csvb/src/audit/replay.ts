@@ -10,15 +10,17 @@
 // deployed. The backups are opened with that SDK's own archive reader (`bin/backups-dir.ts`) as of the audit's
 // backup, and its replayRun reads the run's vintage, its methodology label (the version it replays under and the
 // panels that version's published runs average) and the rows the run published under its line's artifact kind,
-// each payload checked against its payload_sha256. An SDK commit without `src/replay` predates issue 1765 and is
-// refused by name. Optionally the original JavaScript reference (`backend/scripts/vendor/regime-reference-js`,
+// each payload checked against its payload_sha256. The run is chosen from the ledger tables alone (runs, their events,
+// methodology labels, vintages), never from the artifact or report tables: those hold every payload, gigabytes on a
+// real copy. An SDK commit without `src/replay` predates issue 1765 and is refused by name. Optionally the original JavaScript reference (`backend/scripts/vendor/regime-reference-js`,
 // `--reference-js`) is run as an independent check.
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join, resolve } from "node:path";
 import type { Archive } from "@robotmoney/analyst-sdk/src/archive/reader.ts";
-import type { PublishedRunCandidate, ReplayOptions, ReplayResult as SdkReplayResult } from "@robotmoney/analyst-sdk/src/replay/index.ts";
+import type { ReplayOptions, ReplayResult as SdkReplayResult } from "@robotmoney/analyst-sdk/src/replay/index.ts";
+import type { RegimeLine } from "@robotmoney/analyst-sdk/src/analyze/regime-versions.ts";
 import { loadRuns } from "./runs.ts";
 import { loadTable, type Ctx } from "./data.ts";
 
@@ -51,6 +53,7 @@ export interface ReplayResult {
   /** The run's methodology label, and the version, line and panels the SDK replayed it under. */
   methodology: { label: string | null; version: string | null; line: string | null; panels: string[] };
   vintage: { id: string; knowledgeCutoff: string; marketCutoff: string; memberCount: number; manifestDigest: string };
+  /** sourceValueVersions: the versions the SDK read, every member of the vintage (it refuses a copy that lacks one). */
   inputs: { memberRows: number; sourceValueVersions: number; indicators: number; extras: Record<string, number> };
   sdk: { dir: string; commit: string | null };
   daysCompared: number;
@@ -105,26 +108,30 @@ function leaves(a: unknown, b: unknown, path: string, out: { n: number; exact: n
   else if (out.examples.length < 10) out.examples.push(`${path}: published ${JSON.stringify(a)} vs replay ${JSON.stringify(b)}`);
 }
 
-/** What the audit uses of the SDK at --sdk: its archive reader and its replay module. */
+/** What the audit uses of the SDK at --sdk: its archive reader, its replay module and the line of a methodology label. */
 interface ReplaySdk {
   openBackupsDir(root: string, asOf?: string): Archive;
   replayRun(archive: Archive, runKey: string, opts?: ReplayOptions): SdkReplayResult;
-  publicationCandidates(archive: Archive, toolId: string, opts?: { line?: "main" | "beside"; methodology?: string }): PublishedRunCandidate[];
+  /** The line a run of this label publishes on: REGIME_LINE of a version the SDK computes; any other label, or none, is the main line. */
+  lineOf(label: string | null): RegimeLine;
 }
 
 /** The SDK at `sdkDir`; an SDK commit without src/replay (before issue 1765) is refused by name. */
 async function loadReplaySdk(sdkDir: string): Promise<ReplaySdk> {
   if (!existsSync(join(sdkDir, "src", "replay", "index.ts"))) throw new Error(`${SDK_TOO_OLD} (--sdk ${sdkDir})`);
-  const [replay, local] = await Promise.all([import(join(sdkDir, "src/replay/index.ts")), import(join(sdkDir, "bin/backups-dir.ts"))]);
-  if (typeof replay.replayRun !== "function" || typeof replay.publicationCandidates !== "function") throw new Error(`${sdkDir}/src/replay/index.ts does not export replayRun and publicationCandidates; is --sdk the analyst-sdk package directory?`);
+  const [replay, versions, local] = await Promise.all([import(join(sdkDir, "src/replay/index.ts")), import(join(sdkDir, "src/analyze/regime-versions.ts")), import(join(sdkDir, "bin/backups-dir.ts"))]);
+  if (typeof replay.replayRun !== "function") throw new Error(`${sdkDir}/src/replay/index.ts does not export replayRun; is --sdk the analyst-sdk package directory?`);
+  if (typeof versions.isRegimeVersion !== "function" || typeof versions.REGIME_LINE !== "object") throw new Error(`${sdkDir}/src/analyze/regime-versions.ts does not export isRegimeVersion and REGIME_LINE; is --sdk the analyst-sdk package directory?`);
   if (typeof local.openBackupsDir !== "function") throw new Error(`${sdkDir}/bin/backups-dir.ts does not export openBackupsDir; is --sdk the analyst-sdk package directory?`);
-  return { openBackupsDir: local.openBackupsDir, replayRun: replay.replayRun, publicationCandidates: replay.publicationCandidates };
+  const lineOf = (label: string | null): RegimeLine => (versions.isRegimeVersion(label) ? versions.REGIME_LINE[label as string] : "main");
+  return { openBackupsDir: local.openBackupsDir, replayRun: replay.replayRun, lineOf };
 }
 
 /**
  * Replay one regime run of the backups through the SDK and compare every day it published. With `runId`, that run
- * (a succeeded regime run with a vintage). Without, the newest succeeded run with a vintage that published on the
- * main line: the line of its methodology label (the served one), and every run of a copy with no methodology table.
+ * (a succeeded regime run with a vintage). Without, the newest succeeded run with a vintage on the main line: the
+ * line of its methodology label (a beside run, v5, is never chosen), and every run of a copy with no methodology table.
+ * The choice reads the ledger tables only; the run's artifacts are read once, by the SDK's replay of that one run.
  */
 export async function replayRun(ctx: Ctx, o: { sdkDir: string; referenceJsDir?: string; runId?: number }): Promise<ReplayResult> {
   const sdkDir = resolve(o.sdkDir);
@@ -136,16 +143,19 @@ export async function replayRun(ctx: Ctx, o: { sdkDir: string; referenceJsDir?: 
   const runs = (await loadRuns(ctx)).filter((r) => r.tool === "regime" && r.status === "succeeded");
   const vintages = await loadTable(ctx, "analytics_data_vintages", (v) => v.tool_id === "regime");
   const hasVintage = new Set(vintages.map((v) => Number(v.run_id)));
+  const ledger = new Map(archive.table("analytics_ledger_runs").map((r) => [Number(r.id), r]));
   let run: (typeof runs)[number] | undefined;
   if (o.runId) run = runs.find((r) => r.id === o.runId);
   else {
-    const mainLine = new Set(sdk.publicationCandidates(archive, "regime", { line: "main" }).map((c) => Number(c.runId)));
-    run = [...runs].reverse().find((r) => hasVintage.has(r.id) && mainLine.has(r.id));
+    // The methodology table is small; a copy without it records no label, and every run is on the main line.
+    const labels = new Map(archive.table("analytics_ledger_methodology_versions").map((m) => [m.id, m.version_label ?? null]));
+    const onMainLine = (id: number): boolean => sdk.lineOf(labels.get(ledger.get(id)?.methodology_version_id ?? "") ?? null) === "main";
+    run = [...runs].reverse().find((r) => hasVintage.has(r.id) && onMainLine(r.id));
   }
-  if (!run) throw new Error(o.runId ? `run ${o.runId} is not a succeeded regime run with a vintage` : "no succeeded regime run with a vintage that published on the main line");
+  if (!run) throw new Error(o.runId ? `run ${o.runId} is not a succeeded regime run with a vintage` : "no succeeded regime run with a vintage on the main line");
   const vin = vintages.find((v) => Number(v.run_id) === run.id);
   if (!vin) throw new Error(`run ${run.id} has no frozen vintage`);
-  const runKey = archive.table("analytics_ledger_runs").find((r) => Number(r.id) === run.id)?.run_key;
+  const runKey = ledger.get(run.id)?.run_key;
   if (!runKey) throw new Error(`run ${run.id} is not in the SDK reader's run ledger as of backup ${ctx.asOf.backup}`);
 
   // 2. The SDK's replay: the run's vintage, its published rows (payload verified) and every day it computes.
@@ -212,7 +222,8 @@ export async function replayRun(ctx: Ctx, o: { sdkDir: string; referenceJsDir?: 
     run: { id: run.id, asof: run.asof, createdAt: run.createdAt },
     methodology: { label: r.run.methodology.label, version: r.version, line: r.line, panels: [...r.panels] },
     vintage: { id: vin.id!, knowledgeCutoff: vin.knowledge_time_cutoff!, marketCutoff: vin.market_time_cutoff!, memberCount: Number(vin.member_count), manifestDigest: vin.manifest_digest ?? "" },
-    // The SDK's reader generates the input only when every member of the vintage is in the backups.
+    // The versions the SDK read: its collector refuses a copy that lacks any member of the vintage ("incomplete local
+    // copy"), so a replay that returns read exactly the vintage's members. tests/audit.test.ts removes one as a red control.
     inputs: { memberRows: members.length, sourceValueVersions: r.inputs.identity?.memberCount ?? 0, indicators: Object.keys(raw).filter((k) => !(EXTRAS as readonly string[]).includes(k)).length, extras },
     sdk: { dir: sdkDir, commit },
     daysCompared: days,
