@@ -35,6 +35,11 @@ macro/on-chain regime index.** `contract/src/regime.js` is the shared
 `backend/src/analytics/analyze/regime.ts` is a dead, unused second
 implementation — see §7.
 
+Since issue 1765 `computeRegime` is the recompute driver of the SDK's staged
+regime engine (`packages/analyst-sdk/src/engine/`, §8.3): every figure comes
+from its score, fit and combine stages, and `analyze/compute.ts` keeps the
+names callers import.
+
 The compute code lives in `packages/analyst-sdk/src/` (D57). The backend's
 `backend/src/analytics/analyze/*.ts` and `backend/src/analytics/transform/*.ts`
 files are one-line re-exports of it, apart from the dead `analyze/regime.ts`.
@@ -163,8 +168,8 @@ a published number ships with a new methodology version.
    compared only to its own history — a macro spread in percentage points and
    a DeFi TVL figure in tens of billions of dollars become directly
    comparable 0..1 quantities without any manual unit reconciliation.
-2. **Sign alignment** — `sign >= 0 ? rank : 1 - rank` (inline in
-   `computeRegime`, `analyze/compute.ts:87`), driven by the indicator's `sign`
+2. **Sign alignment** — `sign >= 0 ? rank : 1 - rank` (the score stage,
+   `scoreIndicators` in `engine/score.ts`), driven by the indicator's `sign`
    field. After this step, `1.0` always means "most risk-on this indicator has
    been within its rank window," regardless of whether the raw series moves with or
    against risk appetite.
@@ -185,7 +190,7 @@ a published number ships with a new methodology version.
 ## 5. Panel → composite → bucketing → smoothing
 
 - **Panel index** — the weighted mean of that panel's sign-aligned percentiles
-  on each day (`weightedMeanOnDay`, `analyze/compute.ts:247`), using the
+  on each day (`weightedMeanOnDay`, `engine/combine.ts`), using the
   weights from step 3 above.
 - **Composite** — the naive 1/n mean over the included panels (`PANELS`, from
   `PANEL_MEMBERSHIP`; `computeRegime` in `analyze/compute.ts`). Under `v4` it is
@@ -204,7 +209,7 @@ a published number ships with a new methodology version.
   two-panel set (`runRegime(..., { panels: ["macro", "onchain"] })`, CLI
   `--panels macro,onchain`).
 - **Bucketing** — the composite itself is bucketed by `bucketFn`
-  (`analyze/compute.ts`): `< 0.33 → risk_off`, `> 0.67 → risk_on` (strict,
+  (`engine/combine.ts`, re-exported by `analyze/compute.ts`): `< 0.33 → risk_off`, `> 0.67 → risk_on` (strict,
   exclusive upper), else `neutral`. `NaN → null`. The composite is already a
   normalized 0..1 number (a mean of weighted means of percentile ranks), so it
   is not ranked a second time before the cut (methodology `v4`,
@@ -224,7 +229,7 @@ a published number ships with a new methodology version.
   `contract/src/regime.js`'s `classifyRegime` is a *different, secondary*
   function that exists for other surfaces to reuse the same 0.33/0.67
   thresholds, not the thing that labels `/regime`.
-- **Smoothing** — `smoothRegimes` (`analyze/compute.ts`) turns the raw
+- **Smoothing** — `smoothRegimes` (`engine/combine.ts`, re-exported by `analyze/compute.ts`) turns the raw
   daily bucket into the published label via **5-day confirmation** (a new
   bucket must hold for `CONFIRMATION_DAYS = 5` consecutive days before the
   published label moves) **OR 2σ fast-track** (`FAST_TRACK_SIGMA = 2.0`): if
@@ -583,7 +588,9 @@ backtest that trades them do.
 at `backend/src/analytics/prepare.ts`) is the one place the axis, alignment,
 transforms, fill policies and forward-fill ages are built. Its callers are
 `backend/src/analytics/index.ts::runAnalytics` (production),
-`packages/analyst-sdk/src/run.ts::runRegime`, the research comparisons
+`packages/analyst-sdk/src/engine/prepare.ts::prepareModel` (the prepare stage of
+the SDK's engine, §8.3, which `runRegime`, `runModel` and `computeKeptRegime`
+run), the research comparisons
 `computeRegimeEqComparison` and `computeWeightingComparison`, and
 `backend/scripts/regime-goldens-regenerate.ts`. `scripts/tests/unit/regime-seam-guard.test.ts`
 fails on any other call to the axis or alignment primitives for regime inputs. See [D59](../decisions.md#d59).
@@ -769,6 +776,64 @@ between the two lives in `packages/analyst-sdk/src/series-ids.ts`
   `backend/tests/analytics-offline-replay.test.ts` freezes the SDK fixture into a
   vintage and reloads it offline. The test rebuilds the committed golden report
   byte for byte.
+
+### 8.3 The staged engine (issue 1765)
+
+Every regime figure the SDK computes comes from one engine,
+`packages/analyst-sdk/src/engine/`, driven by a model value (`RegimeModel`,
+`MODELS`, `modelOf` in `src/model/`). The model states the registry, the
+derived series, the rules, the history mode, the panels and the backtest rules;
+the engine reads the model, never the version tag.
+
+| Stage | File | What it does |
+|---|---|---|
+| prepare | `engine/prepare.ts` | The run input through `prepareRegimeInputs` (D59), after `withDerivedSeries` when the model declares derived series (v5). |
+| score | `engine/score.ts` | Every registry indicator ranked once per axis within its rank window, sign-aligned. A recomputing run masks a day past the 120-day forward-fill cap first; a kept run reads no ages. |
+| fit | `engine/fit.ts` | Each panel's inverse-correlation weights on the days the driver fits. A panel reads only its own indicators. |
+| combine | `engine/combine.ts` | Panel indices, the composite over an explicit `included` list in panel order, its normalisation, the trailing percentiles and the labels, each rule read from the model's rules. Every array is new. |
+
+Two drivers run the stages (`engine/history.ts`):
+
+- **recompute** (v3, v4): score once with ages, fit the refresh calendar of the
+  rules (`refitDays`: every `intervalDays` from the anchor, plus the run's last
+  day under v3) once over every panel asked for, then combine once per panel
+  set. Each panel set's result has exactly the keys a run over that set alone
+  has, so a two-panel result never gains the factor panel's weights from the
+  shared fit. `computeRegime` is this driver over one panel set.
+- **kept** (v5, §13): score without ages, fit each day the run computes on that
+  day (every day of a first run; only the as-of day of a run given kept days),
+  lay the kept days and the computed ones on the axis, and derive the composite
+  and the labels. `computeKeptRegime` is this driver.
+
+`runModel(model, input, { asof, start, kept, included, panels, factor, cache, ... })`
+(`engine/run-model.ts`) prepares the input, runs the model's driver over every
+panel set asked for, and adds the correlations and the backtest. It returns the
+`RunResult` shape with the same JSON bytes, plus the model, the prepared inputs
+and one result per panel set as non-enumerable properties. `runRegime` is
+`runModel` behind its option checks, its input resolution, its ratio step and
+its day rule, and takes a `model` option. `replayRun` replays a run through
+`runModel` under `modelOf(version)`, with the kept days its report names.
+
+`computeRegime(panelData, dateAxis, options)` takes one options object
+(`panels`, `ages`, `maxForwardFillDays`, `rules`, `indicators`, `carried`,
+`recordWeightFits`) when called with exactly three arguments, the third a
+non-array object. Every other call is the positional form, deprecated for one
+release: its `version` maps to `REGIME_RULES[version]`, and `indicators`
+defaults to `INDICATORS`.
+
+**The stage cache.** `stageCache()` (`engine/cache.ts`) is a Map the caller
+owns, with hit and miss counters per stage. `runModel(..., { cache })` stores
+each stage's value under `<input digest>|<stage>|<canonical stage params>`. The
+input digest is the sha256 of the raw input, computed once per input object.
+Each stage's params name its rules and its upstream stage's params, so a
+research variant recomputes only the stages it changes: a new label cut runs
+the combine stage alone, and a new rank window scores again. A stage output is
+never hashed, because canonical JSON turns NaN into null. Cached values are
+shared between runs and must never be written to.
+`packages/analyst-sdk/tests/engine.test.ts` counts one score-stage miss for one
+v4 run, and `tests/model-equivalence.test.ts` proves `runModel` over each preset
+equals the engine it replaced, and the v4 report equals the committed golden
+byte for byte.
 
 ## 9. Deliberate v0 divergences
 
@@ -2395,9 +2460,11 @@ false), and ratios are read as stored, from adjusted closes.
 
 ### 13.3 The kept record
 
-`analyze/kept-regime.ts` computes the rest from kept days. A kept day is its date,
-its panel indices and its signed scores. The module lays the kept days on one
-daily axis, where a day with no kept figure is a gap, and derives in date order:
+`analyze/kept-regime.ts` computes the rest from kept days, through the kept
+driver of the staged engine (`keptHistory` in `engine/history.ts`, §8.3). A kept
+day is its date, its panel indices and its signed scores. The module lays the
+kept days on one daily axis, where a day with no kept figure is a gap, and
+derives in date order:
 
 - **Composite mean** m(t): the equal-weight mean of the included panel indices
   present on t. It is undefined when none is present.
