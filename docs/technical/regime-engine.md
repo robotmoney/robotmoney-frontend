@@ -28,9 +28,11 @@ convention.
 
 ## 1. The one-sentence answer
 
-**`packages/analyst-sdk/src/analyze/compute.ts`'s `computeRegime`, invoked by
-`backend/src/analytics/index.ts::runAnalytics`, is the file that computes the published
-macro/on-chain regime index.** `contract/src/regime.js` is the shared
+**`packages/analyst-sdk/src/analyze/compute.ts`'s `computeRegime`, reached through
+the SDK's `runModel` from `backend/src/analytics/compute.ts::computeModel`, is the file
+that computes the published macro/on-chain regime index.** `computeModel` runs one
+model for one ledger run; the producer's regime tick and
+`backend/src/analytics/index.ts::runAnalytics` call it (§8.0). `contract/src/regime.js` is the shared
 0.33/0.67 bucketing *rule* (not the composite math), and
 `backend/src/analytics/analyze/regime.ts` is a dead, unused second
 implementation — see §7.
@@ -44,7 +46,9 @@ The compute code lives in `packages/analyst-sdk/src/` (D57). The backend's
 `backend/src/analytics/analyze/*.ts` and `backend/src/analytics/transform/*.ts`
 files are one-line re-exports of it, apart from the dead `analyze/regime.ts`.
 In this document a path that starts `analyze/` or `transform/` names the package
-file, and `analytics/index.ts` names `backend/src/analytics/index.ts`.
+file, and `analytics/index.ts` names `backend/src/analytics/index.ts` (likewise
+`analytics/extract.ts`, `analytics/inputs.ts`, `analytics/compute.ts` and
+`analytics/publish.ts`).
 
 ## 2. Indicator universe
 
@@ -197,13 +201,14 @@ a published number ships with a new methodology version.
   NaN, and its label null, on a day any included panel has no index (issue
   1741, D93, which amends D89 item 2). `v3` averages the panels finite that
   day. Today that is macro, onchain and
-  factor, one third each (D89). `analytics/index.ts` reads two results: `r2`
-  over the included panels (the composite) and `r3` over `ALL_PANELS` (the
-  index of every panel, included or not). Since `PANELS` equals `ALL_PANELS`
+  factor, one third each (D89). `analytics/compute.ts` reads two results of
+  one `runModel` call (`factor: true`): `result` over the included panels (the
+  composite) and `factor` over `ALL_PANELS` (the index of every panel, included
+  or not). Since `PANELS` equals `ALL_PANELS`
   in the same order, and the composite sums the panels in the order given,
-  the main line calls `computeRegime` once and `r3` is `r2` (issue 1765). A
-  run given another panel set (the two-panel replay below) calls it a second
-  time over `ALL_PANELS`. Before issue 1708 the composite was
+  the main line computes once and `factor` is `result` (issue 1765). A run
+  given another panel set (the two-panel replay below) computes a second panel
+  set over `ALL_PANELS`. Before issue 1708 the composite was
   macro and onchain only. The frozen originals under
   `packages/analyst-sdk/tests/fixtures/originals` are replayed with that
   two-panel set (`runRegime(..., { panels: ["macro", "onchain"] })`, CLI
@@ -372,7 +377,7 @@ classification. Neither is the production path:
   `bucketFn` either.
 
 **The one production classifier is `bucketFn` in `analyze/compute.ts:266`,**
-fed by `computeRegime`, invoked from `analytics/index.ts::runAnalytics`. If
+fed by `computeRegime`, reached through `runModel` from `analytics/compute.ts`. If
 you're reconciling a published regime label against the methodology, this is
 the function to read.
 
@@ -389,8 +394,8 @@ match this document.
 flowchart TD
     A["access: liveDataSource.fetchIndicators\naccess/data-source.ts"] --> B["extract: per-source parsers\nextract/sources.ts, fred.ts, yahoo.ts,\ndefillama.ts, coinmetrics.ts, ..."]
     F["store: loadRawIndicatorHistory\n(persisted floor)\nstore/raw-history-store.ts"] --> M
-    B --> M["mergeSeries (fetched wins on overlap)\ntransform/math.ts::mergeSeries\ncalled from index.ts::runAnalytics"]
-    M --> G["store: saveRawIndicatorHistory\n(merged floor persisted back)\nstore/raw-history-store.ts"]
+    B --> M["mergeSeries (fetched wins on overlap)\ntransform/math.ts::mergeSeries\ncalled from analytics/extract.ts::extract"]
+    M --> G["store: saveRawIndicatorHistory\n(only the points that change the floor)\nstore/raw-history-store.ts"]
     M --> H["align: alignDailyForwardFill /\nalignDailyZeroFill + buildDateAxis\ntransform/math.ts"]
     H --> I["transform: applyTransform per\nindicator.transform\ntransform/transforms.ts::applyTransform"]
     H --> AGE["forwardFillAge (#402 cap input)\ntransform/math.ts::forwardFillAge"]
@@ -408,9 +413,83 @@ flowchart TD
     T --> U["view: /regime, /regime_eq\nfrontend/public/views/regime*.html"]
 ```
 
-Every stage above is orchestrated end to end by
-`backend/src/analytics/index.ts::runAnalytics` — the entry point named in
-`README.md`'s pointer paragraph.
+Every stage above runs in the analytics stage modules (§8.0). The producer's
+regime tick (`backend/src/producer/index.ts::runRegimeTick`) runs them for every
+live model at once; `backend/src/analytics/index.ts::runAnalytics`, the entry
+point named in `README.md`'s pointer paragraph, runs them for one run.
+
+### 8.0 The stages and the producer tick (issue 1765, phase 3)
+
+`backend/src/analytics/` splits one run into four stage modules:
+
+- **`extract.ts`** is the only stage that calls the source. It reads the raw floor
+  (`raw_indicator_history`) once, fetches every series any live model reads
+  (`collectionRegistry`: the registry and the collected series, including the
+  five `v5` reads) in one acquisition pass, merges, and writes back only the
+  points that change the floor. It also fetches the backtest extras, cut at the
+  as-of day, and collects the model portfolio inventory. A research run also
+  fetches its research inputs and writes the fresh MNA rows here.
+- **`inputs.ts`** turns what extract collected into one model's input: the day
+  rule (§8.1), the committed ledger read (AN-16), the model's slice of that read
+  (`inputHistoryFromStorage` of the values under the model's own read keys,
+  `readKeysOf` of its series mapping), the floor fallback for a source that
+  records no acquisition, the ratio step and its dropped ratios (D-h), and the
+  input evidence (issue 1421).
+- **`compute.ts`** makes one `runModel` call and one `publishedRows` call per
+  model (the SDK's engine and its one row builder). The model value decides
+  everything: `model.history` picks the engine (a kept model reads its kept
+  days first), and the backtest runs under `model.backtest`. The correlations
+  and the backtest stay on the platform, so their failure degrades the run to a
+  warning, as before. No file under `backend/src/analytics` calls
+  `computeRegime`, `computeKeptRegime` or a row builder directly, and none
+  branches on a version literal (`scripts/tests/unit/regime-seam-guard.test.ts`).
+- **`publish.ts`** begins the ledger run before any source call, freezes the
+  vintage, submits the telemetry and the one terminal package.
+
+`runAnalytics` (`index.ts`) is a thin wrapper over these stages for one model,
+plus the research signals: every worker, script and test caller uses it.
+
+**The producer tick.** `runRegimeTick` runs every live model of a regime tick (the
+main line, then each version `REGIME_LINE` marks `beside`) over one extract and
+one committed read:
+
+1. Begin the main-line run, then each beside run in its own `try`. A beside
+   run that cannot begin is logged (`regime failed for methodology <v>`) and
+   dropped from the tick. The main line's begin failure is the tick's error;
+   the beside runs still go on.
+2. Extract once, recorded in every run's telemetry.
+3. Read the committed inputs once, at one database-clock cutoff, for the union
+   of the models' storage keys (`GET /api/analytics/committed-inputs` with one
+   `methodology` parameter per model).
+4. For each model, main line first: slice the read, `runModel`, `publishedRows`,
+   then freeze its vintage with its own run id and methodology, the SHARED
+   cutoff, and only the version ids under its own read keys (the vintage
+   refuses an id outside its methodology's keys), then submit its terminal
+   package.
+
+A failed beside run is logged with the phrase `regime failed` (the standing soak
+check reads it) and never changes or fails the main-line run. A failed main-line
+run does not stop the beside runs. The tick answers with the main-line run's
+result, or throws its error. Research ticks keep their own path: one
+`runAnalytics` run with its own extract. Pinned by
+`backend/tests/producer-tick-extract-once.test.ts` and
+`backend/tests/producer-boundary.test.ts`.
+
+**The raw floor.** A run reads `raw_indicator_history` once and sends the floor
+writer only the points whose stored value is absent or beyond the key's D56
+tolerance (`withinTolerance`, the store's own rule). It builds the floor as
+committed from the same rule instead of reading it back. The regime computes
+from the ledger heads, not the floor, whenever its registry fetch recorded
+acquisitions (AN-16); the committed floor is its input only for a source that
+records none (hermetic, fixture). No other reader needs a run's write-and-read
+round trip, because each reads the table itself: the store's own tolerance check
+(`store/raw-history-store.ts`), the floor seed gap fill (`store/floor-seed.ts`),
+the seed provenance cleanup (`store/seed-provenance.ts`), the admin views
+(`api/routes/admin.ts`), the public analytics archive
+(`api/routes/public-analytics.ts`), the gap detector (`ops/gap-detector.ts`), the
+cutover parity check (`analytics/cutover/parity.ts`) and the series registry
+(`ops/series-registry.ts`). A tick whose provider serves the values the floor
+holds writes no point and moves no row's `xmin`.
 
 ### 8.1 Run semantics (as-of, forward-fill, replay)
 
@@ -510,8 +589,9 @@ construction.
 **Persistence tolerance (D56) and the committed dataset.** A point within its
 source's D56 tolerance of the stored value is not rewritten (Yahoo ratios relative
 5e-6, Yahoo float32 relative 1e-6). Since issue 1421 a run computes only from what
-ingestion committed: `runAnalytics` runs every source call first, reads the raw
-floor back after writing it, and takes each backtest extra and research input from
+ingestion committed: a run makes every source call first (`analytics/extract.ts`),
+computes from the floor as committed (built under the same tolerance rule, §8.0)
+or from the ledger heads, and takes each backtest extra and research input from
 the ledger head `saveSourceAcquisition` returns for it. A within-tolerance re-fetch
 therefore reaches the computation as the stored value under the stored version, and
 a material revision as its new version, so a replay from the run's frozen vintage
@@ -587,10 +667,10 @@ backtest that trades them do.
 **The seam.** `prepareRegimeInputs` (`packages/analyst-sdk/src/prepare.ts`, shimmed
 at `backend/src/analytics/prepare.ts`) is the one place the axis, alignment,
 transforms, fill policies and forward-fill ages are built. Its callers are
-`backend/src/analytics/index.ts::runAnalytics` (production),
 `packages/analyst-sdk/src/engine/prepare.ts::prepareModel` (the prepare stage of
 the SDK's engine, §8.3, which `runRegime`, `runModel` and `computeKeptRegime`
-run), the research comparisons
+run, and through `runModel` production's `backend/src/analytics/compute.ts`),
+the research comparisons
 `computeRegimeEqComparison` and `computeWeightingComparison`, and
 `backend/scripts/regime-goldens-regenerate.ts`. `scripts/tests/unit/regime-seam-guard.test.ts`
 fails on any other call to the axis or alignment primitives for regime inputs. See [D59](../decisions.md#d59).
@@ -849,7 +929,7 @@ three places:
    original vintages. v1 has no analogue:
    `analyze/regime-versions.ts::CURRENT_REGIME_VERSION = "v3"` explicitly
    means "no frozen lockout — every run recomputes the full history on
-   best-available raw data," and `analytics/index.ts::runAnalytics` persists
+   best-available raw data," and the backend's analytics run persists
    every row from that fresh recompute, every run. Measured effect on v0's
    own real data: max |Δcomposite| 0.0725, max |Δpercentile| 0.249, 9 regime
    labels differ over 2,960 published rows — before accounting for anything
@@ -888,13 +968,13 @@ three places:
 **Storage contract.** `raw_indicator_history` persists the **sparse merged
 real observations only** — never a dense forward-filled view
 (`store/raw-history-store.ts`). Forward-filling happens at **read** time
-(`alignDailyForwardFill`, called from `analytics/index.ts::runAnalytics`),
+(`alignDailyForwardFill`, reached from the backend's run through the SDK's `runModel`),
 never at write time. This is the deliberate divergence from v0's own storage
 shape (v0's `writeRawHistoryCsv` persists the dense aligned series — see A1's
 `writeLongHistoryCsv` row) and it is *why* v1 can compute an honest
 `forward_fill_age_days` per indicator per day (`forwardFillAge`,
 `transform/math.ts:352`, surfaced on every indicator in the regime snapshot
-by `buildRichIndicators`, `analytics/index.ts:529-549`): `0` on a day with a
+by `buildRichIndicators`, which the SDK's row builder `publishedRows` calls): `0` on a day with a
 real print, the day count since the last real observation otherwise, `NaN`
 before any observation has ever been seen, reset to `0` immediately on the
 next real print (no special-case "recovery" code path). `forward_fill_expired`
@@ -2501,9 +2581,12 @@ reader is served only rows that have a label. The as-of row carries the 30
 indicator details, the panel weights with their fit date, the panels, the
 correlations and the backtest.
 
-The producer's regime tick runs the main-line run first, then one run for each
-beside version. The runs share one fetch memo, so a tick makes one provider
-request per series. A failed `v5` run never fails or changes the main-line run.
+The producer's regime tick (§8.0) begins the main-line run first, then one run
+for each beside version, extracts once for all of them and reads the committed
+inputs once for the union of their keys, so a tick makes one acquisition pass
+and one committed read. The `v5` run's vintage freezes the same cutoff as the
+main line's, with only the versions under its own keys. A failed `v5` run never
+fails or changes the main-line run.
 
 ### 13.5 Storage, publication and serving
 
@@ -2529,8 +2612,9 @@ nothing answers `latest` null and an empty history. The regime page reads
 the tag beside the title.
 
 The five raw series are collected by every regime run as collected series
-(§2.1). The committed-inputs read takes a methodology parameter, so a `v5` run
-reads, and its vintage freezes, the main-line regime keys plus the five. The
+(§2.1). The committed-inputs read takes a methodology parameter (repeated, it
+reads the union of the named versions' keys), so a `v5` run reads, and its
+vintage freezes, the main-line regime keys plus the five. The
 platform stores one `yahoo:^VIX` stream (D74): the VIX indicator and the
 `VIX_TERM` denominator both read it, the denominator under its own input id.
 `UPVOL_SHARE` reads the run's own `^GSPC` closes, the backtest input `SPX`. No
