@@ -10,7 +10,8 @@
 // checksums (equal to sha256(payload_bytes) by the CHECK on
 // analytics_output_snapshots), equal to the sha256 of the canonical bytes of
 // the rows the direct run computed. Wave 3 of issue 1765 switches that
-// reference to the SDK's publishedRows.
+// reference to the SDK's publishedRows. Box 6 names publishedRows, so this
+// first form leaves the box open until wave 3 lands.
 //
 // Before D-f, parseSnapshotRow added `bucketThresholds: null` and
 // `extras: null` to every row. No row builder sets either key, and
