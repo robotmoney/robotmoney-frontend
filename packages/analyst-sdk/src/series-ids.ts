@@ -210,17 +210,10 @@ export const V5_SERIES_MAPPING: readonly SeriesMapping[] = Object.freeze(validat
 /** An input id read from another input's stream when the input omits it: STORED_UNDER, and under v5 the VIX_TERM denominator from VIX. */
 export const V5_STORED_UNDER: Readonly<Record<string, string>> = Object.freeze({ ...STORED_UNDER, [V5_INPUT_IDS.vix]: "VIX" });
 
-// `version` is a methodology tag (analyze/regime-versions.ts REGIME_VERSIONS). It is typed
-// as a string so this module imports no calculation code: the public analytics routes read it.
-/** The storage mapping a methodology version reads (issue 1753): SERIES_MAPPING itself for v3, v4 and any other tag. */
-export function seriesMappingFor(version: string): readonly SeriesMapping[] {
-  return version === "v5" ? V5_SERIES_MAPPING : SERIES_MAPPING;
-}
-
-/** The stored-under aliases a methodology version resolves its input with: STORED_UNDER itself for v3 and v4. */
-export function storedUnderFor(version: string): Readonly<Record<string, string>> {
-  return version === "v5" ? V5_STORED_UNDER : STORED_UNDER;
-}
+// Which mapping and which aliases a methodology version reads is a fact of its
+// preset (issue 1765): seriesMappingFor and storedUnderFor in
+// model/preset-series.ts, re-exported by model/presets.ts. No function here
+// compares a version tag.
 
 /** The storage keys only a v5 run reads: the five collected series (the other two v5 inputs are main-line keys). */
 export const V5_ONLY_STORAGE_KEYS: readonly string[] = Object.freeze(
@@ -363,7 +356,7 @@ export function inputHistoryFromStorage(rows: readonly StoredObservation[], mapp
 export function resolveInputHistory(
   input: RawIndicatorHistory,
   mapping: readonly SeriesMapping[] = SERIES_MAPPING,
-  // The aliases of the mapping's version (issue 1753, storedUnderFor). Default STORED_UNDER.
+  // The aliases of the mapping's version (issue 1753, storedUnderFor in model/presets.ts). Default STORED_UNDER.
   storedUnder: Readonly<Record<string, string>> = STORED_UNDER,
 ): RawIndicatorHistory {
   const resolved = new Map<string, string>(); // inputId -> the input name it is read from

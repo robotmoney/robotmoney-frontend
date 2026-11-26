@@ -25,7 +25,9 @@
 // is finished before it runs, and the SDK has no download client (analyst SDK
 // requirements section 2).
 import { gunzipSync } from "node:zlib";
-import { SERIES_MAPPING, STORED_UNDER, V5_SERIES_MAPPING, seriesMappingFor, type SeriesMapping } from "../series-ids.ts";
+import { SERIES_MAPPING, STORED_UNDER, V5_SERIES_MAPPING, type SeriesMapping } from "../series-ids.ts";
+// The storage half of the presets, never model/presets.ts: this module must reach no calculation code (see inputIdsOfLabel).
+import { seriesMappingFor } from "../model/preset-series.ts";
 import { CALCULATED_SERIES, REPLAY_CSV_HEADER, SOURCE_CSV_HEADER, type InputKind } from "../input/load.ts";
 
 export interface FileRecord {
@@ -661,11 +663,12 @@ export function seriesForStorageKey(key: string): string | null {
 }
 
 // The key-to-id map a run of methodology `label` reads its vintage through: its
-// version's storage mapping (seriesMappingFor). A label that is no regime
-// version (the synthetic fixtures' label regime-v3) gets the main-line mapping,
-// which seriesMappingFor returns for any tag but v5. The label stays a string
-// here, never checked against analyze/regime-versions.ts: the public analytics
-// routes import this module and must reach no calculation code
+// version's storage mapping (seriesMappingFor, the storage half of the presets
+// in model/preset-series.ts). A label that names no preset (the synthetic
+// fixtures' label regime-v3) gets the main-line mapping. The label stays a
+// string here, never checked against analyze/regime-versions.ts, and this
+// module imports model/preset-series.ts, never model/presets.ts: the public
+// analytics routes import this module and must reach no calculation code
 // (backend/tests/api/public-analytics-archives.test.ts).
 function inputIdsOfLabel(label: string | null): ReadonlyMap<string, string> {
   return inputIdsOf(label === null ? SERIES_MAPPING : seriesMappingFor(label));

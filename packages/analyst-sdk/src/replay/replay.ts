@@ -37,7 +37,8 @@ import {
 import { computeBacktest, stripDailyFromSnapshot, REGIME_BACKTEST_RULES } from "../analyze/backtest.ts";
 import { computeCorrelations } from "../analyze/correlations.ts";
 import { cutAtAsof } from "../prepare.ts";
-import { resolveInputHistory, seriesMappingFor, storedUnderFor } from "../series-ids.ts";
+import { resolveInputHistory } from "../series-ids.ts";
+import { seriesMappingFor, storedUnderFor } from "../model/presets.ts";
 import { ratioDeclarationsFor, ratiosFromLegs } from "../transform/ratios.ts";
 import { assertRequiredCoverage } from "../coverage.ts";
 import { canonicalStringify, type RegimeSnapshotRow } from "../report/canonical.ts";

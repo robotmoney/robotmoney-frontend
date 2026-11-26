@@ -38,7 +38,8 @@ import {
   type RunOptions,
 } from "../src/index.ts";
 import { ratioDeclarationsFor, ratiosFromLegs } from "../src/transform/ratios.ts";
-import { resolveInputHistory, seriesMappingFor, storedUnderFor } from "../src/series-ids.ts";
+import { resolveInputHistory } from "../src/series-ids.ts";
+import { seriesMappingFor, storedUnderFor } from "../src/model/index.ts";
 
 setDefaultTimeout(120_000);
 

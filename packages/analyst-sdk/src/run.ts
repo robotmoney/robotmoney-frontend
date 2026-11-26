@@ -15,7 +15,8 @@ import { computeKeptRegime, withDerivedSeries, type KeptRegimeRun } from "./anal
 import { CURRENT_REGIME_VERSION, REGIME_DERIVED_SERIES, REGIME_REGISTRY, REGIME_VERSIONS, isRegimeVersion, regimeRulesOf, type RegimeRules, type RegimeVersion } from "./analyze/regime-versions.ts";
 import { cutAtAsof, latestCompleteDay, missingOnDay, prepareRegimeInputs, type MissingIndicator, type PreparedRegimeInputs } from "./prepare.ts";
 import { LEDGER_EXTRA_KEYS } from "./extras.ts";
-import { StoredRatioOnlyError, resolveInputHistory, seriesMappingFor, storedUnderFor } from "./series-ids.ts";
+import { StoredRatioOnlyError, resolveInputHistory } from "./series-ids.ts";
+import { seriesMappingFor, storedUnderFor } from "./model/presets.ts";
 import { derivedInputIds } from "./transform/derived.ts";
 import { ratioDeclarationsFor, ratiosFromLegs } from "./transform/ratios.ts";
 import { assertRequiredCoverage } from "./coverage.ts";

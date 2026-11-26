@@ -3,7 +3,7 @@
 // COLLECTED_SERIES, and an id in both throws.
 import { describe, expect, test } from "bun:test";
 import {
-  INDICATORS, PANELS, SERIES_MAPPING, V5_DERIVED_SERIES, V5_INPUT_IDS, V5_SERIES_MAPPING, V5_ONLY_STORAGE_KEYS, consumerStorageKeys, derivedInputIds,
+  INDICATORS, PANELS, SERIES_MAPPING, V5_DERIVED_SERIES, V5_INPUT_IDS, V5_SERIES_MAPPING, V5_STORED_UNDER, V5_ONLY_STORAGE_KEYS, consumerStorageKeys, derivedInputIds,
   inputHistoryFromStorage, parseRawHistory, requireComplete, resolveInputHistory, runRegime, seriesMappingFor, storedUnderFor, toHistory, buildReport, STORED_UNDER,
 } from "../src/index.ts";
 import { COLLECTED_SERIES, collectedSourceId, collectionRegistry } from "../src/extract/collected-series.ts";
@@ -168,6 +168,17 @@ describe("the five collected series of methodology v5 (issue 1753)", () => {
     }
     // The main-line resolution leaves the same names alone.
     expect(resolveInputHistory({ "yahoo:^SKEW": pts })).toEqual({ "yahoo:^SKEW": pts });
+  });
+
+  // Issue 1765: the storage a version reads is a fact of its preset (model/preset-series.ts), read from a table.
+  test("the v5 preset resolves its input with V5_STORED_UNDER; a label that names no preset reads the main-line storage", () => {
+    expect(storedUnderFor("v5")).toBe(V5_STORED_UNDER);
+    expect(storedUnderFor("v3")).toBe(STORED_UNDER);
+    // The archive's synthetic fixtures label their runs regime-v3; an own-property lookup never reads the prototype.
+    for (const label of ["regime-v3", "v6", "V5", "", "toString", "__proto__", "constructor"]) {
+      expect(seriesMappingFor(label), label).toBe(SERIES_MAPPING);
+      expect(storedUnderFor(label), label).toBe(STORED_UNDER);
+    }
   });
 
   test("a v4 run gives identical output with and without the five series in its input", async () => {

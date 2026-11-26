@@ -19,7 +19,8 @@ import { computeCorrelations } from "../../packages/analyst-sdk/src/analyze/corr
 import { computeRegime } from "../../packages/analyst-sdk/src/analyze/compute.ts";
 import { PANELS } from "../../packages/analyst-sdk/src/analyze/indicators.ts";
 import { cutAtAsof, prepareRegimeInputs } from "../../packages/analyst-sdk/src/prepare.ts";
-import { inputHistoryFromStorage, resolveInputHistory, seriesMappingFor, storedUnderFor } from "../../packages/analyst-sdk/src/series-ids.ts";
+import { inputHistoryFromStorage, resolveInputHistory } from "../../packages/analyst-sdk/src/series-ids.ts";
+import { seriesMappingFor, storedUnderFor } from "../../packages/analyst-sdk/src/model/index.ts";
 import { ratioDeclarationsFor, ratiosFromLegs } from "../../packages/analyst-sdk/src/transform/ratios.ts";
 import type { RegimeVersion } from "../../packages/analyst-sdk/src/analyze/regime-versions.ts";
 import type { RawIndicatorHistory } from "../../packages/analyst-sdk/src/types.ts";
