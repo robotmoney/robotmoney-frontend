@@ -11,7 +11,7 @@
 //   5. computeRegime once over the included panels (PANELS, every panel since
 //      D89), which also gives every panel's card; a run that passes another
 //      panel set computes ALL_PANELS a second time for the cards. Build the
-//      rich snapshot rows and persist them
+//      rich snapshot rows (the SDK's publishedRows) and persist them
 //   6. compute + persist the two research signals from REAL inputs.
 //
 // Run semantics (as-of, forward-fill, replay): docs/technical/regime-engine.md
@@ -26,14 +26,14 @@
 import { ALL_PANELS, DAY_RULE, INDICATORS, PANELS, V5_INPUT_IDS, type DayRule, type Panel } from "./analyze/indicators.ts";
 import { LEDGER_EXTRA_KEYS, RATIO_IDS, STORED_RATIO_IDS, STORED_UNDER, inputHistoryFromStorage, seriesMappingFor, storedIndicatorId } from "./extras.ts";
 // The kept record of a methodology published beside the main line (v5, issue 1753).
-import { computeKeptRegime, keptRegimeRows, type KeptDay } from "../../../packages/analyst-sdk/src/analyze/kept-regime.ts";
+import { computeKeptRegime, type KeptDay } from "../../../packages/analyst-sdk/src/analyze/kept-regime.ts";
 import { derivedInputIds } from "../../../packages/analyst-sdk/src/transform/derived.ts";
 import { ratioDeclarationsFor, ratiosFromLegs } from "../../../packages/analyst-sdk/src/transform/ratios.ts";
-import { computeRegime, type RegimeComputeResult } from "./analyze/compute.ts";
+import { computeRegime } from "./analyze/compute.ts";
 import { cutAtAsof, latestCompleteDay, missingOnDay, prepareRegimeInputs } from "./prepare.ts";
 import { IncompleteDayError } from "../../../packages/analyst-sdk/src/run.ts";
-// The per-indicator row detail lives in the SDK (issue 1751).
-import { buildRichIndicators } from "../../../packages/analyst-sdk/src/report/indicator-rows.ts";
+// The one row builder of every methodology version lives in the SDK (issue 1765).
+import { publishedRows } from "./report/published-rows.ts";
 import {
   mergeSeries,
 } from "./transform/math.ts";
@@ -50,7 +50,7 @@ import {
   REGIME_BACKTEST_RULES,
   type BacktestPayload,
 } from "./analyze/backtest.ts";
-import { CURRENT_REGIME_VERSION, REGIME_DERIVED_SERIES, REGIME_LINE, REGIME_REGISTRY, REGIME_RULES, REGIME_WEIGHT_REFRESH, type RegimeVersion } from "./analyze/regime-versions.ts";
+import { CURRENT_REGIME_VERSION, REGIME_DERIVED_SERIES, REGIME_LINE, REGIME_REGISTRY, REGIME_RULES, type RegimeVersion } from "./analyze/regime-versions.ts";
 import {
   liveDataSource,
   type AnalyticsDataSource,
@@ -579,7 +579,7 @@ export async function runAnalytics(
     collector.artifact("analyze", "regime-composite", { composite: nn(record.composite[last]), compositePercentile: null, regime: record.regime[last] ?? null });
 
     t0 = new Date();
-    const rows = keptRegimeRows(run, { source: sourceLabel, backtest, correlations }) as RegimeSnapshotRow[];
+    const rows = publishedRows(run, { source: sourceLabel, backtest, correlations });
     collector.stage("report", "ok", `built ${rows.length} snapshot row(s) for persistence`, t0);
     regimeSnapshotRows = rows;
     results.regime = {
@@ -653,7 +653,13 @@ export async function runAnalytics(
     });
 
     t0 = new Date();
-    const rows = buildSnapshotRows(dateAxis, r2, r3, transformed, lastRaw, ages, backtest, correlations, sourceLabel, regimeVersion);
+    // The SDK's row builder (issue 1765): `r2` is the composite run, `r3` the
+    // run over every panel, and the prepared inputs give the as-of row's
+    // indicator details.
+    const rows = publishedRows(
+      { kind: "complete", version: regimeVersion, dateAxis, result: r2, factor: r3, droppedRatios },
+      { source: sourceLabel, backtest, correlations, prepared: { transformed, lastRaw, ages, indicators: scoringRegistry } },
+    );
     collector.stage("report", "ok", `built ${rows.length} snapshot row(s) for persistence`, t0);
 
     // ISSUE #978 AC2: the current projection is NOT published here. The rows
@@ -1019,76 +1025,4 @@ function reportInputEvidence(evidence: InputEvidence, collector: TelemetryCollec
 // The same panels in the same order (issue 1765, D-e).
 function samePanelList(a: readonly Panel[], b: readonly Panel[]): boolean {
   return a.length === b.length && a.every((p, i) => p === b[i]);
-}
-
-// ─── snapshot-row builder (mirrors update.js writeFullHistoryCsv + writeSnapshot) ─
-
-function buildSnapshotRows(
-  dateAxis: string[],
-  r2: RegimeComputeResult,
-  r3: RegimeComputeResult,
-  transformed: Record<string, number[]>,
-  lastRaw: Record<string, { date: string; value: number } | null>,
-  ages: Record<string, number[]> = {},
-  backtest: BacktestPayload | null = null,
-  correlations: CorrelationsPayload | null = null,
-  source: string | null = null,
-  version: RegimeVersion = CURRENT_REGIME_VERSION,
-): RegimeSnapshotRow[] {
-  const rows: RegimeSnapshotRow[] = [];
-  const lastIdx = dateAxis.length - 1;
-  for (let i = 0; i < dateAxis.length; i++) {
-    if (!r2.regime[i]) continue; // days without enough history to classify are skipped
-    const isLatest = i === lastIdx;
-
-    // sign-aligned per-indicator percentile map (small; kept for every row).
-    const percentiles: Record<string, number> = {};
-    for (const ind of INDICATORS) {
-      const s = r2.signed[ind.id]?.[i];
-      if (typeof s === "number" && Number.isFinite(s)) percentiles[ind.id] = Number(s.toFixed(6));
-    }
-
-    // The full rich per-indicator objects (with sparkline + point-in-time panel
-    // weight) are the asof-snapshot view — expensive and only meaningful for the
-    // latest refresh (computeRegime exposes weights for the final refresh only).
-    // Historical rows carry the numeric columns + percentiles map, matching the
-    // original (regime-history.csv is per-date; regime-snapshot.json is asof-only).
-    const indicators = isLatest ? buildRichIndicators(i, r2, r3, transformed, lastRaw, dateAxis, ages) : [];
-    const panelWeights = isLatest
-      ? { macro: r2.weightsByPanel.macro, onchain: r2.weightsByPanel.onchain, factor: r3.weightsByPanel.factor,
-          // The fit date of those weights (issue 1739). v3 keeps its stored payload byte for byte.
-          ...(REGIME_WEIGHT_REFRESH[version].refitOnLastDay ? {} : { weightFitDate: r2.weightFitDate }),
-        }
-      : null;
-
-    rows.push({
-      date: dateAxis[i],
-      composite: nn(r2.composite[i]),
-      compositePercentile: nn(r2.compositePercentile[i]),
-      regime: r2.regime[i] ?? null,
-      macroRegime: r2.macroRegime?.[i] ?? null,
-      onchainRegime: r2.onchainRegime?.[i] ?? null,
-      factorRegime: r3.factorRegime?.[i] ?? null,
-      macroIndex: nn(r2.macroIndex?.[i]),
-      onchainIndex: nn(r2.onchainIndex?.[i]),
-      factorIndex: nn(r3.factorIndex?.[i]),
-      macroPercentile: nn(r2.macroPercentile?.[i]),
-      onchainPercentile: nn(r2.onchainPercentile?.[i]),
-      factorPercentile: nn(r3.factorPercentile?.[i]),
-      panelWeights,
-      version,
-      source,
-      percentiles,
-      indicators,
-      // Panel index cards rendered by the /regime view: every panel, included
-      // in the composite or not (ALL_PANELS; today all three are, D89).
-      // Asof-only, matching the other dashboard-level blobs below.
-      panels: isLatest ? ALL_PANELS : null,
-      // Backtest + predictive correlations are asof-only (baked on the latest row,
-      // matching the original snapshot); historical rows carry null.
-      backtest: isLatest ? backtest : null,
-      correlations: isLatest ? correlations : null,
-    });
-  }
-  return rows;
 }
