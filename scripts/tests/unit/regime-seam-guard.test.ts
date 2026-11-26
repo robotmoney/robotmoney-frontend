@@ -21,12 +21,15 @@
 //
 // RED CONTROL: the scanner is also run against planted violations and must flag
 // every one, so a scanner that matches nothing cannot pass for a clean tree.
+// Each rule also finds a file planted on disk by the same walk, and reports a
+// violation's line in the file even after a multi-line comment.
 //
 // Issue 1765 (AC 11): a methodology is one model value, and the version tag
 // names its preset (packages/analyst-sdk/src/model/presets.ts). No other file
 // under packages/analyst-sdk/src, and no file under backend/src/analytics,
-// compares with or switches on the literals 'v3', 'v4' or 'v5': the engine
-// reads the model, never the tag. The prepare stage of the SDK's regime engine
+// compares with or switches on the literals 'v3', 'v4' or 'v5', or tests a
+// list of them with includes, indexOf or a Set's has: the engine reads the
+// model, never the tag. The prepare stage of the SDK's regime engine
 // (src/engine/prepare.ts) is the seam's caller for runRegime, runModel and the
 // kept record; run.ts reaches it through runModel.
 //
@@ -76,9 +79,11 @@ function tsFiles(dir: string, out: string[] = []): string[] {
   return out;
 }
 
-// Strip line and block comments so a mention in prose is not a call.
+// Strip line and block comments so a mention in prose is not a call. A block
+// comment keeps its newlines (every other character becomes a space), so a
+// violation after a multi-line JSDoc block reports its line in the file.
 function code(src: string): string {
-  return src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+  return src.replace(/\/\*[\s\S]*?\*\//g, (c) => c.replace(/[^\n]/g, " ")).replace(/(^|[^:])\/\/.*$/gm, "$1");
 }
 
 type Violation = { file: string; line: number; text: string };
@@ -104,7 +109,17 @@ function tree(base: string = root, roots: readonly string[] = SCAN_ROOTS): Recor
 const VERSION_ROOTS = ["packages/analyst-sdk/src", "backend/src/analytics"];
 // The MODELS preset module: the one place a tag is written as the id of its preset.
 const PRESET_MODULE = "packages/analyst-sdk/src/model/presets.ts";
-const VERSION_BRANCH = [/[!=]==?\s*['"]v[345]['"]/, /['"]v[345]['"]\s*[!=]==?/, /case\s+['"]v[345]['"]/];
+// A list holding a version literal: `["v5"]`, `['v3', 'v4']`.
+const VERSION_LIST = String.raw`\[[^\]]*['"]v[345]['"][^\]]*\]`;
+const VERSION_BRANCH = [
+  /[!=]==?\s*['"]v[345]['"]/,
+  /['"]v[345]['"]\s*[!=]==?/,
+  /case\s+['"]v[345]['"]/,
+  // `["v5"].includes(x)`, `["v3", "v4"].indexOf(x)` (wave 5 review).
+  new RegExp(String.raw`${VERSION_LIST}\s*\.\s*(?:includes|indexOf|lastIndexOf)\s*\(`),
+  // `new Set(["v5"]).has(x)` (wave 5 review).
+  new RegExp(String.raw`new\s+Set\s*\(\s*${VERSION_LIST}\s*\)\s*\.\s*has\s*\(`),
+];
 
 export function versionBranches(files: Record<string, string>): Violation[] {
   const out: Violation[] = [];
@@ -184,6 +199,40 @@ describe("D59 seam guard: regime inputs are built only by prepareRegimeInputs", 
       "packages/analyst-sdk/src/analyze/x.ts:2",
     ]);
   });
+
+  test("red control on disk: a planted primitive call in a real tree is found by the same walk; an exception file and a test file are not", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "regime-seam-primitive-"));
+    try {
+      for (const r of SCAN_ROOTS) mkdirSync(join(tmp, r, "analyze"), { recursive: true });
+      mkdirSync(join(tmp, "packages/analyst-sdk/src/transform"), { recursive: true });
+      writeFileSync(join(tmp, "backend/src/analyze/planted.ts"), "export const axis = (s: string, a: string) => buildDateAxis(s, a);\n");
+      writeFileSync(join(tmp, "backend/scripts/analyze/clean.ts"), "export const p = (raw: any, o: any) => prepareRegimeInputs(raw, o);\n");
+      // An exception file defines the primitives; a test file is not walked.
+      writeFileSync(join(tmp, "packages/analyst-sdk/src/transform/math.ts"), "export function buildDateAxis(s: string, a: string) { return buildDateAxis(s, a); }\n");
+      writeFileSync(join(tmp, "packages/analyst-sdk/src/analyze/planted.test.ts"), "buildDateAxis(start, asof);\n");
+      const files = tree(tmp, SCAN_ROOTS);
+      expect(Object.keys(files).sort()).toEqual(["backend/scripts/analyze/clean.ts", "backend/src/analyze/planted.ts", "packages/analyst-sdk/src/transform/math.ts"]);
+      expect(scan(files).map((x) => `${x.file}:${x.line}`)).toEqual(["backend/src/analyze/planted.ts:1"]);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("a violation reports its true line after a multi-line comment (wave 5 review)", () => {
+  // A JSDoc block of four lines, then the call on line 6.
+  const DOC = "/**\n * What this does.\n * And why.\n */\nexport function f() {\n  return CALL;\n}\n";
+  test("each rule reports the line in the file, not the line after the comment is dropped", () => {
+    expect(directCalls({ "backend/src/analytics/doc.ts": DOC.replace("CALL", "computeRegime(t, d, p)") }).map((x) => `${x.file}:${x.line}`)).toEqual(["backend/src/analytics/doc.ts:6"]);
+    expect(scan({ "backend/src/doc.ts": DOC.replace("CALL", "buildDateAxis(start, asof)") }).map((x) => `${x.file}:${x.line}`)).toEqual(["backend/src/doc.ts:6"]);
+    expect(versionBranches({ "backend/src/analytics/doc.ts": DOC.replace("CALL", 'v === "v5"') }).map((x) => `${x.file}:${x.line}`)).toEqual(["backend/src/analytics/doc.ts:6"]);
+    // Two block comments on one line, and one that closes mid-line, keep the count too.
+    const mixed = "/* a */ const x = 1; /* b */\n/* c\n d */ const y = computeRegime(t, d, p);\nconst z = 2;\nconst w = keptRegimeRows(r, o);\n";
+    expect(directCalls({ "backend/src/analytics/mixed.ts": mixed }).map((x) => `${x.file}:${x.line}: ${x.text}`)).toEqual([
+      "backend/src/analytics/mixed.ts:3: const y = computeRegime(t, d, p);",
+      "backend/src/analytics/mixed.ts:5: const w = keptRegimeRows(r, o);",
+    ]);
+  });
 });
 
 describe("no version-literal branch outside the model presets (issue 1765, AC 11)", () => {
@@ -207,6 +256,22 @@ describe("no version-literal branch outside the model presets (issue 1765, AC 11
       "backend/src/analytics/y.ts:2",
       "packages/analyst-sdk/src/engine/x.ts:2",
       "packages/analyst-sdk/src/run.ts:2",
+    ]);
+  });
+
+  test("red control: a version list tested with includes, indexOf or a Set's has is a branch too; a list that is not tested is not", () => {
+    const planted: Record<string, string> = {
+      "packages/analyst-sdk/src/engine/a.ts": 'const kept = ["v5"].includes(version);\n',
+      "packages/analyst-sdk/src/engine/b.ts": "const a = 1;\nif (['v3', 'v4'].indexOf(v) >= 0) return;\n",
+      "backend/src/analytics/c.ts": 'const beside = new Set(["v5"]).has(x);\n',
+      "backend/src/analytics/d.ts": "if (new Set([ 'v4', \"v5\" ]) .has(v)) y();\n",
+      "backend/src/analytics/e.ts": 'export const VERSIONS = ["v3", "v4", "v5"];\nconst ok = VERSIONS.includes(v);\nconst ids = new Set(["v5"]);\n',
+    };
+    expect(versionBranches(planted).map((x) => `${x.file}:${x.line}`).sort()).toEqual([
+      "backend/src/analytics/c.ts:1",
+      "backend/src/analytics/d.ts:1",
+      "packages/analyst-sdk/src/engine/a.ts:1",
+      "packages/analyst-sdk/src/engine/b.ts:2",
     ]);
   });
 
