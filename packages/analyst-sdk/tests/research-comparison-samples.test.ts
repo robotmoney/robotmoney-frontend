@@ -5,11 +5,11 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { parseRawHistory, toHistory } from "../src/input/load.ts";
-import { computeWeightingComparison } from "../src/analyze/weighting-comparison.ts";
-import { computeRegimeEqComparison } from "../src/analyze/regime-eq-comparison.ts";
+import { computeWeightingComparison } from "../src/research/legacy/weighting-comparison.ts";
+import { computeRegimeEqComparison } from "../src/research/legacy/regime-eq-comparison.ts";
 import { BACKTEST_IN_SAMPLE_END, splitSamples } from "../src/analyze/backtest.ts";
-import { CONSTANT_CASH_YR } from "../src/analyze/weighting-comparison.ts";
-import { CASH_YR } from "../src/analyze/regime-eq-comparison.ts";
+import { CONSTANT_CASH_YR } from "../src/research/legacy/weighting-comparison.ts";
+import { CASH_YR } from "../src/research/legacy/regime-eq-comparison.ts";
 import { periodicRate } from "../src/transform/exact.ts";
 import { CURRENT_REGIME_VERSION, adoptionDate } from "../src/analyze/regime-versions.ts";
 

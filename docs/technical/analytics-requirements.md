@@ -34,7 +34,7 @@ Non-goals:
 | Indicator registry | `src/analyze/indicators.ts` | 26 indicators in three panels: macro (8), onchain (10), factor (8). The composite is the 1/n mean of every included panel, and all three panels are included, factor among them (`PANEL_MEMBERSHIP`, `PANELS`, D89). |
 | Correlations and backtest | `src/analyze/correlations.ts`, `backtest.ts` | Correlations, and the backtest (section 5). |
 | Research signals | `src/analyze/research-signals.ts` | Channel divergence and late cycle. |
-| Weighting comparison | `src/analyze/weighting-comparison.ts` | Weighting methods compared across market phases. |
+| Weighting comparison | `src/research/legacy/weighting-comparison.ts` | Weighting methods compared across market phases. |
 | Transforms | `src/transform/` | Series math and the transforms that turn source data into calculated indicators. |
 | Input loader | `src/input/load.ts` | CSV or JSON of source data. |
 | Run entry | `src/run.ts`, `src/prepare.ts` | `runRegime`, and `prepareRegimeInputs`, the same function production calls. |

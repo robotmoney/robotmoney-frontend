@@ -38,8 +38,8 @@ const ALLOWED = new Set([
 const REQUIRED_CALLERS = [
   "backend/src/analytics/index.ts",
   "packages/analyst-sdk/src/run.ts",
-  "packages/analyst-sdk/src/analyze/regime-eq-comparison.ts",
-  "packages/analyst-sdk/src/analyze/weighting-comparison.ts",
+  "packages/analyst-sdk/src/research/legacy/regime-eq-comparison.ts",
+  "packages/analyst-sdk/src/research/legacy/weighting-comparison.ts",
   "backend/scripts/regime-goldens-regenerate.ts",
 ];
 const PRIMITIVE_CALL = /\b(buildDateAxis|alignDailyForwardFill|alignDailyZeroFill|forwardFillAge)\s*\(/;
