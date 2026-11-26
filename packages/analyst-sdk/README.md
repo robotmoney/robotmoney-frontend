@@ -162,6 +162,67 @@ bun run regime tests/fixtures/raw-indicator-history.csv --provenance
 
 A relative path resolves from the folder you ran the command in, also under `bun run`.
 
+**Or replay and compare in one command.** `bun run replay` does steps 2 and 3 and the
+comparison together. It reads the run's methodology label, its vintage, the kept days its
+report names and the rows it published under its line's artifact kind, then compares the
+as-of row the SDK computes with the published one over the compared fields (`replayRun`,
+`src/replay/replay.ts`):
+
+```sh
+bun run replay --archive <copy> --run <run_key> [--print-row] [--json] [--included macro,onchain] [--version <tag>]
+```
+
+`--print-row` prints the SDK's as-of row as JSON and compares nothing. `--json` prints
+the result as one JSON object: the version, the line, the artifact kind, `match`, the
+differing fields with their first difference, and both rows' SHA-256. `--included` sets
+the panels the composite averages (default: the version's published panels). `--version`
+replays under that version, not the run's label. The command exits 0 when the rows are
+equal; 1 when they differ, a side is missing, a payload hash does not match, the label is
+one this SDK does not compute, or the copy is corrupt or incomplete; and 2 for a usage
+error: a missing `--run` or `--archive`, a bad option, or a run key that is not in the
+copy. `tests/fixtures/archive/model-runs/` is a local copy written through the production
+persistence, with one v4 run and three chained v5 runs (`facts.json` names them):
+
+<!-- readme-test: run -->
+```sh
+bun run replay --archive tests/fixtures/archive/model-runs --run 442307ce-1ff7-409f-a1a4-6384c1ee905f
+bun run replay --archive tests/fixtures/archive/model-runs --run 94115169-70cb-4320-9a60-8147554b87d6 --json
+```
+
+## Package entries
+
+The package's `exports` map names four entries. A client imports them by package name:
+
+| import | file | holds |
+| ------ | ---- | ----- |
+| `@robotmoney/analyst-sdk` | `src/index.ts` | every pure building block: the input loaders, `runRegime`, the model value (`MODELS`, `modelOf`), `runModel` and `stageCache`, `screen`, the backtest, the allocators, the report functions, and the replay and archive names below |
+| `@robotmoney/analyst-sdk/replay` | `src/replay/index.ts` | `publishedRows` (the one row builder), `compareRows` and `COMPARED_FIELDS`, `numericDiff`, `replayRun` and `publicationCandidates` |
+| `@robotmoney/analyst-sdk/archive` | `src/archive/index.ts` | format 1 (`format1.ts`, D80) and the pure reader over injected files (`openArchive`, `collectRunInputs`) |
+| `@robotmoney/analyst-sdk/node` | `node/index.ts` | the node:fs edge: `openBackupsDir`, `diskArchiveFiles`, the supplementary directory (`readSupplementary`, `listSupplementary`, `writeSupplementary`, `supplementaryFiles`), `universeFromFile` and `sha256` |
+
+The `.` entry never carries the `./node` names, so a client that only computes never loads
+node:fs. `@robotmoney/analyst-sdk/src/*` resolves too, for csvb, which imports SDK modules by
+deep path. Other paths in the package, such as `bin/` and `tests/`, do not resolve by name.
+`bin/backups-dir.ts` and `bin/supplementary-dir.ts` are one-line re-exports of `node/`, kept
+for callers that import them by file path.
+
+<!-- readme-test: ts prelude=none -->
+```ts
+import { MODELS } from "@robotmoney/analyst-sdk";
+import { replayRun } from "@robotmoney/analyst-sdk/replay";
+import { openArchive } from "@robotmoney/analyst-sdk/archive";
+import { diskArchiveFiles, openBackupsDir } from "@robotmoney/analyst-sdk/node";
+
+// `bun run replay`, in code: the committed v4 run replays with an empty diff.
+const copy = openBackupsDir("tests/fixtures/archive/model-runs");
+const replay = replayRun(copy, "442307ce-1ff7-409f-a1a4-6384c1ee905f");
+if (!replay.diff?.match) throw new Error(`the as-of rows differ: ${replay.problems.join("; ")}`);
+const model = MODELS[replay.version!]; // the preset of the run's methodology label
+
+// openBackupsDir is the pure reader over the node:fs files.
+const same = openArchive(diskArchiveFiles("tests/fixtures/archive/model-runs"));
+```
+
 ## Read the backups folder in code
 
 `bun run inputs` is one use of the archive reader, which the package exports
@@ -175,12 +236,13 @@ call needs is never read, and a missing or corrupt file fails the first call tha
 it. Every file is strict UTF-8 with no byte order mark. It is pure: `files` is an
 `ArchiveFiles`, `{ root, backupDirs(): string[] | null, read(path): Uint8Array | null }`,
 over paths relative to the folder with `/` separators (`root` only names the folder in
-messages). On disk, `openBackupsDir(dir, asOf?)` in `bin/backups-dir.ts` wraps it with the
-node:fs reader `diskArchiveFiles(dir)`.
+messages). On disk, `openBackupsDir(dir, asOf?)` from `@robotmoney/analyst-sdk/node`
+(`node/backups-dir.ts`) wraps it with the node:fs reader `diskArchiveFiles(dir)`.
 
+<!-- readme-test: ts prelude=none -->
 ```ts
-import { openBackupsDir } from "./bin/backups-dir.ts";
-import { collectRunInputs } from "./src/index.ts";
+import { openBackupsDir } from "@robotmoney/analyst-sdk/node";
+import { collectRunInputs } from "@robotmoney/analyst-sdk";
 
 const archive = openBackupsDir("api-copy");
 const run = collectRunInputs(archive, "0f6b6c1e-6a52-4c39-9f4e-1a2b3c4d5ea2"); // one run's frozen vintage
@@ -299,6 +361,7 @@ from `src/index.ts`.
 
 From code:
 
+<!-- readme-test: ts prelude=history-file -->
 ```ts
 import { parseInput, runRegime, requireComplete, buildReport } from "./src/index.ts";
 
@@ -355,13 +418,14 @@ methodology version change and golden regeneration:
 - a source's day close: edit its `SOURCE_DAY_CLOSE` entry; the extractors also take
   `{ dayClose, now }` directly.
 
+<!-- readme-test: ts prelude=raw -->
 ```ts
 import { INDICATORS, prepareRegimeInputs, computeRegime, runRegime } from "./src/index.ts";
 
 const trial = INDICATORS.map((i) => (i.id === "VIX" ? { ...i, fill: { kind: "none" as const } } : i));
 const prepared = prepareRegimeInputs(raw, { start: "2018-01-01", asof: "2026-08-14", indicators: trial });
 // `carried` marks the forward-filled rows; computeRegime counts only the real rows of an exchange series (D93).
-const composite = computeRegime(prepared.transformed, prepared.dateAxis, undefined, undefined, undefined, undefined, undefined, trial, undefined, prepared.carried).composite;
+const composite = computeRegime(prepared.transformed, prepared.dateAxis, { indicators: trial, carried: prepared.carried }).composite;
 
 const strict = runRegime(raw, { dayRule: "require-complete" }); // the latest complete day
 ```
@@ -431,7 +495,8 @@ series, SHA-256, row count and date range; `.list()` lists the source ids. It is
 `files` is a `SupplementaryFiles`, `{ read(path): Uint8Array | null, list(): string[] }`
 over paths relative to the directory, the same `read` shape as the archive reader's
 `ArchiveFiles`. On disk, `readSupplementary(dir, id)` and `listSupplementary(dir)`
-(`bin/supplementary-dir.ts`) wrap it with the node:fs reader `supplementaryFiles(dir)`. A series from another provider goes in with
+(`@robotmoney/analyst-sdk/node`, `node/supplementary-dir.ts`) wrap it with the node:fs reader
+`supplementaryFiles(dir)`. A series from another provider goes in with
 `writeSupplementary(dir, id, points, { field, fetched_at, fetched_by })`. The format
 itself is `src/input/supplementary.ts`, and `fetchSupplementary(id, { start, end })`
 (`src/extract/supplementary.ts`) is the fetch without the write.
@@ -446,6 +511,7 @@ published report, and its manifest is its provenance.
 The backtest the report carries is one shared calculation, exposed for any assets and
 weights you have prices for. It does not choose weights; it takes them.
 
+<!-- readme-test: ts prelude=portfolio -->
 ```ts
 import { simulatePortfolio, periodStats, scheduleFromLabels, PORTFOLIO_SPECS } from "./src/index.ts";
 
@@ -453,8 +519,8 @@ import { simulatePortfolio, periodStats, scheduleFromLabels, PORTFOLIO_SPECS } f
 // market move). Nonnegative, finite, summing to 1; `cash` earns the cash rate.
 const schedule = dateAxis.map(() => ({ "yahoo:GLD": 0.4, "yahoo:SPY": 0.4, cash: 0.2 }));
 const sim = simulatePortfolio(dateAxis, schedule, { "yahoo:GLD": gld, "yahoo:SPY": spy }, tbillPercent, { costBps: 10 });
-const full = periodStats(sim.values, sim.startDate, sim.endDate, { returns: sim.returns, trades: sim.trades });
-const year = periodStats(sim.values, "2025-01-01", "2025-12-31", { returns: sim.returns, trades: sim.trades });
+const full = periodStats(sim.values, sim.startDate, sim.endDate, { returns: sim.returns, excess: sim.excess, trades: sim.trades });
+const year = periodStats(sim.values, "2025-01-01", "2025-12-31", { returns: sim.returns, excess: sim.excess, trades: sim.trades });
 
 // The reference portfolios are data: a regime label series through a weight table.
 const ethSchedule = scheduleFromLabels(labels, PORTFOLIO_SPECS.eth.weights);
@@ -502,10 +568,13 @@ one-sided turnover (half the sum of absolute weight changes) times `costBps` (de
 the cash rate fill gaps only as their declared policies allow; the simulation starts at the first date every supplied asset is priced,
 then at the first date with weights. Equity compounds unrounded (D78): each daily value
 is the exact product of the growth and cost factors so far, rounded once.
-`sim` carries the net daily values, the pre-cost daily returns, each trade's turnover
-and cost, and the start and end dates. `periodStats` uses the pre-cost returns for
-the Sharpe (mean / sample sd, annualized over 365 days, no risk-free subtraction, 0 at
-zero volatility, which since D78 includes any run of bit-identical returns), the net values for growth and drawdown, and years of 365.25 days; a
+`sim` carries the net daily values, the pre-cost daily returns, the post-cost daily
+returns in excess of cash (`excess`), each trade's turnover and cost, and the start and end
+dates. `periodStats` takes `returns` and `excess` both. Its Sharpe (mean / sample sd,
+annualized over 365 days, 0 at zero volatility, which since D78 includes any run of
+bit-identical returns) reads `excess` by default, or the pre-cost `returns` with no cash
+subtraction under `sharpeBasis: "returns"` (see "Build your own regime model"). It uses the
+net values for growth and drawdown, and years of 365.25 days; a
 different window or `splitDate` never changes the full-range figures.
 `computeBacktest` is exactly these three functions over the reference portfolios.
 
@@ -514,11 +583,12 @@ different window or `splitDate` never changes the full-range figures.
 `simulatePortfolio` resets the book to the target every day. `simulateDrift` takes the
 same four inputs and lets holdings drift between rebalances:
 
+<!-- readme-test: ts prelude=drift -->
 ```ts
 import { simulateDrift, periodStats } from "./src/index.ts";
 
 const drift = simulateDrift(dateAxis, schedule, prices, tbillPercent, { costBps: 10, freq: "monthly", band: 0.05 });
-const stats = periodStats(drift.values, drift.startDate, drift.endDate, { returns: drift.returns, trades: drift.trades });
+const stats = periodStats(drift.values, drift.startDate, drift.endDate, { returns: drift.returns, excess: drift.excess, trades: drift.trades });
 ```
 
 Inputs are checked exactly as for `simulatePortfolio`, and the run starts on the same date
@@ -561,6 +631,7 @@ optimum or throws `UnsupportedError`: there is no approximate fallback (D78). A 
 Infinity in the covariance, the excess returns or the risk aversion throws, and a
 `markowitzSchedule` `cov` callback that returns one, or the wrong shape, throws `RangeError`.
 
+<!-- readme-test: ts prelude=markowitz -->
 ```ts
 import { markowitzSizing, markowitzBacktest, ercCertified, simulateDrift } from "./src/index.ts";
 
@@ -577,6 +648,8 @@ today.tangency;        // { weights, cash, expReturn, vol, sharpe }, fully inves
 today.byLambda[1].book; // mean-variance at lambda 4, the rest in cash
 
 // A monthly re-optimised backtest: weights from the history strictly before each date.
+// mu is your point-in-time priors: `history` holds only the return rows dated before `date`.
+const myPointInTimePriors = (_date: string, _history: number[][]) => ({ SPX: 0.075, ETH: 0.25, GLD: 0.055 });
 const bt = markowitzBacktest({
   dateAxis, returns, assets: ["SPX", "ETH", "GLD"], cashRate: tbillPercent, prices,
   mu: (date, history) => myPointInTimePriors(date, history),
@@ -673,13 +746,14 @@ observation days), `weightRefresh` (the refit calendar), `missingPanel` (`"nan"`
 checked only when `observationWindows` is true, and its `publication` only when
 `knowledgeTime` is true.
 
+<!-- readme-test: ts prelude=raw-asof -->
 ```ts
 import { REGIME_RULES, computeRegime, fitPanelWeights, prepareRegimeInputs, weightedMeanOnDay, PANELS, INDICATORS } from "@robotmoney/analyst-sdk";
 
 // v4 with one rule changed: average the panels that have an index.
 const rules = { ...REGIME_RULES.v4, missingPanel: "rebase" as const };
 const p = prepareRegimeInputs(raw, { start: "2018-01-01", asof, rules });
-const run = computeRegime(p.transformed, p.dateAxis, PANELS, p.ages, undefined, "v4", undefined, undefined, { rules }, p.carried);
+const run = computeRegime(p.transformed, p.dateAxis, { panels: PANELS, ages: p.ages, rules, carried: p.carried });
 
 // One day's fit from scores computed once: the two functions computeRegime itself calls.
 const macro = INDICATORS.filter((i) => i.panel === "macro");
@@ -700,6 +774,7 @@ addition or `"compensated"`) or `"up-volume-share"` (the share of volume on up d
 `{ kind: "calendar-days", days }` adds that many calendar days. A missing input throws
 `DerivedSeriesError` naming it.
 
+<!-- readme-test: ts prelude=vix-supplementary -->
 ```ts
 import { deriveSeries } from "@robotmoney/analyst-sdk";
 
@@ -725,6 +800,78 @@ stored artifact's canonical JSON), `rowToSnapshot`, `forHistory` and `shapeRegim
 `collectRunInputs` reads the `analytics_vintage_members` files one at a time through
 `Archive.scanRows` and keeps only the rows of the run's vintage, so the whole table is
 never held in memory.
+
+### One model value: MODELS, modelOf and runModel
+
+A methodology is one frozen `RegimeModel` value (issue 1765): `id`, `rules` (every engine
+rule), `registry` (the scoring indicators), `derived` (the series it derives from raw
+inputs), `history` (`"recompute"`: every day recomputed from the whole input; `"kept"`: each
+day computed on its own day and kept), `panels` (`{ all, included }`), `seriesMapping` and
+`storedUnder` (the storage keys it reads) and `backtest` (its reference backtest options).
+`MODELS.v3`, `MODELS.v4` and `MODELS.v5` are the published presets. Each per-version table
+above is a view of them: `REGIME_RULES.v4` is `MODELS.v4.rules` and
+`REGIME_BACKTEST_RULES.v5` is `MODELS.v5.backtest`. `modelOf(tag)` returns the preset.
+`modelOf(model)` checks a model of your own and returns it, or throws a `RangeError` naming
+the bad field. Where a version is published (`REGIME_LINE`) is a platform fact, not a field.
+
+`runModel(model, input, { asof })` is one run of one model. It prepares the input, then
+scores, fits and combines (`STAGES`) through the model's history driver, then adds the
+correlations and the backtest. Its input is the run input under the ids the model reads,
+after the ratio step. `runRegime(raw, { model })` is `runModel` behind its option checks,
+the input name resolution, the ratio step and the day rule. With a `stageCache()`, each
+stage's value is stored under the input's digest and the stage's params, so a later run
+that changes only a later stage recomputes only from there. `cache.hits` and
+`cache.misses` count the lookups per stage. A run whose model id is not a published tag is
+stamped `CURRENT_REGIME_VERSION`; pass `version` to stamp another.
+
+<!-- readme-test: ts prelude=raw -->
+```ts
+import { MODELS, buildReport, modelOf, ratiosFromLegs, requireComplete, resolveInputHistory, runModel, runRegime, stageCache } from "@robotmoney/analyst-sdk";
+
+const v4 = modelOf("v4"); // MODELS.v4 itself
+// The run input: storage names resolved, then each ratio set from its legs (v4's ratio step).
+const input = ratiosFromLegs(raw, resolveInputHistory(raw, v4.seriesMapping, v4.storedUnder));
+const cache = stageCache();
+const run = runModel(v4, input, { asof: "2026-08-14", cache });
+const viaRunRegime = requireComplete(runRegime(raw, { asof: "2026-08-14" }));
+if (JSON.stringify(buildReport(run)) !== JSON.stringify(buildReport(viaRunRegime))) throw new Error("runModel and runRegime differ");
+
+// A research model: the preset with one rule changed, checked by modelOf.
+const rebase = modelOf({ ...MODELS.v4, id: "v4-rebase", rules: { ...MODELS.v4.rules, missingPanel: "rebase" } });
+const trial = runModel(rebase, input, { asof: "2026-08-14", cache });
+cache.misses; // { prepare: 1, score: 1, fit: 1, combine: 2 }: the trial computed only its combine stage
+```
+
+### Research: screen a rule grid
+
+`screen(input, model, grid, metric, { asof, cache })` runs the model once per variant of
+the grid through `runModel`, with one shared stage cache, and ranks the variants by your
+metric, highest first. Tied scores keep their grid order, and a NaN score ranks last. A
+variant is a `RuleVariant`, a `Partial<RegimeRules>` merged over the model's rules one
+level deep: a variant that sets `weightRefresh` sets the whole object. A variant key that
+names no rule is a `RangeError`. A stage whose params no variant changes is computed once
+for the whole grid, so a grid over the refit calendar and the label cut scores the
+registry once. The runs share arrays with each other and with the cache: never write to a
+run's result. A custom derived series (`op: "custom"`, `DerivedCustom`) is named in a
+cache key by its declared `id` and `version`, never by its function, so bump its `version`
+when you change its `fn`.
+
+<!-- readme-test: ts prelude=v4-input -->
+```ts
+import { MODELS, screen, stageCache, type RuleVariant, type ScreenMetric } from "@robotmoney/analyst-sdk";
+
+const v4 = MODELS.v4;
+const grid: RuleVariant[] = [21, 63].map((intervalDays) => ({ weightRefresh: { ...v4.rules.weightRefresh, intervalDays } }));
+// Your metric; here the mean of the finite composite values.
+const meanComposite: ScreenMetric = (run) => {
+  const finite = run.result.composite.filter(Number.isFinite);
+  return finite.reduce((a, b) => a + b, 0) / finite.length;
+};
+const cache = stageCache();
+const ranked = screen(input, v4, grid, meanComposite, { asof: "2026-08-14", cache });
+const best = ranked[0]!; // { variant, model, run, score }
+cache.misses.score; // 1: both variants read one score of the registry
+```
 
 ### Methodology v5: a model published beside the main line
 
@@ -758,14 +905,20 @@ and publishes it beside the served one. `CURRENT_REGIME_VERSION` stays `v4`, and
   rule set its golden was published with: `lagSessions` 0, `continuous` calendars,
   `cashBasis` `"yield"`, `sharpeBasis` `"returns"` and a split on 2024-01-31. Its
   results are hypothetical.
+- **Preset.** `MODELS.v5` is all of this as one model value: `rules` is `REGIME_RULES.v5`,
+  `registry` is `V5_INDICATORS`, `derived` is `V5_DERIVED_SERIES`, `history` is `"kept"`
+  and `backtest` is `REGIME_BACKTEST_RULES.v5`. `runRegime(raw, { version: "v5" })`,
+  `runRegime(raw, { model: "v5" })` and `runModel("v5", input, { asof, kept })` run it.
 
+<!-- readme-test: ts prelude=v5-raw -->
 ```ts
-import { REGIME_BACKTEST_RULES, buildReport, requireComplete, runRegime } from "@robotmoney/analyst-sdk";
+import { MODELS, REGIME_BACKTEST_RULES, buildReport, requireComplete, runRegime } from "@robotmoney/analyst-sdk";
 
 // A v5 run of one input: every day from the axis start, each computed from that day's inputs.
 const run = requireComplete(runRegime(raw, { version: "v5" }));
 const report = buildReport(run); // 30 indicators; compositePercentile is NaN (null in JSON)
 REGIME_BACKTEST_RULES.v5; // { splitDate: "2024-01-31", lagSessions: 0, calendars: { eth: "continuous", sp500: "continuous" }, cashBasis: "yield", sharpeBasis: "returns" }
+MODELS.v5.backtest === REGIME_BACKTEST_RULES.v5; // true: one value
 ```
 
 `tests/regime-v5-golden.test.ts` reproduces the downstream golden of this model byte
@@ -922,14 +1075,23 @@ src/archive/     reading a format 1 local copy: completeness, a run's vintage, t
                  revised tables, latest values)
 src/analyze/kept-regime.ts  the kept record of a methodology that keeps its history (v5): score a day,
                  walk forward, derive the composite and the labels from kept days
-src/run.ts       source data in, regime report out
+src/model/       the model value: MODELS (the published presets), modelOf, each preset's storage
+src/engine/      the staged engine: runModel, the stages (prepare, score, fit, combine), the
+                 recompute and kept history drivers, and the stage cache (stageCache)
+src/replay/      the one row builder (publishedRows), compareRows, replayRun (`./replay`)
+src/research/    screen, a rule grid over one stage cache; legacy/ holds the frozen research comparisons
+src/hash.ts      the SDK's one SHA-256
+src/run.ts       source data in, regime report out: runRegime, runModel behind its option checks
 src/coverage.ts  required-data check (CoverageError)
+node/            the node:fs edge (`./node`): openBackupsDir and diskArchiveFiles (backups-dir.ts),
+                 the supplementary directory's reader and writer (supplementary-dir.ts),
+                 universeFromFile (universe-file.ts) and sha256 (hash.ts)
 bin/regime.ts    the `bun run regime` entry (reads one file and its sidecar)
 bin/inputs.ts    the `bun run inputs` entry (reads a local copy, writes one input and its sidecar)
-bin/backups-dir.ts  the node:fs side of the archive reader: openBackupsDir(dir, asOf)
+bin/replay.ts    the `bun run replay` entry (replays one run of a local copy and compares its as-of row)
+bin/backups-dir.ts, bin/supplementary-dir.ts  one-line re-exports of node/, kept for callers by file path
 bin/backtest.ts  the `bun run backtest` entry (one portfolio, gated by the universe)
 bin/fetch.ts     the `bun run fetch` entry (Yahoo and FRED series into a supplementary directory)
-bin/supplementary-dir.ts  the node:fs side of the supplementary directory: its reader, and writing
 bin/check-universe.ts  the `bun run universe:check` entry
 src/allocate/universe.ts  the Base asset universe: loadUniverse, checkHoldings
 src/allocate/rules.ts     rule files: validateRuleFile, parseRuleFile (types.ts holds the format)
