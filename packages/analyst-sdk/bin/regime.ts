@@ -17,6 +17,7 @@ import { manifestPathFor, provenanceEnvelope, validateManifest, type InputManife
 import { buildReport, runRegime } from "../src/run.ts";
 import type { RegimeVersion } from "../src/analyze/regime-versions.ts";
 import type { Panel } from "../src/analyze/indicators.ts";
+import { sha256 } from "../node/hash.ts";
 import { parseArgs, resolveFromCaller, UsageError } from "./args.ts";
 
 const USAGE =
@@ -51,8 +52,7 @@ try {
   if (args.flags.has("--provenance")) {
     const sidecar = Bun.file(manifestPathFor(file));
     if (await sidecar.exists()) {
-      const sha256 = new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
-      manifest = validateManifest(await sidecar.text(), { name: basename(file), sha256, rows: input.rows });
+      manifest = validateManifest(await sidecar.text(), { name: basename(file), sha256: sha256(bytes), rows: input.rows });
     }
   }
   const run = runRegime(input.history, {
