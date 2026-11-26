@@ -226,9 +226,9 @@ export function sliceValues(committed: CommittedInputs, model: Pick<RegimeModel,
   return committed.values.filter((v) => keys.has(v.sourceKey));
 }
 
-/** One model's input history from a committed read: inputHistoryFromStorage of its share, under its own mapping. */
-export function slice(committed: CommittedInputs, model: Pick<RegimeModel, "seriesMapping">): RawIndicatorHistory {
-  return inputHistoryFromStorage(sliceValues(committed, model), model.seriesMapping);
+/** One model's input history from its share of a committed read: inputHistoryFromStorage under its own mapping. */
+export function slice(values: CommittedInputs["values"], model: Pick<RegimeModel, "seriesMapping">): RawIndicatorHistory {
+  return inputHistoryFromStorage(values, model.seriesMapping);
 }
 
 // ─── one model's input ─────────────────────────────────────────────────────
@@ -279,7 +279,7 @@ export function modelInputs(
   if (committed) {
     // Issue 1644: each ratio under its declared parameters (transform/ratios.ts).
     const values = sliceValues(committed, model);
-    const ledgerInput = inputHistoryFromStorage(values, model.seriesMapping);
+    const ledgerInput = slice(values, model);
     const fromLedger = withRatios(ledgerInput, ledgerInput, model, dropped);
     for (const ind of INDICATORS) registry[ind.id] = fromLedger[ind.id] ?? [];
     for (const id of derived) registry[id] = fromLedger[id] ?? [];
