@@ -12,6 +12,13 @@
 //   - node:child_process, worker_threads, net, http(s), os and similar modules
 //   - any reference to process.env, process["env"], Bun.env, Bun.file,
 //     import.meta.env, or destructuring of process/Bun
+//   - an import of the package's edges, node/ or bin/, by relative path or as
+//     `@robotmoney/analyst-sdk/node` (issue 1765), reported with file and line
+//
+// Issue 1765: node/ is the package's only fs edge. It lives outside src/, so
+// the scan above does not cover it; a client imports it as
+// `@robotmoney/analyst-sdk/node`. Every other entry of the package's exports
+// map reaches only src/ code, and './node' really does reach node:fs.
 //
 // Also asserted here: the SDK imports nothing from backend/src, and
 // backend/src/api imports nothing from packages/ (the API reaches the SDK only
@@ -21,10 +28,12 @@
 // flag every one, so a scanner that matches nothing cannot pass for a clean
 // tree.
 import { describe, expect, test } from "bun:test";
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 
 const root = join(import.meta.dir, "../../..");
+const SDK_PKG = "packages/analyst-sdk";
 const SDK_SRC = join(root, "packages/analyst-sdk/src");
 const API_SRC = join(root, "backend/src/api");
 
@@ -37,13 +46,21 @@ function tsFiles(dir: string, out: string[] = []): string[] {
   return out;
 }
 
-/** Module specifiers named by `from "x"`, `import("x")`, `require("x")` and bare `import "x"`. */
-function specifiers(code: string): string[] {
-  const out: string[] = [];
+/** Module specifiers named by `from "x"`, `import("x")`, `require("x")` and bare `import "x"`, each with its 1-based line. */
+function specifierLines(code: string): Array<{ spec: string; line: number }> {
+  const out: Array<{ spec: string; line: number }> = [];
   const re = /\bfrom\s+["']([^"']+)["']|\bimport\s*\(\s*["'`]([^"'`]+)["'`]\s*\)|\brequire\s*\(\s*["'`]([^"'`]+)["'`]\s*\)|^\s*import\s+["']([^"']+)["']|\bimport\s*\(\s*`([^`]*)`/gm;
   let m: RegExpExecArray | null;
-  while ((m = re.exec(code))) out.push((m[1] ?? m[2] ?? m[3] ?? m[4] ?? m[5])!);
+  while ((m = re.exec(code))) {
+    const spec = (m[1] ?? m[2] ?? m[3] ?? m[4] ?? m[5])!;
+    out.push({ spec, line: code.slice(0, m.index + m[0].lastIndexOf(spec)).split("\n").length });
+  }
   return out;
+}
+
+/** Module specifiers named by `from "x"`, `import("x")`, `require("x")` and bare `import "x"`. */
+function specifiers(code: string): string[] {
+  return specifierLines(code).map((s) => s.spec);
 }
 
 // True when a `/` here starts a regex literal rather than dividing: the last
@@ -125,18 +142,34 @@ const FORBIDDEN_CODE: Array<[RegExp, string]> = [
 const FORBIDDEN_PATH_PARTS = ["/db/", "/chain/", "/store/", "/cutover/"];
 // Extract-stage modules that stay in the backend (issue #1095 part B).
 const BACKEND_ONLY_EXTRACT = /(^|\/)(fetch-cache|source-ledger|geckoterminal|edgar-seed|floor-seed)(-generator)?(\.ts)?$/;
+// The package's edges (issue 1765): node/ (the node:fs edge, `@robotmoney/analyst-sdk/node`) and bin/ (the commands).
+const EDGE_SUBPATH = /^@robotmoney\/analyst-sdk\/(node|bin)(\/|$)/;
+const EDGE_PATH = new RegExp(`^${SDK_PKG}/(node|bin)(/|\\.ts$)`);
+
+/** True when `spec`, imported from the repo-relative `file`, names the package's node/ or bin/ edge. */
+function importsEdge(file: string, spec: string): boolean {
+  if (EDGE_SUBPATH.test(spec)) return true;
+  const to = resolveRelative(file, spec);
+  return to !== null && EDGE_PATH.test(to);
+}
 
 export function purityViolations(file: string, text: string): string[] {
   const code = codeOnly(text);
   const found: string[] = [];
-  for (const spec of specifiers(code)) {
+  for (const { spec, line } of specifierLines(code)) {
     if (FORBIDDEN_MODULES.has(spec)) found.push(`${file}: imports ${spec}`);
     // Trailing slash so a specifier ending in the directory (../db) counts too.
     if (FORBIDDEN_PATH_PARTS.some((p) => `${spec}/`.includes(p))) found.push(`${file}: imports ${spec} (forbidden path)`);
     if (BACKEND_ONLY_EXTRACT.test(spec)) found.push(`${file}: imports ${spec} (backend-only extract module)`);
+    if (importsEdge(file, spec)) found.push(`${file}:${line}: imports ${spec} (src/ never imports node/ or bin/; node/ is the only fs edge)`);
   }
   for (const [re, what] of FORBIDDEN_CODE) if (re.test(code)) found.push(`${file}: ${what}`);
   return found;
+}
+
+/** Every violation under `<base>/packages/analyst-sdk/src`, each file named relative to `base`. */
+function scanSrc(base: string): string[] {
+  return tsFiles(join(base, SDK_PKG, "src")).flatMap((f) => purityViolations(relative(base, f), readFileSync(f, "utf8")));
 }
 
 describe("analyst-sdk purity", () => {
@@ -147,8 +180,7 @@ describe("analyst-sdk purity", () => {
   });
 
   test("no file under packages/analyst-sdk/src has a forbidden import or process.env reference", () => {
-    const violations = files.flatMap((f) => purityViolations(relative(root, f), readFileSync(f, "utf8")));
-    expect(violations).toEqual([]);
+    expect(scanSrc(root)).toEqual([]);
   });
 
   test("the scan covers the extractor files and none of the backend-only ones", () => {
@@ -238,6 +270,125 @@ describe("analyst-sdk purity", () => {
     test("a comment that merely names a forbidden thing is not flagged", () => {
       expect(purityViolations("ok.ts", '// never import node:fs or read process.env here\nimport type { Point } from "../types.ts";')).toEqual([]);
     });
+  });
+});
+
+// ── issue 1765: node/ is the package's only fs edge ─────────────────────────
+// The exports map has one entry outside src/, './node'. Every other entry's
+// code reaches only src/ files (data imports such as the shipped universe JSON
+// are not code), and none of them is impure; './node' reaches node:fs. src/
+// never imports node/ or bin/ (purityViolations above). The red controls plant
+// violations in real temporary files and expect each named with its line.
+/** Resolve a relative import of a repo-relative file on disk: as written, then with .ts, then as a folder's index.ts. */
+function resolveOnDisk(base: string, from: string, spec: string): string {
+  const parts = from.split("/").slice(0, -1);
+  for (const seg of spec.split("/")) {
+    if (seg === "." || seg === "") continue;
+    if (seg === "..") parts.pop();
+    else parts.push(seg);
+  }
+  const p = parts.join("/");
+  for (const c of [p, `${p}.ts`, `${p}/index.ts`]) if (existsSync(join(base, c)) && /\.(ts|json)$/.test(c)) return c;
+  throw new Error(`${from}: cannot resolve ${spec}`);
+}
+
+/** Every file a repo-relative module reaches through its relative imports, itself included. */
+function reachedFiles(base: string, start: string): string[] {
+  const seen = new Set<string>([start]);
+  const queue = [start];
+  while (queue.length) {
+    const file = queue.shift()!;
+    if (!file.endsWith(".ts")) continue;
+    for (const spec of specifiers(codeOnly(readFileSync(join(base, file), "utf8")))) {
+      if (!spec.startsWith(".")) continue;
+      const next = resolveOnDisk(base, file, spec);
+      if (!seen.has(next)) {
+        seen.add(next);
+        queue.push(next);
+      }
+    }
+  }
+  return [...seen].sort();
+}
+
+describe("issue 1765: node/ is the package's only fs edge", () => {
+  const pkg = JSON.parse(readFileSync(join(root, SDK_PKG, "package.json"), "utf8")) as { exports: Record<string, string> };
+  const read = (f: string) => readFileSync(join(root, f), "utf8");
+  const importsFs = (f: string) => specifiers(codeOnly(read(f))).some((s) => s === "node:fs" || s === "fs");
+
+  test("the exports map has './node' as its one code entry outside src/", () => {
+    const outside = Object.entries(pkg.exports).filter(([k, t]) => k !== "./package.json" && !t.startsWith("./src/"));
+    expect(outside).toEqual([["./node", "./node/index.ts"]]);
+    for (const entry of [".", "./replay", "./archive", "./src/*"]) expect(pkg.exports[entry], entry).toStartWith("./src/");
+  });
+
+  test("'.', './replay' and './archive' reach only src/ code, all of it pure", () => {
+    for (const entry of [".", "./replay", "./archive"]) {
+      const reached = reachedFiles(root, `${SDK_PKG}/${pkg.exports[entry]!.slice(2)}`);
+      const code = reached.filter((f) => f.endsWith(".ts"));
+      expect(code.length, entry).toBeGreaterThan(entry === "." ? 40 : 3);
+      expect(code.filter((f) => !f.startsWith(`${SDK_PKG}/src/`)), entry).toEqual([]);
+      expect(code.flatMap((f) => purityViolations(f, read(f))), entry).toEqual([]);
+      expect(reached.filter((f) => /\/(node|bin)\//.test(f)), entry).toEqual([]);
+    }
+  });
+
+  test("'./node' is the edge: it reaches node:fs from node/ files and never imports bin/", () => {
+    const reached = reachedFiles(root, `${SDK_PKG}/${pkg.exports["./node"]!.slice(2)}`);
+    const edge = reached.filter((f) => f.startsWith(`${SDK_PKG}/node/`));
+    expect(edge).toContain(`${SDK_PKG}/node/backups-dir.ts`);
+    expect(edge.filter(importsFs)).toEqual([`${SDK_PKG}/node/backups-dir.ts`, `${SDK_PKG}/node/supplementary-dir.ts`]);
+    expect(reached.filter((f) => f.startsWith(`${SDK_PKG}/bin/`))).toEqual([]);
+    // Every reached file outside node/ is src/ code or data, so the fs reach is node/'s alone.
+    expect(reached.filter((f) => !f.startsWith(`${SDK_PKG}/node/`) && f.endsWith(".ts") && importsFs(f))).toEqual([]);
+  });
+
+  test("red control: planted src files on disk that import node/ or './node' are flagged with file and line; node/ itself is allowed", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "analyst-sdk-edge-"));
+    try {
+      const analyze = join(tmp, SDK_PKG, "src", "analyze");
+      mkdirSync(analyze, { recursive: true });
+      mkdirSync(join(tmp, SDK_PKG, "node"), { recursive: true });
+      writeFileSync(join(analyze, "planted-path.ts"), '// a planted edge import on line 3\nimport type { Point } from "../types.ts";\nimport { openBackupsDir } from "../../node/backups-dir.ts";\nexport const x: Point[] = [];\n');
+      writeFileSync(join(analyze, "planted-subpath.ts"), 'import { sha256 } from "@robotmoney/analyst-sdk/node";\nexport const h = sha256;\n');
+      writeFileSync(join(analyze, "planted-bin.ts"), '\n\nexport { openBackupsDir } from "../../bin/backups-dir.ts";\n');
+      writeFileSync(join(analyze, "planted-fs.ts"), 'import { readFileSync } from "node:fs";\nexport const r = readFileSync;\n');
+      writeFileSync(join(analyze, "clean.ts"), '// never import ../../node/backups-dir.ts here\nimport { openArchive } from "../archive/reader.ts";\nexport const o = openArchive;\n');
+      writeFileSync(join(tmp, SDK_PKG, "node", "edge.ts"), 'import { readFileSync } from "node:fs";\nexport const read = readFileSync;\n');
+      const why = "(src/ never imports node/ or bin/; node/ is the only fs edge)";
+      expect(scanSrc(tmp).sort()).toEqual([
+        `${SDK_PKG}/src/analyze/planted-bin.ts:3: imports ../../bin/backups-dir.ts ${why}`,
+        `${SDK_PKG}/src/analyze/planted-fs.ts: imports node:fs`,
+        `${SDK_PKG}/src/analyze/planted-path.ts:3: imports ../../node/backups-dir.ts ${why}`,
+        `${SDK_PKG}/src/analyze/planted-subpath.ts:1: imports @robotmoney/analyst-sdk/node ${why}`,
+      ]);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("red control: an in-memory src file importing the node/ folder itself, or by a dynamic import, is flagged", () => {
+    const f = `${SDK_PKG}/src/input/x.ts`;
+    expect(purityViolations(f, 'export * from "../../node";')).toEqual([`${f}:1: imports ../../node (src/ never imports node/ or bin/; node/ is the only fs edge)`]);
+    expect(purityViolations(f, '\nconst m = await import("@robotmoney/analyst-sdk/node/index.ts");')).toEqual([
+      `${f}:2: imports @robotmoney/analyst-sdk/node/index.ts (src/ never imports node/ or bin/; node/ is the only fs edge)`,
+    ]);
+    expect(purityViolations(f, 'import { openArchive } from "../archive/reader.ts";\nimport { x } from "./node-helpers.ts";')).toEqual([]);
+  });
+
+  test("red control: the reach walk follows a planted chain into node:fs", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "analyst-sdk-reach-"));
+    try {
+      mkdirSync(join(tmp, SDK_PKG, "src", "a"), { recursive: true });
+      writeFileSync(join(tmp, SDK_PKG, "src", "index.ts"), 'export * from "./a/b.ts";\n');
+      writeFileSync(join(tmp, SDK_PKG, "src", "a", "b.ts"), 'import { c } from "../c.ts";\nexport const b = c;\n');
+      writeFileSync(join(tmp, SDK_PKG, "src", "c.ts"), 'import { readFileSync } from "node:fs";\nexport const c = readFileSync;\n');
+      const reached = reachedFiles(tmp, `${SDK_PKG}/src/index.ts`);
+      expect(reached).toEqual([`${SDK_PKG}/src/a/b.ts`, `${SDK_PKG}/src/c.ts`, `${SDK_PKG}/src/index.ts`]);
+      expect(reached.flatMap((f) => purityViolations(f, readFileSync(join(tmp, f), "utf8")))).toEqual([`${SDK_PKG}/src/c.ts: imports node:fs`]);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
   });
 });
 

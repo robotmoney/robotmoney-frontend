@@ -4,6 +4,14 @@
   "description": "Pure regime analytics for Robot Money: raw indicator history in, regime, indicator, correlation and backtest output out. No network, no database, no environment.",
   "private": true,
   "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./replay": "./src/replay/index.ts",
+    "./archive": "./src/archive/index.ts",
+    "./node": "./node/index.ts",
+    "./src/*": "./src/*",
+    "./package.json": "./package.json"
+  },
   "engines": {
     "bun": ">=1.2"
   },
