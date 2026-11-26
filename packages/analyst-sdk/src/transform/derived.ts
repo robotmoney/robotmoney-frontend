@@ -11,9 +11,9 @@
 //
 // The custom op (issue 1765, phase 5) is a research indicator written as a
 // pure function with a declared publication lag, so a new indicator needs no
-// SDK release. deriveSeries calls it once per calendar day, and cuts every
-// input before the call, so the function never reads a value dated after the
-// day minus its lag.
+// SDK release. deriveSeries calls it once per calendar day, and hands it each
+// input as a read-only view that ends at the day minus its lag, so the
+// function never reads a value dated after it.
 import type { Point } from "../types.ts";
 import { sum2 } from "./exact.ts";
 import { mergeRatioSeries } from "./grid.ts";
@@ -80,9 +80,14 @@ export interface DerivedUpVolumeShare {
  * A research indicator as a pure function (issue 1765, phase 5). On each
  * calendar day `day`, `fn(inputs, day)` gives the value known on that day, or
  * null for none. `lagDays` is the declared publication lag: `inputs` holds only
- * the points of each named input dated on or before `day` minus `lagDays`. The
- * inputs are cut before the call, so fn cannot read a later value. The arrays
- * and points are frozen, so fn cannot change them either.
+ * the points of each named input dated on or before `day` minus `lagDays`.
+ * Each input is a read-only view of the known points, never a copy: no index,
+ * key, descriptor or iteration reaches a later point, so fn cannot read a
+ * later value. A view keeps its own length, so one kept from an earlier day
+ * never grows. Every write to a view (an index, the length, a new property, a
+ * delete, a sort) is a TypeError, and the points are frozen, so fn cannot
+ * change them either. A view is a Proxy, which Bun's console.log prints as its
+ * empty target (`[]`): log `[...view]` to see the points.
  *
  * The value is dated `day` itself: the lag is the publication rule, so a custom
  * op takes no `publication`. The days run from the first day any input point is
@@ -245,11 +250,66 @@ const DAY_MS = 86_400_000;
 // The calendar day `n` days after `day` (YYYY-MM-DD, UTC). A bad date is a RangeError.
 const addDays = (day: string, n: number): string => new Date(Date.parse(`${day}T00:00:00Z`) + n * DAY_MS).toISOString().slice(0, 10);
 
-// The custom op: fn on every calendar day, each input cut at the day minus the lag first.
+// The index a property key names on an array, or -1: a canonical non-negative integer string.
+function arrayIndex(key: string | symbol): number {
+  if (typeof key !== "string" || key.length === 0) return -1;
+  const c = key.charCodeAt(0);
+  if (c < 48 || c > 57) return -1;
+  const i = Number(key);
+  return Number.isSafeInteger(i) && String(i) === key ? i : -1;
+}
+
+/**
+ * A read-only view of the first `count` points of `points` (frozen points,
+ * sorted by date), for a custom op's fn: an array to every reader, of length
+ * `count`, which no index, key, descriptor or iteration can read past. Nothing
+ * is copied: a view costs one Proxy whatever its length (wave 5 review: a copy
+ * of the known prefix per day made a 13,000-point input take 25 s). The proxy
+ * target is an empty array that never changes, so the proxy invariants hold
+ * for any `count`. Every write is a TypeError.
+ */
+function knownView(points: readonly Point[], count: number, id: string): Point[] {
+  const refuse = (): never => {
+    throw new TypeError(`derived series ${id}: fn cannot change its inputs`);
+  };
+  return new Proxy([] as Point[], {
+    get(target, key, receiver) {
+      if (key === "length") return count;
+      const i = arrayIndex(key);
+      if (i >= 0) return i < count ? points[i] : undefined;
+      return Reflect.get(target, key, receiver);
+    },
+    has(target, key) {
+      const i = arrayIndex(key);
+      return i >= 0 ? i < count : Reflect.has(target, key);
+    },
+    ownKeys() {
+      const keys: string[] = [];
+      for (let i = 0; i < count; i++) keys.push(String(i));
+      keys.push("length");
+      return keys;
+    },
+    getOwnPropertyDescriptor(target, key) {
+      // The target's length is writable and not configurable, so the view's is
+      // reported the same way; the set trap still refuses every write.
+      if (key === "length") return { value: count, writable: true, enumerable: false, configurable: false };
+      const i = arrayIndex(key);
+      if (i >= 0) return i < count ? { value: points[i], writable: false, enumerable: true, configurable: true } : undefined;
+      return Reflect.getOwnPropertyDescriptor(target, key);
+    },
+    set: refuse,
+    defineProperty: refuse,
+    deleteProperty: refuse,
+    setPrototypeOf: refuse,
+    preventExtensions: refuse,
+  });
+}
+
+// The custom op: fn on every calendar day, each input a view that ends at the day minus the lag.
 function custom(d: DerivedCustom, inputs: Readonly<Record<string, readonly Point[]>>, through: string | undefined): Point[] {
   checkCustom(d);
-  // Each input sorted by date, as frozen copies of its points.
-  const series = d.inputs.map((id) => input(d, inputs, id).map((p) => Object.freeze({ date: p.date, value: p.value })));
+  // Each input sorted by date, as one frozen array of frozen copies of its points.
+  const series = d.inputs.map((id) => Object.freeze(input(d, inputs, id).map((p) => Object.freeze({ date: p.date, value: p.value }))));
   let first: string | undefined;
   let last: string | undefined;
   for (const s of series) {
@@ -262,10 +322,10 @@ function custom(d: DerivedCustom, inputs: Readonly<Record<string, readonly Point
   }
   if (first === undefined || last === undefined) return [];
   const end = through ?? addDays(last, d.lagDays);
-  // How many points of each input are known, and the frozen prefix fn reads. A
-  // prefix is copied again only on a day a new point of that input is known.
+  // How many points of each input are known, and the view fn reads. A new view
+  // (one Proxy, no copy) is made only on a day a new point of that input is known.
   const known = series.map(() => 0);
-  const cut: Point[][] = series.map(() => Object.freeze([]) as unknown as Point[]);
+  const cut: Point[][] = series.map((s) => knownView(s, 0, d.id));
   let view: Record<string, Point[]> | undefined;
   const out: Point[] = [];
   for (let day = addDays(first, d.lagDays); day <= end; day = addDays(day, 1)) {
@@ -276,7 +336,7 @@ function custom(d: DerivedCustom, inputs: Readonly<Record<string, readonly Point
       while (k < s.length && s[k]!.date <= cutoff) k++;
       if (k !== known[j]) {
         known[j] = k;
-        cut[j] = Object.freeze(s.slice(0, k)) as Point[];
+        cut[j] = knownView(s, k, d.id);
         moved = true;
       }
     });

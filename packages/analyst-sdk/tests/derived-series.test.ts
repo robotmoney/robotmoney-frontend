@@ -356,6 +356,80 @@ describe("the custom op: a pure function with a declared publication lag (issue 
     expect(A[0]!.value).toBe(1);
   });
 
+  test("fn cannot see a point past the known day by any route: index, keys, `in`, descriptors, spread, slice or JSON; a view kept from an earlier day never grows", () => {
+    // A is known through 01-05 on 01-05 (lag 0): three points, 01-10 is the fourth.
+    const seen: Record<string, unknown> = {};
+    let kept: readonly Point[] | null = null;
+    deriveSeries(op(0, [], (inputs, day) => {
+      const a = inputs.a!;
+      if (day === "2024-01-05") {
+        kept = a;
+        Object.assign(seen, {
+          length: a.length,
+          past: [a[3], a[a.length], a.at(3), (a as unknown as Record<string, unknown>)["3"]],
+          has: [3 in a, "3" in a, Object.hasOwn(a, 3), Object.getOwnPropertyDescriptor(a, 3)],
+          keys: Object.keys(a),
+          spread: [...a].map((p) => p.date),
+          slice: a.slice(0, 10).map((p) => p.date),
+          json: JSON.parse(JSON.stringify(a)).map((p: Point) => p.date),
+          isArray: Array.isArray(a),
+          entries: Object.entries(a).length,
+        });
+      }
+      return a.length;
+    }), { a: A, b: B }, { through: "2024-01-20" });
+    expect(seen).toEqual({
+      length: 3,
+      past: [undefined, undefined, undefined, undefined],
+      has: [false, false, false, undefined],
+      keys: ["0", "1", "2"],
+      spread: ["2024-01-02", "2024-01-03", "2024-01-05"],
+      slice: ["2024-01-02", "2024-01-03", "2024-01-05"],
+      json: ["2024-01-02", "2024-01-03", "2024-01-05"],
+      isArray: true,
+      entries: 3,
+    });
+    // The view fn kept on 01-05 still holds three points after the last day (01-20) ran.
+    expect(kept!.length).toBe(3);
+    expect(kept![3]).toBeUndefined();
+    // Every write is a TypeError: an index, the length, a new property, a delete, a sort.
+    const writes: ((a: Point[]) => unknown)[] = [
+      (a) => { a[0] = { date: "2099-01-01", value: 1 }; },
+      (a) => { a[a.length] = { date: "2099-01-01", value: 1 }; },
+      (a) => { a.length = 0; },
+      (a) => Object.defineProperty(a, "x", { value: 1 }),
+      (a) => delete a[0],
+      (a) => a.sort((x, y) => (x.date < y.date ? 1 : -1)),
+      (a) => a.pop(),
+      (a) => Object.setPrototypeOf(a, null),
+    ];
+    for (const write of writes) {
+      expect(() => deriveSeries(op(0, [], (inputs) => (write(inputs.a!), 1)), { a: A, b: B })).toThrow(TypeError);
+    }
+    expect(A.map((p) => p.date)).toEqual(["2024-01-02", "2024-01-03", "2024-01-05", "2024-01-10"]);
+  });
+
+  test("the inputs are not copied per day: a 10,000-point daily input runs in well under 2 s", () => {
+    const start = Date.parse("1990-01-01T00:00:00Z");
+    const daily = Array.from({ length: 10_000 }, (_, i) => ({ date: new Date(start + i * 86_400_000).toISOString().slice(0, 10), value: i }));
+    const last: DerivedCustom = {
+      op: "custom",
+      id: "LAST",
+      version: "1",
+      inputs: ["a"],
+      lagDays: 1,
+      fn: (inputs) => (inputs.a!.length > 0 ? inputs.a![inputs.a!.length - 1]!.value + inputs.a!.length : null),
+    };
+    const t0 = performance.now();
+    const out = deriveSeries(last, { a: daily });
+    const ms = performance.now() - t0;
+    // One point a day from the first known day (the first date plus the lag), each the newest known value plus the count.
+    expect(out.length).toBe(10_000);
+    expect(out[0]).toEqual({ date: "1990-01-02", value: 1 });
+    expect(out.at(-1)).toEqual({ date: addDays(daily.at(-1)!.date, 1), value: 9_999 + 10_000 });
+    expect(ms).toBeLessThan(2_000);
+  }, 60_000);
+
   test("a null or a non-finite value gives no point; any other non-number is a RangeError", () => {
     expect(deriveSeries(op(0, [], () => null), { a: A, b: B })).toEqual([]);
     expect(deriveSeries(op(0, [], () => NaN), { a: A, b: B })).toEqual([]);
