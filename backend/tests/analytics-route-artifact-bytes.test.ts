@@ -1,5 +1,5 @@
 // The HTTP analytics route freezes the same regime artifact bytes as the direct
-// persistence path (issue 1765, D-f; acceptance box 6, first form).
+// persistence path (issue 1765, D-f; acceptance box 6).
 //
 // One v4 regime run goes through the HTTP path: the production orchestrator
 // over analyticsApiClient, against the REAL analytics route handler wrapped in
@@ -9,9 +9,10 @@
 // clean database of its own. The two frozen regime artifacts have equal
 // checksums (equal to sha256(payload_bytes) by the CHECK on
 // analytics_output_snapshots), equal to the sha256 of the canonical bytes of
-// the rows the direct run computed. Wave 3 of issue 1765 switches that
-// reference to the SDK's publishedRows. Box 6 names publishedRows, so this
-// first form leaves the box open until wave 3 lands.
+// publishedRows for that run, computed by the SDK alone: runRegime (factor
+// figures on) over the same inputs, as regime-sdk-equivalence.test.ts builds
+// its ledger-path side (sdkInput of the observations the source acquires),
+// then publishedRows with the run's source label.
 //
 // Before D-f, parseSnapshotRow added `bucketThresholds: null` and
 // `extras: null` to every row. No row builder sets either key, and
@@ -29,11 +30,13 @@ import { getRegimeSnapshots } from "../src/api/routes/dashboards.ts";
 import { analyticsApiClient, readAnalyticsToken } from "../src/analytics/api-client.ts";
 import { directAnalyticsPersistence } from "../src/analytics/store/direct.ts";
 import { REGIME_ARTIFACT_KIND, canonicalArtifactBytes } from "../src/analytics/output-snapshots.ts";
+import { publishedRows } from "../src/analytics/report/published-rows.ts";
 import { sha256Hex } from "../src/analytics/run-ledger.ts";
 import type { AnalyticsPersistence } from "../src/analytics/persistence.ts";
 import type { RegimeSnapshotRow } from "../src/analytics/report/regime-projection.ts";
+import { requireComplete, runRegime as runSdkRegime } from "../../packages/analyst-sdk/src/run.ts";
 import { baseObservations } from "./support/committed-inputs.ts";
-import { ASOF, runRegime, sourceFor } from "./support/regime-v5.ts";
+import { ASOF, runRegime, sdkInput, sourceFor } from "./support/regime-v5.ts";
 import { provisionAnalyticsToken, writeTokenFile } from "./support/automation-auth.ts";
 import { useCleanDatabasePerTest } from "./support/clean-db.ts";
 
@@ -118,13 +121,21 @@ describe("HTTP route and direct path freeze the same regime artifact bytes (D-f)
     expect(runs.http.checksum).toBe(runs.http.payloadSha256);
   }, 600_000);
 
-  test("the two artifacts have equal checksums, equal to sha256 of the canonical bytes of the direct run's rows; the served as-of rows are deep-equal", () => {
+  test("the two artifacts have equal checksums, equal to sha256 of the canonical bytes of publishedRows for the run; the served as-of rows are deep-equal", async () => {
     const { direct, http } = runs;
     expect(direct).toBeDefined();
     expect(http).toBeDefined();
-    // Both runs computed the same rows (in memory, before any wire).
-    expect(sha256Hex(canonicalArtifactBytes(http!.rows))).toBe(sha256Hex(canonicalArtifactBytes(direct!.rows)));
-    const reference = sha256Hex(canonicalArtifactBytes(direct!.rows));
+    // The reference, from the SDK alone: the same inputs, as-of day and
+    // version, and the source label the orchestrator stamps on a fixture run.
+    const sdkRun = requireComplete(runSdkRegime(sdkInput(await baseObservations()), { asof: ASOF, factor: true, version: "v4" }));
+    const sdkRows = publishedRows(sdkRun, { source: "fixture" });
+    expect(sdkRows.length).toBe(direct!.rows.length);
+    expect(sdkRows[sdkRows.length - 1]!.date).toBe(ASOF);
+    const reference = sha256Hex(canonicalArtifactBytes(sdkRows));
+    // Both runs computed those rows (in memory, before any wire).
+    expect(sha256Hex(canonicalArtifactBytes(direct!.rows))).toBe(reference);
+    expect(sha256Hex(canonicalArtifactBytes(http!.rows))).toBe(reference);
+    // And both froze them.
     expect(direct!.checksum).toBe(reference);
     expect(http!.checksum).toBe(reference);
     expect(http!.checksum).toBe(direct!.checksum);
