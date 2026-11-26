@@ -153,9 +153,9 @@ export async function computeModel(run: LedgerRun, x: ComputeModelInput): Promis
   };
   // `regime asof D` is the line the standing soak check reads for the main line
   // (scripts/lib/gate/standing.ts R8.x); a line beside it names its version.
-  const tag = REGIME_LINE[version] === "main" ? "" : ` ${version}`;
+  const head = REGIME_LINE[version] === "main" ? `[analytics] regime asof ${day}` : `[analytics] regime ${version} asof ${day}`;
   const tail = keptRead ? `${rows.length} rows, ${kept.length} kept days` : `${rows.length} rows`;
-  logger.log?.(`[analytics] regime${tag} asof ${day}: composite=${figure.composite} regime=${figure.regime ?? "insufficient_history"} (${tail})`);
+  logger.log?.(`${head}: composite=${figure.composite} regime=${figure.regime ?? "insufficient_history"} (${tail})`);
 }
 
 /** Which research signals a run computes. */

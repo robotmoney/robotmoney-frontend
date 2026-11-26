@@ -522,7 +522,7 @@ describe("drift guards against main", () => {
     has("backend/src/chain/buyback-indexer.ts", "live index failed");
     has("backend/src/chain/gecko-endpoint.ts", "[gecko]");
     has("backend/src/chain/gecko-endpoint.ts", "answered HTTP");
-    has("backend/src/analytics/index.ts", "regime asof");
+    has("backend/src/analytics/compute.ts", "regime asof");
     has("backend/src/producer/index.ts", "failed: ");
     has("backend/src/producer/index.ts", "analytics-producer] fatal:");
   });
