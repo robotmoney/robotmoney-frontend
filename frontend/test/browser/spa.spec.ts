@@ -208,19 +208,39 @@ test("an empty #view reserves a viewport of height, and stops doing so once rout
   expect(reserved!.filled).toBeLessThan(reserved!.viewport);
 });
 
-// Deposits wait for the vaults to open (RM-190): the deposit page and the
-// deposit skill's docs move to early access, query kept so a referral rides
-// along and fills in the form's code (RM-195). That an address the docs never
-// had is no alias is seo-legacy-aliases.test.ts's.
-test("/deposit and the deposit skill's docs move to /early-access with their query", async ({ page }) => {
+// The retired deposit skill's docs move to early access (RM-190), query kept
+// so a referral rides along and fills in the form's code (RM-195). /deposit is
+// its own page again (RM-146, under RM-205): the next test. That an address the
+// docs never had is no alias is seo-legacy-aliases.test.ts's.
+test("the deposit skill's docs move to /early-access with their query", async ({ page }) => {
   // Loaded directly, as a held link would be: navigate() waits for the path it
   // was given, and these never render under it.
-  for (const from of ["/deposit", "/docs/skill", "/docs/skill/commands"]) {
+  for (const from of ["/docs/skill", "/docs/skill/commands"]) {
     await page.goto(`${from}?ref=rm_athena`);
     await expect(page, from).toHaveURL(/\/early-access\?ref=rm_athena$/);
     await expect(page.locator("h1"), from).toHaveText("Early access");
     await expect(page.locator("#ea-referral"), from).toHaveValue("rm_athena");
   }
+});
+
+// /deposit renders the deposit page and stays at /deposit (RM-146). Early
+// access asks for a code first (lib/deposit/access.js) and checks it as soon as
+// the tenth character lands; RM-LOCAL-TESTS opens it on a local host only. The
+// page reads the live vault on Base; `?vault=sim` (local hosts only) runs it on
+// the simulator, which says so, so this test needs no network.
+test("/deposit is the deposit page, behind early access, on the simulator when asked", async ({ page }) => {
+  const errors = failOnBrowserErrors(page);
+  await page.goto("/deposit?vault=sim");
+  await expect(page).toHaveURL(/\/deposit\?vault=sim$/);
+  await expect(page.locator(".dpg__title")).toContainText("Early access to the vault");
+  await page.locator("#dp-code").fill("RM-AAAAA-BBBBB");
+  await expect(page.locator("#dp-code-msg")).toContainText("does not match");
+  await page.locator("#dp-code").fill("RM-LOCAL-TESTS");
+  await expect(page.locator(".dp__title")).toContainText("Robot Money Vault");
+  await expect(page.locator(".dp__tag").first()).toHaveText("Sample data");
+  // The panel's main button on the tab in view; the balance slot carries a small text one too.
+  await expect(page.locator(".dp__panel .btn-primary:visible", { hasText: "Connect wallet" })).toBeVisible();
+  await expectNoBrowserErrors(errors);
 });
 
 // The skills page keeps the tree canvas the deposit page shared with it.

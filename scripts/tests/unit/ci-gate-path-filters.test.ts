@@ -290,7 +290,9 @@ describe("ci-gate path-filter classification (distributed dorny/paths-filter —
   test("every scripts/ and scripts/tests/ directory is selected by integration or deliberately skipped", () => {
     // scripts/release: the release runner (D61) runs on the control machine over ssh;
     // its logic is unit-tested (release-run.test.ts) and no integration suite boots it.
-    const SKIPPED_BY_INTEGRATION = new Set(["scripts/tests/unit", "scripts/release"]);
+    // scripts/vendor: the vendored wallet kit's pinned inputs and rebuild (issue 1615);
+    // web-client runs `check:appkit` on them, and no integration suite loads them.
+    const SKIPPED_BY_INTEGRATION = new Set(["scripts/tests/unit", "scripts/release", "scripts/vendor"]);
     const patterns = patternsFor("integration.yml");
     const dirs = [
       ...readdirSync(join(repoRoot, "scripts"), { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => `scripts/${d.name}`),

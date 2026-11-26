@@ -11,6 +11,7 @@ import { registerSelect } from "./alpine/select.js";
 import { registerRegimeDial } from "./alpine/regime-dial.js";
 import { applyChartDefaults } from "./lib/chart-theme.js";
 import { initTooltips } from "./lib/tooltip.js";
+import { initAccessCta } from "./lib/access-cta.js";
 import { initHeadingAnchors } from "./lib/heading-anchors.js";
 import { start } from "./router.js";
 import { startAnalytics } from "./analytics.js";
@@ -44,9 +45,15 @@ apiCompat.then((r) => {
   if (r.status !== "incompatible") showMaintenance(document, apiUrl(ROUTES.status.maintenance));
 });
 
+// Fetch the display face now, while the view's markup loads: a title that first
+// asks for it paints in the fallback and rewraps a frame later (a layout shift).
+document.fonts?.load("800 1em Archivo").catch(() => {});
+
 // Register every Alpine.data factory the views need, before Alpine starts.
 // .rm-tip behaviour, bound once by delegation (see lib/tooltip.js).
 initTooltips();
+// With an early access code, the site's "Request early access" buttons lead to /deposit.
+initAccessCta();
 // Section links on the pages that opt in with data-anchors (lib/heading-anchors.js).
 // Before start() below, so the first route's rm:view-changed is caught.
 initHeadingAnchors();

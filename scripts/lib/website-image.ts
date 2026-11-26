@@ -33,7 +33,7 @@ export const WEBSITE_IMAGE_LABELS = {
  * table (scripts/tests/support/website-routes-table.ts) reads them from here.
  */
 export const WEBSITE_CSP =
-  "default-src 'self'; script-src 'self' 'unsafe-eval' https://challenges.cloudflare.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: https:; font-src 'self' data: https://fonts.gstatic.com; frame-src https://challenges.cloudflare.com; connect-src 'self' https://script.google.com https://script.googleusercontent.com; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'";
+  "default-src 'self'; script-src 'self' 'unsafe-eval' https://challenges.cloudflare.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob: https:; font-src 'self' data: https://fonts.gstatic.com https://fonts.reown.com; frame-src https://challenges.cloudflare.com https://verify.walletconnect.org https://verify.walletconnect.com; connect-src 'self' https://script.google.com https://script.googleusercontent.com https://rpc.walletconnect.org https://rpc.walletconnect.com https://api.web3modal.org https://api.web3modal.com wss://relay.walletconnect.org wss://relay.walletconnect.com https://mainnet.base.org; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'";
 
 export const WEBSITE_SECURITY_HEADERS: Readonly<Record<string, string>> = {
   "content-security-policy": WEBSITE_CSP,

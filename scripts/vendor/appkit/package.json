@@ -1,0 +1,13 @@
+{
+  "name": "rm-appkit-build",
+  "private": true,
+  "type": "module",
+  "description": "The pinned inputs of frontend/public/assets/js/vendor/rm-appkit-<version>.min.js. Rebuild with `bun run vendor:appkit`; CI runs `bun run check:appkit`.",
+  "dependencies": {
+    "@reown/appkit": "1.8.24",
+    "@reown/appkit-adapter-wagmi": "1.8.24",
+    "@wagmi/connectors": "8.2.4",
+    "@wagmi/core": "3.6.7",
+    "viem": "2.57.13"
+  }
+}
