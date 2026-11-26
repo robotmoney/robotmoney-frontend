@@ -222,11 +222,26 @@ console.log(JSON.stringify({ resolved, imported, listed }));
   });
 });
 
-// The README's TypeScript blocks import from the package entry, either as
-// "./src/index.ts" (run from the package folder) or by the bare package name.
-// Every name they import that way is exported from ".". Imports from ./bin/ and
-// from "./node" are left out: openBackupsDir reads files, so it is never in ".".
+// The README's TypeScript blocks import from the package entries, either as
+// "./src/index.ts" (run from the package folder) or by package name. Every
+// value name they import from "." is exported from "." at run time. A
+// type-only name has no value to look up, so the compiler checks it: a
+// temporary consumer imports each one by package name from the entry the
+// README names, and tsc must accept it (issue 1765). A type reached only
+// through an `export *` passes, and a word found only in a comment of the
+// entry fails, which a search of the entry's text could not tell apart.
+// Imports from ./bin/ are left out. The README test runs every block
+// (scripts/tests/unit/analyst-sdk-readme-commands.test.ts), which checks the
+// value names of the other entries.
 const README_ENTRY_SPECS = new Set(["./src/index.ts", NAME]);
+// The specifier a type-only name is checked under: the package name a client writes.
+const TYPE_SPECS: Readonly<Record<string, string>> = {
+  "./src/index.ts": NAME,
+  [NAME]: NAME,
+  [`${NAME}/replay`]: `${NAME}/replay`,
+  [`${NAME}/archive`]: `${NAME}/archive`,
+  [`${NAME}/node`]: `${NAME}/node`,
+};
 
 /** Each import in the README's ```ts blocks: its specifier and its named imports (type-only names marked). */
 function readmeImports(markdown: string): { spec: string; names: { name: string; type: boolean }[] }[] {
@@ -244,33 +259,89 @@ function readmeImports(markdown: string): { spec: string; names: { name: string;
   return out;
 }
 
-/** The README names imported from the package entry that "." does not export. */
-function missingFromEntry(markdown: string, entryValues: ReadonlySet<string>, entrySource: string): string[] {
+/** The value names the README imports from "." (as the package name or "./src/index.ts") that "." does not export. */
+function missingValuesFromEntry(markdown: string, entryValues: ReadonlySet<string>): string[] {
   const missing: string[] = [];
   for (const { spec, names } of readmeImports(markdown)) {
     if (!README_ENTRY_SPECS.has(spec)) continue;
-    for (const { name, type } of names) {
-      const ok = type ? new RegExp(`\\b${name}\\b`).test(entrySource) : entryValues.has(name);
-      if (!ok) missing.push(`${spec}: ${name}`);
-    }
+    for (const { name, type } of names) if (!type && !entryValues.has(name)) missing.push(`${spec}: ${name}`);
   }
   return missing;
 }
 
-describe("every name the README imports from the package entry is exported from '.' (issue 1765)", () => {
+/** The type-only names the README imports from a package entry, by the package-name specifier they are checked under. */
+function readmeTypeImports(markdown: string): Map<string, string[]> {
+  const out = new Map<string, string[]>();
+  for (const { spec, names } of readmeImports(markdown)) {
+    const checkedAs = TYPE_SPECS[spec];
+    if (checkedAs === undefined) continue;
+    for (const { name, type } of names) {
+      if (!type) continue;
+      const list = out.get(checkedAs) ?? [];
+      if (!list.includes(name)) list.push(name);
+      out.set(checkedAs, list);
+    }
+  }
+  return out;
+}
+
+const TSC = join(PKG, "node_modules", "typescript", "bin", "tsc");
+const REFUSED = /^check\.ts\(\d+,\d+\): error TS(?:2305|2724): Module '"([^"]+)"' has no exported member(?: named)? '([^']+)'/;
+
+/**
+ * Compile one `import type { ... } from "<spec>"` line per entry in a
+ * temporary consumer, under the package's own compiler options. `refused` is
+ * each name tsc says its entry does not export ("<spec>: <name>"), sorted;
+ * `errors` is every other line tsc printed.
+ */
+async function typesTscRefuses(byEntry: ReadonlyMap<string, readonly string[]>): Promise<{ refused: string[]; errors: string[] }> {
+  const dir = mkdtempSync(join(tmpdir(), "analyst-sdk-types-"));
+  const link = join(dir, "node_modules", "@robotmoney", "analyst-sdk");
+  try {
+    mkdirSync(join(dir, "node_modules", "@robotmoney"), { recursive: true });
+    symlinkSync(PKG, link, "dir");
+    const lines = [...byEntry].map(([spec, names]) => `import type { ${names.join(", ")} } from ${JSON.stringify(spec)};`);
+    writeFileSync(join(dir, "check.ts"), `${lines.join("\n")}\n`);
+    const { compilerOptions } = JSON.parse(readFileSync(join(PKG, "tsconfig.json"), "utf8")) as { compilerOptions: Record<string, unknown> };
+    const typeRoots = [join(PKG, "node_modules"), join(PKG, "node_modules", "@types")];
+    writeFileSync(join(dir, "tsconfig.json"), JSON.stringify({ compilerOptions: { ...compilerOptions, typeRoots }, files: ["check.ts"] }));
+    const p = Bun.spawn(["bun", TSC, "-p", "tsconfig.json"], { cwd: dir, stdout: "pipe", stderr: "pipe" });
+    const [stdout, stderr] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
+    const refused: string[] = [];
+    const errors: string[] = [];
+    for (const line of `${stdout}\n${stderr}`.split("\n").filter((l) => l.trim() !== "")) {
+      const m = REFUSED.exec(line);
+      if (m) refused.push(`${m[1]}: ${m[2]}`);
+      else errors.push(line);
+    }
+    return { refused: refused.sort(), errors };
+  } finally {
+    // Remove the link to the package first, so the recursive removal can never reach the package itself.
+    rmSync(link, { force: true });
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+describe("every name the README imports from a package entry is exported by it (issue 1765)", () => {
   const readme = readFileSync(join(PKG, "README.md"), "utf8");
-  const entrySource = readFileSync(join(PKG, "src", "index.ts"), "utf8");
   const values = new Set(Object.keys(sdk));
 
-  test("the README's blocks import from the entry both ways, and every such name is exported", () => {
+  test("the README's blocks import from the entry both ways, and every value name is exported from '.'", () => {
     const fromEntry = readmeImports(readme).filter((i) => README_ENTRY_SPECS.has(i.spec));
     expect(fromEntry.some((i) => i.spec === "./src/index.ts")).toBe(true);
     expect(fromEntry.some((i) => i.spec === NAME)).toBe(true);
     expect(fromEntry.flatMap((i) => i.names).length).toBeGreaterThanOrEqual(20);
-    expect(missingFromEntry(readme, values, entrySource)).toEqual([]);
+    expect(missingValuesFromEntry(readme, values)).toEqual([]);
   });
 
-  test("red control: a planted README block naming a missing export is flagged; bin/ and ./node imports are skipped", () => {
+  test("every type-only name the README imports compiles: tsc finds each in the entry it is imported from", async () => {
+    expect(existsSync(TSC), "typescript is installed in the package (bun install)").toBe(true);
+    const types = readmeTypeImports(readme);
+    expect(types.get(NAME)).toEqual(expect.arrayContaining(["RuleVariant", "ScreenMetric"]));
+    expect(await typesTscRefuses(types)).toEqual({ refused: [], errors: [] });
+  });
+
+  test("red control: a planted block naming a missing value is flagged; bin/ and ./node imports are skipped", () => {
     const planted = [
       "```ts",
       `import { runRegime, notAnExport } from "${NAME}";`,
@@ -280,7 +351,33 @@ describe("every name the README imports from the package entry is exported from 
       "```",
       "",
     ].join("\n");
-    expect(missingFromEntry(planted, values, entrySource)).toEqual([`${NAME}: notAnExport`, "./src/index.ts: alsoMissing"]);
+    expect(missingValuesFromEntry(planted, values)).toEqual([`${NAME}: notAnExport`, "./src/index.ts: alsoMissing"]);
     expect(readmeImports(planted).map((i) => i.spec)).toEqual([NAME, "./src/index.ts", "./bin/backups-dir.ts", `${NAME}/node`]);
+  });
+
+  test("red control: tsc refuses a type that is not exported and a word found only in a comment, and accepts a type reached only through export *", async () => {
+    const entrySource = readFileSync(join(PKG, "src", "index.ts"), "utf8");
+    // What a search of the entry's text would get wrong: RunOptions is reached only
+    // through `export * from "./run.ts"`, and "workbench" is only a word in a comment.
+    expect(entrySource).not.toMatch(/\bRunOptions\b/);
+    expect(entrySource).toMatch(/\bworkbench\b/);
+    const planted = [
+      "```ts",
+      `import type { RunOptions, workbench } from "${NAME}";`,
+      'import { runRegime, type NotAType } from "./src/index.ts";',
+      `import type { ReplayResult, NoSuchReplayType } from "${NAME}/replay";`,
+      'import type { Archive } from "./bin/backups-dir.ts";',
+      "```",
+      "",
+    ].join("\n");
+    const types = readmeTypeImports(planted);
+    expect([...types]).toEqual([
+      [NAME, ["RunOptions", "workbench", "NotAType"]],
+      [`${NAME}/replay`, ["ReplayResult", "NoSuchReplayType"]],
+    ]);
+    expect(await typesTscRefuses(types)).toEqual({
+      refused: [`${NAME}: NotAType`, `${NAME}: workbench`, `${NAME}/replay: NoSuchReplayType`].sort(),
+      errors: [],
+    });
   });
 });
