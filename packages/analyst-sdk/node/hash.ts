@@ -1,7 +1,6 @@
 // File hashing for the node edge (issue 1765): the SHA-256 that bin/inputs.ts
 // writes into an input manifest and node/supplementary-dir.ts writes into a
-// supplementary manifest. One definition, so both manifests hash the same way.
-// It uses Bun's hasher, so it lives in node/, outside the pure src/.
-
-/** The lowercase hex SHA-256 of `bytes`. */
-export const sha256 = (bytes: Uint8Array): string => new Bun.CryptoHasher("sha256").update(bytes).digest("hex");
+// supplementary manifest. It is the SDK's one definition, the pure
+// src/hash.ts, re-exported here so both manifests hash the way the reader and
+// the supplementary check verify them.
+export { sha256 } from "../src/hash.ts";

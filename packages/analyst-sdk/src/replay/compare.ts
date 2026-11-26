@@ -6,7 +6,7 @@
 // run's result. Decision D78 (compensated arithmetic) moves numbers in their
 // last bits, so a run published before it differs from its replay in those
 // bits; `beyondRounding` names the fields that differ by more than that.
-import { createHash } from "node:crypto";
+import { sha256 } from "../hash.ts";
 import { canonicalStringify } from "../report/canonical.ts";
 import { numericDiff } from "./numeric-diff.ts";
 
@@ -62,7 +62,6 @@ export interface RowComparison {
   readonly beyondRounding: string[];
 }
 
-const sha256 = (s: string): string => createHash("sha256").update(s).digest("hex");
 const isPlainObject = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === "object" && !Array.isArray(v);
 
 // The sub-keys of a differing field: each top-level key whose value differs or

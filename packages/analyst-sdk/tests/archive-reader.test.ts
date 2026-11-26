@@ -16,6 +16,9 @@ import { openBackupsDir, collectRunInputs as binCollectRunInputs } from "../bin/
 import * as binExports from "../bin/backups-dir.ts";
 import * as sdkIndex from "../src/index.ts";
 import { runVintageMembers } from "../src/archive/reader.ts";
+import { sha256 } from "../src/hash.ts";
+import { sha256 as nodeSha256 } from "../node/hash.ts";
+import * as nodeEdge from "../node/index.ts";
 import { RunInputCollector, seriesForStorageKey, type RunInputs } from "../src/archive/format1.ts";
 import { SERIES_MAPPING, V5_ONLY_STORAGE_KEYS, V5_SERIES_MAPPING } from "../src/series-ids.ts";
 import { ArchiveError, INPUT_TABLES, collectRunInputs, openArchive, selectBackups, type ArchiveFiles, type Archive, type ArchiveRow as Row } from "../src/index.ts";
@@ -619,13 +622,36 @@ describe("the retired reader names are gone", () => {
     expect(Object.keys(sdkIndex)).not.toContain(retired);
     expect(readdirSync(join(pkg, "bin"))).not.toContain(retiredFile);
     expect(readdirSync(join(pkg, "bin"))).toContain("backups-dir.ts");
-    for (const dir of ["bin", "src"]) {
+    // node/ is the package's fs edge (issue 1765), where the folder reader now lives.
+    expect(readdirSync(join(pkg, "node"))).not.toContain(retiredFile);
+    expect(readdirSync(join(pkg, "node"))).toContain("backups-dir.ts");
+    for (const dir of ["bin", "node", "src"]) {
       const walk = (d: string): string[] => readdirSync(d).flatMap((n) => (statSync(join(d, n)).isDirectory() ? walk(join(d, n)) : [join(d, n)]));
-      for (const f of walk(join(pkg, dir))) {
+      const walked = walk(join(pkg, dir));
+      expect(walked.length, dir).toBeGreaterThan(0);
+      for (const f of walked) {
         const text = readFileSync(f, "utf8");
         expect(text, f).not.toMatch(new RegExp(`${retired}|\\b${retiredType}\\b|${retiredFile.replace(".", "\\.")}`));
       }
     }
+  });
+});
+
+// ── Issue 1765: one sha256 ───────────────────────────────────────────────────
+// The reader's file digests, the supplementary check, the replay comparison and
+// the manifests the node edge writes all hash through src/hash.ts.
+describe("one sha256 (issue 1765)", () => {
+  test("src/hash.ts is the one definition, node/ re-exports it, and a string hashes as its UTF-8 bytes", () => {
+    expect(nodeSha256).toBe(sha256);
+    expect(nodeEdge.sha256).toBe(sha256);
+    expect(sha256("")).toBe("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+    expect(sha256("abc")).toBe("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+    const text = "caf\u00e9 \u2014 \u00fc";
+    const bytes = new TextEncoder().encode(text);
+    expect(sha256(text)).toBe(sha256(bytes));
+    // The same hex the Bun hasher node/ used before gave.
+    expect(sha256(bytes)).toBe(new Bun.CryptoHasher("sha256").update(bytes).digest("hex"));
+    expect(sha256(bytes)).toMatch(/^[0-9a-f]{64}$/);
   });
 });
 

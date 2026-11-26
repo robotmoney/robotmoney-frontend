@@ -1,7 +1,7 @@
 // Reading a format 1 archive (issues 1513, 1544): the reader core, pure. The
 // reader reads the csv-backups folder in place and copies nothing. File access
 // goes through an injected ArchiveFiles reader, so the same code runs over a
-// directory on disk (bin/backups-dir.ts, the reader of `bun run inputs`), an
+// directory on disk (node/backups-dir.ts, the reader of `bun run inputs`), an
 // in-memory map in a test, or anything else a client hands it. The SDK never
 // fetches and never touches a filesystem here (analyst SDK requirements
 // section 2, D57; scripts/tests/unit/analyst-sdk-purity.test.ts).
@@ -26,7 +26,7 @@
 //   latestValues(keys)     the newest source_value_versions value per
 //                          (source_key, market_date) for the requested storage
 //                          keys, tagged with the input id they are read under.
-import { createHash } from "node:crypto";
+import { sha256 } from "../hash.ts";
 import {
   ArchiveError,
   INPUT_TABLES,
@@ -98,7 +98,6 @@ export interface Archive {
   latestValues(sourceKeys: readonly string[]): LatestValue[];
 }
 
-const sha256 = (b: Uint8Array) => createHash("sha256").update(b).digest("hex");
 // Strict UTF-8: an invalid byte throws. ignoreBOM keeps a byte order mark in the
 // text so decodeText can refuse it, rather than the decoder silently dropping it.
 const utf8 = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true });
