@@ -3,6 +3,12 @@
 // window.ethereum and known feed hosts like geckoterminal, mainnet.base.org, alchemy).
 // Block explorer links (basescan.org) are explicitly permitted.
 // Also includes a planted-violation control proving the guard is not vacuous.
+//
+// D97 (issue 1615): the deposit page's wallet layer is out of this guard's
+// scope. A holder's wallet session reads their own balance and signs their own
+// transactions, which no server can do for them. The exemption is two paths:
+// the vendored wallet kit and lib/deposit/. Dashboards and every other file
+// stay held to the rule.
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
@@ -19,6 +25,16 @@ const FORBIDDEN_PATTERNS = [
   "mainnet.base.org",
   ".g.alchemy.com",
 ];
+
+/** The deposit page's wallet layer (D97): the vendored kit and lib/deposit/. Nothing else. */
+const WALLET_LAYER = [
+  /^frontend\/public\/assets\/js\/vendor\/rm-appkit-\d+\.\d+\.\d+\.min\.js$/,
+  /^frontend\/public\/assets\/js\/app\/lib\/deposit\/[^/]+\.js$/,
+];
+
+export function isWalletLayer(relPath: string): boolean {
+  return WALLET_LAYER.some((re) => re.test(relPath));
+}
 
 function isBinaryExtension(filename: string): boolean {
   return /\.(png|jpg|jpeg|gif|ico|woff|woff2|ttf|eot|svg|webmanifest)$/i.test(filename);
@@ -55,11 +71,27 @@ describe("no client-side chain-RPC or third-party feed requests in frontend/publ
     for (const f of files) {
       const text = readFileSync(f, "utf8");
       const relPath = f.replace(repoRoot + "/", "");
+      if (isWalletLayer(relPath)) continue;
       const violations = findFeedViolations(text, relPath);
       allViolations.push(...violations);
     }
 
     expect(allViolations).toEqual([]);
+  });
+
+  test("the wallet layer exemption names the deposit wallet files and nothing else (D97)", () => {
+    expect(isWalletLayer("frontend/public/assets/js/vendor/rm-appkit-1.8.24.min.js")).toBe(true);
+    expect(isWalletLayer("frontend/public/assets/js/app/lib/deposit/manifest.js")).toBe(true);
+    // A dashboard, a view, another vendor file, a nested or look-alike path: all still held.
+    for (const p of [
+      "frontend/public/assets/js/app/alpine/views/allocation.js",
+      "frontend/public/assets/js/app/alpine/views/deposit.js",
+      "frontend/public/assets/js/vendor/chart-4.5.1.umd.min.js",
+      "frontend/public/assets/js/vendor/rm-appkit-latest.min.js",
+      "frontend/public/assets/js/app/lib/deposit/feeds/prices.js",
+      "frontend/public/assets/js/app/lib/deposit-feeds/prices.js",
+      "frontend/public/views/deposit.html",
+    ]) expect(isWalletLayer(p), p).toBe(false);
   });
 
   test("planted-violation control flags planted feed requests", () => {

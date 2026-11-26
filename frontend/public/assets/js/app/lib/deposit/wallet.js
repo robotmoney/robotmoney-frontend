@@ -53,7 +53,10 @@ function boot(kit) {
   // one multicall capped by RAW calldata, but each call costs about 190 bytes
   // once encoded, so three concurrent vault reads made one 17.5 KB request and
   // Reown's RPC refused it (see readMany). readMany packs by encoded size instead.
-  const adapter = new kit.WagmiAdapter({ networks, projectId: REOWN_PROJECT_ID, customRpcUrls, batch: { multicall: false } });
+  // Base Account is passed in, not left to the kit: the kit builds it with
+  // telemetry on, and its SDK then injects an inline script the CSP refuses.
+  const connectors = [kit.baseAccount({ appName: "Robot Money", preference: { telemetry: false } })];
+  const adapter = new kit.WagmiAdapter({ networks, projectId: REOWN_PROJECT_ID, customRpcUrls, connectors, batch: { multicall: false } });
   const config = adapter.wagmiConfig;
   const modal = kit.createAppKit({
     adapters: [adapter],
@@ -70,6 +73,9 @@ function boot(kit) {
     termsConditionsUrl: `${location.origin}/terms`,
     privacyPolicyUrl: `${location.origin}/privacy`,
     features: { email: false, socials: false, onramp: false, swaps: false, send: false, history: false, analytics: false },
+    // Coinbase's SDK injects an inline telemetry script, which the site's CSP
+    // refuses (script-src has no 'unsafe-inline'); off, so it never tries.
+    coinbasePreference: { options: "all", telemetry: false },
     allowUnsupportedChain: false,
     themeMode: "dark",
     // The site's covenant: cyan is a line, never a fill; corners square.

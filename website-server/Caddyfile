@@ -33,7 +33,7 @@
 # Security headers on every answer (§3.3): pages, assets, proxied answers and
 # error answers alike. The table checks them on pages only, as nginx sends them.
 (security_headers) {
-	Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-eval' https://challenges.cloudflare.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: https:; font-src 'self' data: https://fonts.gstatic.com; frame-src https://challenges.cloudflare.com; connect-src 'self' https://script.google.com https://script.googleusercontent.com; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'"
+	Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-eval' https://challenges.cloudflare.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: blob: https:; font-src 'self' data: https://fonts.gstatic.com https://fonts.reown.com; frame-src https://challenges.cloudflare.com https://verify.walletconnect.org https://verify.walletconnect.com; connect-src 'self' https://script.google.com https://script.googleusercontent.com https://rpc.walletconnect.org https://rpc.walletconnect.com https://api.web3modal.org https://api.web3modal.com wss://relay.walletconnect.org wss://relay.walletconnect.com https://mainnet.base.org; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'self'"
 	Permissions-Policy "publickey-credentials-get=(self), publickey-credentials-create=(self)"
 	Referrer-Policy "strict-origin-when-cross-origin"
 	X-Content-Type-Options "nosniff"
