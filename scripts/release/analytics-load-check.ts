@@ -20,7 +20,7 @@
 // from it. On the stage target that is an hourly slot anchored to the boot,
 // about 15 minutes after it (D87, issue 1684); production's is `0 */3 * * *`.
 // The window closes 5 minutes after the tick's `[analytics] regime asof` line
-// (backend/src/analytics/index.ts), or at its cap, which fails when that line
+// (backend/src/analytics/compute.ts), or at its cap, which fails when that line
 // never comes (issue 1567: a window is a cap, never a fixed wait). The cap is
 // the earlier of 120 minutes and the next research slot after the opening, so a
 // window never spans two ticks. Then it reads the api container's log for the window and the
