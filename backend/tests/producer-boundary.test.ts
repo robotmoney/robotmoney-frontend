@@ -155,45 +155,41 @@ test("a regime tick isolates its runs: a failed main-line run does not stop the 
   expect(main.errors.filter((e) => e.includes("regime failed for methodology v5") && e.includes("beginRun refused for v5")).length).toBe(1);
 }, 120_000);
 
-// Issue 1753: an injected runner still drives each run of a regime tick on its
-// own (its own extract per run), main line first, the runs sharing one
-// run-scoped source. A failed beside run never fails or changes the main-line
-// run, and a failed main-line run does not stop the beside run.
-test("an injected runner drives each run of a regime tick, main line first, over one shared source", async () => {
-  const shared = { ...hermeticDataSource };
-  const source = { ...hermeticDataSource, forRun: () => shared };
-  const seen: string[] = [];
-  const out = await capturingErrors(() => runProducerOnce("regime", "2031-01-02", {
-    source,
+// Issue 1753, kept by the one tick path (issue 1765): the models of a regime
+// tick share one run-scoped source, so the tick makes one provider request per
+// series. A failed beside run never fails or changes the main-line run: the
+// main line's calls and result equal those of a tick without the beside model.
+// A regime tick has one path, runRegimeTick: an injected runner is refused.
+test("a regime tick's models share one run-scoped source, and a failed beside run never changes the main-line run: its result equals a tick of the main line alone", async () => {
+  const both = tickLedger();
+  const withBeside = await capturingErrors(() => runProducerOnce("regime", "2031-01-02", { source: recordingSource(both.calls), persistence: both.persistence, tick: TICK }));
+  const alone = tickLedger();
+  const mainOnly = await capturingErrors(() => runProducerOnce("regime", "2031-01-02", { source: recordingSource(alone.calls), persistence: alone.persistence, tick: { ...TICK, versions: ["v4"] } }));
+  expect(withBeside.error).toBeNull();
+  expect(mainOnly.error).toBeNull();
+  // One run-scoped source for the whole tick, each fetch made once through it.
+  expect(both.calls.filter((c) => c === "forRun")).toEqual(["forRun"]);
+  expect(both.calls.filter((c) => c.startsWith("fetch"))).toEqual(["fetchIndicators", "fetchBacktestExtras"]);
+  // The beside run failed alone, and was logged.
+  expect(both.calls.slice(-3)).toEqual(["loadKeptRegimeDays v5", "failed v5", "package failed v5"]);
+  expect(withBeside.errors.filter((e) => e.includes("regime failed for methodology v5")).length).toBe(1);
+  // The main line's calls and result are those of a tick without the beside model.
+  expect(both.calls.filter((c) => !c.endsWith(" v5"))).toEqual(alone.calls);
+  expect(alone.calls.some((c) => c.endsWith(" v5"))).toBe(false);
+  expect(withBeside.value).toEqual(mainOnly.value);
+  expect((withBeside.value as any).regime.asof).toBe("2031-01-02");
+  // A regime tick has one path: a runner is refused before any call.
+  const refused: string[] = [];
+  await expect(runProducerOnce("regime", "2031-01-02", {
+    source: recordingSource(refused),
     persistence,
-    runner: async (asof, tool, src, store, run) => {
-      expect(asof).toBe("2031-01-02");
-      expect(src).toBe(source);
-      expect(store).toBe(persistence);
-      expect(run?.runSource).toBe(shared);
-      seen.push(`${tool}:${run?.regimeVersion ?? "main"}`);
-      if (run?.regimeVersion === "v5") throw new Error("v5 failed");
-      return { [tool]: { submitted: true } };
+    runner: async () => {
+      refused.push("runner");
+      return {};
     },
-  }));
-  expect(seen).toEqual(["regime:main", "regime:v5"]);
-  expect(out.value).toEqual({ regime: { submitted: true } });
-  expect(out.errors.some((e) => e.includes("regime failed for methodology v5"))).toBe(true);
-
-  const order: string[] = [];
-  await expect(
-    runProducerOnce("regime", "2031-01-02", {
-      source,
-      persistence,
-      runner: async (_asof, _tool, _source, _store, run) => {
-        order.push(run?.regimeVersion ?? "main");
-        if (run?.regimeVersion === undefined) throw new Error("main failed");
-        return { regime: { submitted: true } };
-      },
-    }),
-  ).rejects.toThrow("main failed");
-  expect(order).toEqual(["main", "v5"]);
-});
+  })).rejects.toThrow(/regime tick takes no runner/);
+  expect(refused).toEqual([]);
+}, 120_000);
 
 // Issue #509: the research producer must invoke the orchestrator ONCE per
 // scheduled run, not once per research tool. Both signals share a single

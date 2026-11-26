@@ -114,9 +114,9 @@ export const RESEARCH_TOOL_GROUP = "research";
 // vintage and submits one terminal package. A model that keeps its history
 // reads the kept days before its as-of day and computes only that day (the
 // first run walks every day). The API freezes its rows under
-// `regime_beside_snapshots` and writes none to regime_snapshots.
-// `opts.runSource` hands the run a source another run already took, so the
-// two make one provider request per series.
+// `regime_beside_snapshots` and writes none to regime_snapshots. The producer's
+// regime tick does not call runAnalytics: runRegimeTick (producer/index.ts)
+// runs every live model over one extract and one committed read.
 export async function runAnalytics(
   asof: string,
   toolId?: string,
@@ -132,7 +132,7 @@ export async function runAnalytics(
   // the whole run. `now` is the run time, a parameter so tests pin it.
   // `panels` is the composite's panel set (default PANELS, issue 1708); a test
   // replaying an older composite passes its set explicitly.
-  opts: { dayRule?: DayRule; now?: Date; panels?: Panel[]; runSource?: AnalyticsDataSource } = {},
+  opts: { dayRule?: DayRule; now?: Date; panels?: Panel[] } = {},
 ): Promise<Record<string, unknown>> {
   const logger: Logger = console;
   // `toolId` is one tool id, the RESEARCH_TOOL_GROUP alias, or omitted (whole
@@ -150,7 +150,7 @@ export async function runAnalytics(
   const sourceLabel = sourceLabelOf(source);
   // Issue 1514: one provider request per symbol for the whole run. The live
   // source shares one fetch memo across the collectors this run calls.
-  const runSource = opts.runSource ?? source.forRun?.({ regime, research: wantsResearch }) ?? source;
+  const runSource = source.forRun?.({ regime, research: wantsResearch }) ?? source;
   const model = modelOf(regimeVersion);
   if (model.history === "kept" && !persistence.loadKeptRegimeDays) {
     throw new Error(`regime methodology ${regimeVersion} keeps its history: the persistence must read its kept days (loadKeptRegimeDays)`);

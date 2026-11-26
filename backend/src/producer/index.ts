@@ -25,15 +25,9 @@ import { writeHeartbeat } from "../ops/heartbeat.ts";
 
 export type ProducerKind = "regime" | "research";
 
-// `run` (issue 1753) names what one regime run computes when an injected
-// runner drives the runs of a tick one by one: the methodology version when it
-// is not the main line's, and the source the runs share so the tick makes one
-// provider request per series.
-export interface RegimeTickRun {
-  regimeVersion?: RegimeVersion;
-  runSource?: AnalyticsDataSource;
-}
-type Runner = (asof: string, tool: string, source: AnalyticsDataSource, persistence: AnalyticsPersistence, run?: RegimeTickRun) => Promise<Record<string, unknown>>;
+// The research run's driver (runAnalytics by default). A regime tick has one
+// path, runRegimeTick (issue 1765), and takes no runner.
+type Runner = (asof: string, tool: string, source: AnalyticsDataSource, persistence: AnalyticsPersistence) => Promise<Record<string, unknown>>;
 
 export function requireProducerApiConfig(
   env: Record<string, string | undefined> = process.env,
@@ -49,15 +43,14 @@ export function requireProducerApiConfig(
 
 export interface ProducerOnceDeps {
   /**
-   * Drive each run with this runner instead: the research run, and for a regime
-   * tick one call per model (main line first) with its own extract. Without it
-   * a regime tick is runRegimeTick: one extract and one committed read for
-   * every model.
+   * Drive the research run with this runner instead. A regime tick is always
+   * runRegimeTick (one extract and one committed read for every model), so a
+   * regime tick given a runner is refused before any call.
    */
   runner?: Runner;
   source?: AnalyticsDataSource;
   persistence?: AnalyticsPersistence;
-  /** The regime tick's options (runRegimeTick); ignored with a runner. */
+  /** The regime tick's options (runRegimeTick). */
   tick?: RegimeTickOptions;
 }
 
@@ -66,9 +59,12 @@ export async function runProducerOnce(
   asof: string,
   deps: ProducerOnceDeps = {},
 ): Promise<Record<string, unknown>> {
+  if (kind === "regime" && deps.runner) {
+    throw new Error("a regime tick takes no runner: it has one path, runRegimeTick (pass deps.tick, deps.source and deps.persistence)");
+  }
   const persistence = deps.persistence ?? analyticsApiClient();
   const source = deps.source ?? resolveAnalyticsSource();
-  if (kind === "regime") return deps.runner ? runnerTick(deps.runner, asof, source, persistence) : runRegimeTick(asof, source, persistence, deps.tick);
+  if (kind === "regime") return runRegimeTick(asof, source, persistence, deps.tick);
   const runner: Runner = deps.runner ?? ((date, tool, src, store) => runAnalytics(date, tool, src, store));
   // ONE invocation for both research signals (issue #509). They share a
   // single fetchResearchInputs call — and therefore a single live EDGAR
@@ -229,32 +225,6 @@ export async function runRegimeTick(
   }
   if (result === null) throw error;
   return result;
-}
-
-// A regime tick an injected runner drives one run at a time (issue 1753): the
-// main-line run first, then one run for each methodology published beside it,
-// each with its own extract, sharing one run-scoped source. A beside run that
-// fails is logged and neither fails nor changes the main-line run, and a
-// failed main-line run does not stop the beside runs. The tick's result and
-// its error are the main-line run's.
-async function runnerTick(runner: Runner, asof: string, source: AnalyticsDataSource, persistence: AnalyticsPersistence): Promise<Record<string, unknown>> {
-  const runSource = source.forRun?.({ regime: true, research: false }) ?? source;
-  let main: Record<string, unknown> | null = null;
-  let mainError: unknown = null;
-  try {
-    main = await runner(asof, "regime", source, persistence, { runSource });
-  } catch (err) {
-    mainError = err;
-  }
-  for (const regimeVersion of BESIDE_REGIME_VERSIONS) {
-    try {
-      await runner(asof, "regime", source, persistence, { regimeVersion, runSource });
-    } catch (err) {
-      logBesideFailure(regimeVersion, asof, err);
-    }
-  }
-  if (main === null) throw mainError;
-  return main;
 }
 
 // ── Catch-up (issue #614 AC4) ────────────────────────────────────────────────
