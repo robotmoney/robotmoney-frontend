@@ -15,9 +15,15 @@
 //
 // Exit status: 0 on success; 2 for a usage error or a refused holding; 1 for a
 // runtime failure (unreadable or malformed file, missing price coverage).
+//
+// This file parses arguments, reads files and prints. The portfolio and option
+// checks, the cash-rate names, the declared fill, the date axis and the holding
+// to price matching are pure, in src/analyze/backtest-portfolio.ts (issue 1765).
 import { parseInput } from "../src/input/load.ts";
-import { periodStats, simulatePortfolio, type DeclaredFill, type SimulatorFill, type Weights } from "../src/analyze/backtest.ts";
-import type { Point } from "../src/types.ts";
+import { periodStats, simulatePortfolio } from "../src/analyze/backtest.ts";
+import {
+  backtestAxis, checkBacktestOptions, checkPortfolio, portfolioFill, portfolioSeries, PortfolioError, type Portfolio,
+} from "../src/analyze/backtest-portfolio.ts";
 import { parseArgs, resolveFromCaller, UsageError } from "./args.ts";
 import { ALLOW_OUTSIDE_FLAG, UNIVERSE_FLAG, universeFromArgs, universeGate } from "./universe-option.ts";
 
@@ -29,6 +35,9 @@ function fail(e: unknown, code: number): never {
   if (code === 2) console.error(USAGE);
   process.exit(code);
 }
+
+// The pure module refuses with PortfolioError; the command prints it as the usage error it has always been.
+const asUsage = (e: unknown): unknown => (e instanceof PortfolioError ? new UsageError(e.message) : e);
 
 const argv = process.argv.slice(2);
 let args;
@@ -43,44 +52,15 @@ try {
   fail(e, 2);
 }
 
-const CASH_RATE_NAMES = ["TBILL3M", "fred:DTB3", "backtest:DTB3"];
-
-// Issue 1554: the fill policy this command declares for every priced holding
-// and for the cash rate. Forward with no age limit reproduces the former
-// undeclared carry, so the output is unchanged. Research issue 1673 records
-// any other choice.
-const BACKTEST_FILL: DeclaredFill = { kind: "forward", maxAgeDays: null, reason: "Reproduces the former command-line carry" };
-const isDay = (v: string) => /^\d{4}-\d{2}-\d{2}$/.test(v) && Number.isFinite(Date.parse(`${v}T00:00:00Z`)) && new Date(`${v}T00:00:00Z`).toISOString().slice(0, 10) === v;
-
-function dateAxis(from: string, to: string): string[] {
-  const out: string[] = [];
-  for (let t = Date.parse(`${from}T00:00:00Z`); t <= Date.parse(`${to}T00:00:00Z`); t += 86_400_000) out.push(new Date(t).toISOString().slice(0, 10));
-  return out;
-}
-
-let portfolio: Record<string, number>;
+let portfolio: Portfolio;
 let costBps: number | undefined;
 try {
   const text = await Bun.file(resolveFromCaller(args.positionals[0]!, "backtest")).text();
-  const data: unknown = JSON.parse(text);
-  if (data === null || typeof data !== "object" || Array.isArray(data)) throw new UsageError("portfolio: expected a JSON object of holding to weight in percent");
-  for (const [k, v] of Object.entries(data)) {
-    if (typeof v !== "number" || !Number.isFinite(v) || v < 0) throw new UsageError(`portfolio: ${k} must be a finite nonnegative percent, got ${JSON.stringify(v)}`);
-  }
-  portfolio = data as Record<string, number>;
-  const sum = Object.values(portfolio).reduce((s, v) => s + v, 0);
-  if (Math.abs(sum - 100) > 1e-9) throw new UsageError(`portfolio: weights must sum to 100, got ${sum}`);
-  const c = args.values.get("--cost-bps");
-  if (c !== undefined) {
-    if (!/^\d+(\.\d+)?$/.test(c)) throw new UsageError(`--cost-bps must be a nonnegative number, got ${JSON.stringify(c)}`);
-    costBps = Number(c);
-  }
-  for (const f of ["--from", "--to"]) {
-    const v = args.values.get(f);
-    if (v !== undefined && !isDay(v)) throw new UsageError(`${f} must be a real YYYY-MM-DD date, got ${JSON.stringify(v)}`);
-  }
+  portfolio = checkPortfolio(JSON.parse(text));
+  ({ costBps } = checkBacktestOptions({ costBps: args.values.get("--cost-bps"), from: args.values.get("--from"), to: args.values.get("--to") }));
 } catch (e) {
-  fail(e, e instanceof UsageError || e instanceof RangeError ? 2 : 1);
+  const err = asUsage(e);
+  fail(err, err instanceof UsageError || err instanceof RangeError ? 2 : 1);
 }
 
 try {
@@ -92,29 +72,10 @@ try {
   if (gate.exitCode !== 0) process.exit(gate.exitCode);
 
   const input = parseInput(await Bun.file(resolveFromCaller(args.positionals[1]!, "backtest")).text(), { replay: args.flags.has("--replay") });
-  const history = input.history;
-  const byId = new Map(universe.assets.map((a) => [a.id, a]));
-  const prices: Record<string, Point[]> = {};
-  const weights: Weights = {};
-  for (const [holding, pct] of Object.entries(portfolio)) {
-    weights[holding] = pct / 100;
-    if (holding === "cash") continue;
-    const series = byId.get(holding)?.series ?? holding;
-    if (series.startsWith("defillama-yields:")) throw new UsageError(`${holding} is priced by a yield series (${series}), not a price; this command backtests price series only`);
-    const points = history[series];
-    if (!points?.length) throw new Error(`missing input: ${holding} needs the price series ${series}, which the input does not hold (a run never fetches)`);
-    prices[holding] = points;
-  }
-  const cashRate = CASH_RATE_NAMES.map((n) => history[n]).find((p) => p?.length) ?? [];
+  const { weights, prices, cashRate } = portfolioSeries(portfolio, universe, input.history);
   if (weights.cash && cashRate.length === 0) console.error("note: the input holds no TBILL3M (fred:DTB3) rate; cash earns zero");
-  const dates = Object.values(prices).flatMap((p) => p.map((x) => x.date)).sort();
-  if (dates.length === 0 && !args.values.get("--from")) throw new UsageError("an all-cash portfolio needs --from and --to");
-  const from = args.values.get("--from") ?? dates[0]!;
-  const to = args.values.get("--to") ?? dates[dates.length - 1]!;
-  if (from > to) throw new UsageError(`--from ${from} is after --to ${to}`);
-  const axis = dateAxis(from, to);
-  const fill: SimulatorFill = { cash: BACKTEST_FILL };
-  for (const holding of Object.keys(prices)) fill[holding] = BACKTEST_FILL;
+  const { axis } = backtestAxis(prices, { from: args.values.get("--from"), to: args.values.get("--to") });
+  const fill = portfolioFill(Object.keys(prices));
   const sim = simulatePortfolio(axis, axis.map(() => weights), prices, cashRate, { ...(costBps === undefined ? {} : { costBps }), fill });
   const { _daily, ...stats } = periodStats(sim.values, sim.startDate, sim.endDate, { returns: sim.returns, excess: sim.excess, trades: sim.trades });
   const out = {
@@ -125,5 +86,6 @@ try {
   };
   console.log(JSON.stringify(out, null, 2));
 } catch (e) {
-  fail(e, e instanceof UsageError ? 2 : 1);
+  const err = asUsage(e);
+  fail(err, err instanceof UsageError ? 2 : 1);
 }
