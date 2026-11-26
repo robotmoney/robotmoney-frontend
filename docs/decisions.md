@@ -6824,7 +6824,7 @@ Panel weights refit every 21 days on a fixed calendar anchored at 2018-01-01. A 
 
 ## D97 — The deposit page's wallet layer reads and sends on chain from the browser, through Reown under a narrow CSP (issue 1615; narrows D24's client-side feed guard)
 
-**Status:** proposed. Drafted by the agent with issue 1615 (pr 1656); the owner accepts it. `frontend/public/assets/js/app/lib/deposit/wallet.js`, `frontend/public/assets/js/vendor/rm-appkit-1.8.24.min.js`, `scripts/vendor/rebuild-appkit.ts`, `scripts/vendor/appkit/`, `scripts/lib/website-image.ts` (`WEBSITE_CSP`), `website-server/Caddyfile`, `website-server/nginx.conf`, `scripts/tests/unit/website-csp.test.ts`, `scripts/tests/unit/no-client-side-feeds.test.ts`, `frontend/test/browser/deposit-wallet.spec.ts`.
+**Status:** accepted by the owner (lucky, 2026-11-26). Drafted by the agent with issue 1615 (pr 1656). `frontend/public/assets/js/app/lib/deposit/wallet.js`, `frontend/public/assets/js/vendor/rm-appkit-1.8.24.min.js`, `scripts/vendor/rebuild-appkit.ts`, `scripts/vendor/appkit/`, `scripts/lib/website-image.ts` (`WEBSITE_CSP`), `website-server/Caddyfile`, `website-server/nginx.conf`, `scripts/tests/unit/website-csp.test.ts`, `scripts/tests/unit/no-client-side-feeds.test.ts`, `frontend/test/browser/deposit-wallet.spec.ts`.
 
 **Decision.**
 
