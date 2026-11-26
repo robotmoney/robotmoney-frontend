@@ -13,7 +13,7 @@ import { computeCorrelations, type CorrelationsPayload } from "./analyze/correla
 import { computeBacktest, stripDailyFromSnapshot, REGIME_BACKTEST_RULES, type BacktestPayload } from "./analyze/backtest.ts";
 import { computeKeptRegime, withDerivedSeries, type KeptRegimeRun } from "./analyze/kept-regime.ts";
 import { CURRENT_REGIME_VERSION, REGIME_DERIVED_SERIES, REGIME_REGISTRY, REGIME_VERSIONS, isRegimeVersion, regimeRulesOf, type RegimeRules, type RegimeVersion } from "./analyze/regime-versions.ts";
-import { cutAtAsof, latestCompleteDay, missingOnDay, prepareRegimeInputs, type MissingIndicator } from "./prepare.ts";
+import { cutAtAsof, latestCompleteDay, missingOnDay, prepareRegimeInputs, type MissingIndicator, type PreparedRegimeInputs } from "./prepare.ts";
 import { LEDGER_EXTRA_KEYS } from "./extras.ts";
 import { StoredRatioOnlyError, resolveInputHistory, seriesMappingFor, storedUnderFor } from "./series-ids.ts";
 import { derivedInputIds } from "./transform/derived.ts";
@@ -58,6 +58,25 @@ export interface RunResult {
   // The scoring registry of the run, only when it is not INDICATORS (a v5 run,
   // issue 1753): buildReport lists these indicators.
   registry?: readonly Indicator[];
+  // What the row builder (publishedRows, src/replay/rows.ts) reads besides the
+  // result (issue 1765). Both are non-enumerable properties, so no JSON, report
+  // or CLI byte of a run changes, and a copy made by spreading drops them.
+  // `prepared`: a recomputing run's prepared inputs and its scoring registry.
+  readonly prepared?: RunPrepared;
+  // `keptRun`: a run under rules that keep their history, the kept run itself.
+  readonly keptRun?: KeptRegimeRun;
+}
+
+/** What publishedRows reads of a recomputing run's prepared inputs (issue 1765). */
+export interface RunPrepared extends Pick<PreparedRegimeInputs, "transformed" | "lastRaw" | "ages"> {
+  // The scoring registry the run computed.
+  readonly indicators: readonly Indicator[];
+}
+
+// Attach a value a run carries for the row builder without it being serialised.
+function hidden<T extends object>(target: T, key: "prepared" | "keptRun", value: unknown): T {
+  Object.defineProperty(target, key, { value, enumerable: false });
+  return target;
 }
 
 // The as-of day is not complete (issue 1655): some indicator has neither a
@@ -258,9 +277,9 @@ export function runRegime(input: RawIndicatorHistory, opts: RunOptions = {}): Ru
   if (kept) return keptRun(raw, { start, asof, version, rules, indicators, panels, factor: opts.factor === true, inSampleEnd, droppedRatios });
   // The fill policy already masked `transformed`; passing `ages` keeps the
   // global-cap mask too, which leaves a policy-masked series unchanged.
-  const { dateAxis, transformed, ages, carried } = prepareRegimeInputs(raw, { start, asof, indicators, version, rules });
+  const { dateAxis, transformed, ages, carried, lastRaw } = prepareRegimeInputs(raw, { start, asof, indicators, version, rules });
   const result = computeRegime(transformed, dateAxis, [...panels], ages, undefined, version, undefined, indicators, { rules }, carried);
-  const out: RunResult = { kind: "complete", version, dateAxis, result, droppedRatios };
+  const out: RunResult = hidden({ kind: "complete", version, dateAxis, result, droppedRatios }, "prepared", { transformed, lastRaw, ages, indicators } satisfies RunPrepared);
   // Over ALL_PANELS in order the second call would repeat the first (D-e).
   if (opts.factor) out.factor = isAllPanels(panels) ? result : computeRegime(transformed, dateAxis, ALL_PANELS, ages, undefined, version, undefined, indicators, { rules }, carried);
   const spx: Point[] | undefined = raw[EXTRA_IDS.spx];
@@ -293,7 +312,7 @@ function keptRun(
   const computed = o.factor ? ALL_PANELS : [...o.panels];
   const run = computeKeptRegime(raw, { start: o.start, asof: o.asof, version: o.version, rules: o.rules, indicators: o.indicators, panels: computed, included: o.panels });
   const result = keptResult(run, [...o.panels]);
-  const out: RunResult = { kind: "complete", version: o.version, dateAxis: run.dateAxis, result, droppedRatios: o.droppedRatios, ...(o.indicators === INDICATORS ? {} : { registry: o.indicators }) };
+  const out: RunResult = hidden({ kind: "complete", version: o.version, dateAxis: run.dateAxis, result, droppedRatios: o.droppedRatios, ...(o.indicators === INDICATORS ? {} : { registry: o.indicators }) }, "keptRun", run);
   if (o.factor) out.factor = keptResult(run, ALL_PANELS);
   const cut = (id: string): Point[] => cutAtAsof(raw[id] ?? [], o.asof);
   const spx = cut(EXTRA_IDS.spx);

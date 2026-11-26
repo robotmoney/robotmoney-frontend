@@ -18,7 +18,7 @@ import type { Point, RawIndicatorHistory } from "../types.ts";
 import { deriveSeries, derivedInputIds, type DerivedSeries } from "../transform/derived.ts";
 import { rollingPercentileRank } from "../transform/math.ts";
 import { cutAtAsof, prepareRegimeInputs, type PreparedRegimeInputs } from "../prepare.ts";
-import { buildRichIndicators } from "../report/indicator-rows.ts";
+import { publishedRows } from "../replay/rows.ts";
 import type { RegimeSnapshotRow } from "../report/canonical.ts";
 import { bucketFn, fitPanelWeights, lookbackDays, panelMean, smoothRegimes, weightedMeanOnDay } from "./compute.ts";
 import { ALL_PANELS, PANELS, type Indicator, type Panel } from "./indicators.ts";
@@ -245,8 +245,6 @@ export function computeKeptRegime(
   return { version, dateAxis, prepared, scores, fit, computed, record: deriveKeptRecord(dateAxis, [...onAxis, ...computed], opts) };
 }
 
-const nn = (v: number | undefined): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
-
 /**
  * The rows a run publishes, in the stored row shape: one for every day it
  * computed that has a composite mean. `composite` and `regime` are null before
@@ -254,7 +252,8 @@ const nn = (v: number | undefined): number | null => (typeof v === "number" && N
  * rows; a reader serves only the rows that have a label. No trailing percentile
  * exists, so every percentile field is null. The as-of row also carries the
  * indicator details, the panel weights with their fit date (the as-of day), the
- * panels, the correlations and the backtest.
+ * panels, the correlations and the backtest. The rows are built by the one row
+ * builder, publishedRows (src/replay/rows.ts, issue 1765).
  */
 export function keptRegimeRows(
   run: KeptRegimeRun,
@@ -262,43 +261,5 @@ export function keptRegimeRows(
   opts: KeptOptions = {},
 ): RegimeSnapshotRow[] {
   const { indicators, panels } = settings({ ...opts, version: opts.version ?? run.version });
-  const { record, dateAxis, scores, prepared } = run;
-  const at = new Map(dateAxis.map((d, i) => [d, i]));
-  const lastIdx = dateAxis.length - 1;
-  const rows: RegimeSnapshotRow[] = [];
-  for (const day of run.computed) {
-    const i = at.get(day.date)!;
-    if (!Number.isFinite(record.compositeMean[i])) continue;
-    const isAsof = i === lastIdx;
-    const percentiles: Record<string, number> = {};
-    for (const ind of indicators) {
-      const s = day.signed?.[ind.id];
-      if (typeof s === "number" && Number.isFinite(s)) percentiles[ind.id] = Number(s.toFixed(6));
-    }
-    const asofScores = { ranks: scores.ranks, signed: scores.signed, weightsByPanel: run.fit.weightsByPanel };
-    rows.push({
-      date: day.date,
-      composite: nn(record.composite[i]),
-      compositePercentile: null,
-      regime: record.regime[i] ?? null,
-      macroRegime: record.panelRegimes.macro?.[i] ?? null,
-      onchainRegime: record.panelRegimes.onchain?.[i] ?? null,
-      factorRegime: record.panelRegimes.factor?.[i] ?? null,
-      macroIndex: nn(record.panelIndices.macro?.[i]),
-      onchainIndex: nn(record.panelIndices.onchain?.[i]),
-      factorIndex: nn(record.panelIndices.factor?.[i]),
-      macroPercentile: null,
-      onchainPercentile: null,
-      factorPercentile: null,
-      panelWeights: isAsof ? { ...Object.fromEntries(panels.map((p) => [p, run.fit.weightsByPanel[p]!])), weightFitDate: day.date } : null,
-      version: run.version,
-      source: asofRow.source ?? null,
-      percentiles,
-      indicators: isAsof ? buildRichIndicators(i, asofScores, asofScores, prepared.transformed, prepared.lastRaw, dateAxis, prepared.ages, indicators) : [],
-      panels: isAsof ? [...panels] : null,
-      backtest: isAsof ? (asofRow.backtest ?? null) : null,
-      correlations: isAsof ? (asofRow.correlations ?? null) : null,
-    });
-  }
-  return rows;
+  return publishedRows(run, { source: asofRow.source ?? null, backtest: asofRow.backtest ?? null, correlations: asofRow.correlations ?? null, indicators, panels });
 }

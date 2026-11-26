@@ -1,4 +1,4 @@
-import { INDICATORS, ROLLING_WINDOW_DAYS, V5_INDICATORS, type Indicator } from "./indicators.ts";
+import { ALL_PANELS, INDICATORS, PANELS, ROLLING_WINDOW_DAYS, V5_INDICATORS, type Indicator, type Panel, type PanelMembership } from "./indicators.ts";
 import { V5_DERIVED_SERIES, type DerivedSeries } from "../transform/derived.ts";
 
 // Methodology version tag stamped on every persisted regime snapshot row —
@@ -47,6 +47,38 @@ export const REGIME_LINE: Readonly<Record<RegimeVersion, RegimeLine>> = Object.f
 
 /** The versions published beside the main line, in tag order. */
 export const BESIDE_REGIME_VERSIONS: readonly RegimeVersion[] = Object.freeze(REGIME_VERSIONS.filter((v) => REGIME_LINE[v] === "beside"));
+
+/**
+ * The artifact kind a line's regime rows are frozen under (issue 1753,
+ * migration 0136; issue 1765, D-b). A run of a beside version freezes its rows
+ * as `regime_beside_snapshots`, and its `regime_snapshots` artifact is the
+ * empty list. A platform fact, not a property of a model.
+ */
+export const REGIME_ARTIFACT_KIND = Object.freeze({ main: "regime_snapshots", beside: "regime_beside_snapshots" } as const);
+export type RegimeArtifactKind = (typeof REGIME_ARTIFACT_KIND)[RegimeLine];
+
+/** The artifact kind a run of `version` freezes its regime rows under: the kind of its line. */
+export function regimeArtifactKindOf(version: RegimeVersion): RegimeArtifactKind {
+  return REGIME_ARTIFACT_KIND[REGIME_LINE[version]];
+}
+
+// The panel membership every published v3 run was computed under, before D89
+// included the factor panel: computed and published, not averaged.
+const V3_PUBLISHED_MEMBERSHIP: Readonly<Record<Panel, PanelMembership>> = Object.freeze({ macro: "included", onchain: "included", factor: "excluded" });
+const includedPanels = (m: Readonly<Record<Panel, PanelMembership>>): readonly Panel[] => Object.freeze(ALL_PANELS.filter((p) => m[p] === "included"));
+
+/**
+ * The panels the composite of each version's published runs averages (issue
+ * 1765). Every production v3 run averaged macro and onchain only (D89 item 6);
+ * v4 was never published over two panels (D89 item 5), and v5 averages all
+ * three. A published run's methodology row records no panels, so a replay
+ * reads them here. A platform fact, never derived from a model.
+ */
+export const REGIME_PUBLISHED_PANELS: Readonly<Record<RegimeVersion, readonly Panel[]>> = Object.freeze({
+  v3: includedPanels(V3_PUBLISHED_MEMBERSHIP),
+  v4: PANELS,
+  v5: PANELS,
+});
 
 // The served methodology: the last version declared main (D88 item 2 as D96 amends it).
 export const CURRENT_REGIME_VERSION: RegimeVersion = "v4";
