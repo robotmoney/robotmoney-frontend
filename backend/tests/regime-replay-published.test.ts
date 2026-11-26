@@ -38,6 +38,8 @@ import { RATIO_IDS, RATIO_LEG_KEYS, STORED_UNDER, inputHistoryFromStorage } from
 import { withinTolerance } from "../src/analytics/source-tolerance.ts";
 import { requireComplete, runRegime } from "../../packages/analyst-sdk/src/run.ts";
 import { CURRENT_REGIME_VERSION, isRegimeVersion, type RegimeVersion } from "../src/analytics/analyze/regime-versions.ts";
+import { REGIME_ARTIFACT_KIND, REGIME_PUBLISHED_PANELS } from "../../packages/analyst-sdk/src/analyze/regime-versions.ts";
+import { ALL_PANELS } from "../../packages/analyst-sdk/src/analyze/indicators.ts";
 import { useCleanDatabase } from "./support/clean-db.ts";
 import { baseObservations, poisonedSource, secondObservations, type Observations } from "./support/committed-inputs.ts";
 import { poisonNetwork } from "./support/network-poison.ts";
@@ -95,7 +97,7 @@ describe("regime replay of every published run from 2026-09-21", () => {
       FROM analytics_ledger_runs r
       JOIN analytics_ledger_methodology_versions m ON m.id = r.methodology_version_id
       JOIN analytics_data_vintages v ON v.run_id = r.id AND v.tool_id = r.tool_id
-      JOIN analytics_output_snapshots o ON o.run_id = r.id AND o.artifact_kind = 'regime_snapshots'
+      JOIN analytics_output_snapshots o ON o.run_id = r.id AND o.artifact_kind = ${REGIME_ARTIFACT_KIND.main}
       WHERE r.tool_id = 'regime' AND r.asof >= ${LEDGER_START}::date
       ORDER BY r.asof, r.id`;
     runs = [];
@@ -228,6 +230,18 @@ const sampleRows = sampleLines.slice(1).map((l) => {
   return { date, series, value, kind, runs: new Set(runs.split(";").map(Number)) };
 });
 
+// A sampled run's own input file, rebuilt from the union and checked against the hash its record names.
+function sampleInputText(run: SampleRun): string {
+  const mine = sampleRows
+    .filter((r) => r.runs.has(run.index))
+    .map(({ date, series, value, kind }) => ({ date, series, value, kind }))
+    .sort((a, b) => (a.series < b.series ? -1 : a.series > b.series ? 1 : a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+  expect(mine.length).toBe(run.inputRows);
+  const text = serializeInputs(mine, "csv");
+  expect(new Bun.CryptoHasher("sha256").update(text).digest("hex")).toBe(run.inputSha256);
+  return text;
+}
+
 // One field of the replayed row and of the published row, as canonical JSON.
 const replayedField = (o: ReplayOutcome, field: string): string => o.fields[field]!;
 const publishedField = (row: PublishedAsofRow, field: string): string => canonicalStringify((row as unknown as Record<string, unknown>)[field] ?? null);
@@ -242,13 +256,7 @@ describe("regime replay of a committed sample of published production runs (issu
 
   for (const run of sample.runs) {
     test(`run ${run.runKey} (as of ${run.asof}) replays to its published as-of row`, () => {
-      const mine = sampleRows
-        .filter((r) => r.runs.has(run.index))
-        .map(({ date, series, value, kind }) => ({ date, series, value, kind }))
-        .sort((a, b) => (a.series < b.series ? -1 : a.series > b.series ? 1 : a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
-      expect(mine.length).toBe(run.inputRows);
-      const text = serializeInputs(mine, "csv");
-      expect(new Bun.CryptoHasher("sha256").update(text).digest("hex")).toBe(run.inputSha256);
+      const text = sampleInputText(run);
 
       const poison = poisonNetwork("during replay");
       let outcome;
@@ -299,4 +307,31 @@ describe("regime replay of a committed sample of published production runs (issu
       if (run.replayDiffering.length > 0) console.log(`run ${run.runKey} as of ${run.asof}: label matches; recorded pre-1421 differences in ${run.replayDiffering.join(", ")}`);
     }, 120_000);
   }
+
+  // Issue 1765: a replay with no panels argument averages the panels its
+  // version's published runs averaged (the SDK's REGIME_PUBLISHED_PANELS), so
+  // a v3 run replays over macro and onchain without naming them.
+  test("a v3 sample run replayed under v3 with no panels argument gets the same outcome as with PRODUCTION_PANELS", () => {
+    const run = sample.runs[0]!;
+    const text = sampleInputText(run);
+    expect(PRODUCTION_PANELS).toEqual([...REGIME_PUBLISHED_PANELS.v3]);
+    const poison = poisonNetwork("during replay");
+    let explicit: ReplayOutcome;
+    let byDefault: ReplayOutcome;
+    let everyPanel: ReplayOutcome;
+    try {
+      explicit = replayPublishedRun(text, run.asof, run.publishedAsofRow, SAMPLE_VERSION, PRODUCTION_PANELS);
+      byDefault = replayPublishedRun(text, run.asof, run.publishedAsofRow, SAMPLE_VERSION);
+      everyPanel = replayPublishedRun(text, run.asof, run.publishedAsofRow, SAMPLE_VERSION, ALL_PANELS);
+    } finally {
+      poison.restore();
+    }
+    expect(poison.attempts).toEqual([]);
+    expect(byDefault).toEqual(explicit);
+    expect(byDefault.replayLabel).toBe(run.publishedAsofRow.regime);
+    expect(byDefault.replaySha256).toMatch(/^[0-9a-f]{64}$/);
+    // Non-vacuity: over every panel the composite moves, so a default that
+    // ignored the version's published panels would fail the equality above.
+    expect(everyPanel.fields.composite).not.toBe(explicit.fields.composite);
+  }, 120_000);
 });
