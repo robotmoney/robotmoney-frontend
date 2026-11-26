@@ -17,7 +17,7 @@
 // Every variant's run may share arrays with the other runs and with the cache.
 // No caller may write to a run's result.
 import type { RawIndicatorHistory } from "../types.ts";
-import type { RegimeRules, RegimeVersion } from "../analyze/regime-versions.ts";
+import { isRegimeVersion, type RegimeRules, type RegimeVersion } from "../analyze/regime-versions.ts";
 import { MODELS, modelOf, type RegimeModel } from "../model/models.ts";
 import { stageCache, type StageCache } from "../engine/cache.ts";
 import { runModel, type ModelRun, type RunModelOptions } from "../engine/run-model.ts";
@@ -28,7 +28,11 @@ export type RuleVariant = Partial<RegimeRules>;
 /** A variant's score: higher ranks first. NaN ranks after every number. */
 export type ScreenMetric = (run: ModelRun) => number;
 
-/** runModel's options for every variant (`asof` is required). `cache` defaults to a new stage cache for this call. */
+/**
+ * runModel's options for every variant (`asof` is required). `cache` defaults
+ * to a new stage cache for this call. `version` defaults to the base model's id
+ * when that id is a published tag (a variant's own id never is).
+ */
 export type ScreenOptions = RunModelOptions;
 
 /** One ranked variant. */
@@ -37,7 +41,7 @@ export interface ScreenEntry {
   readonly variant: RuleVariant;
   /** The variant's model: the base model with id `${base.id}+variant<i>` (i its grid index) and the merged rules. */
   readonly model: RegimeModel;
-  /** runModel of `model`. */
+  /** runModel of `model`, stamped with the base's version (ScreenOptions.version). */
   readonly run: ModelRun;
   /** metric(run). */
   readonly score: number;
@@ -76,9 +80,13 @@ export function screen(
     }
   });
   const cache: StageCache = opts.cache ?? stageCache();
+  // A variant's id names no published tag, so runModel would stamp it with the
+  // current version. It keeps its base's: a v3 or v5 variant is read by the v3
+  // or v5 row tables (src/replay/rows.ts), never by the v4 ones.
+  const version = opts.version ?? (isRegimeVersion(base.id) ? base.id : undefined);
   const entries = grid.map((variant, i) => {
     const model = modelOf({ ...base, id: `${base.id}+variant${i}`, rules: { ...base.rules, ...variant } });
-    const run = runModel(model, input, { ...opts, cache });
+    const run = runModel(model, input, { ...opts, cache, ...(version === undefined ? {} : { version }) });
     const score = metric(run);
     if (typeof score !== "number") throw new RangeError(`metric must return a number; for grid[${i}] it returned ${JSON.stringify(score)}`);
     return { entry: { variant, model, run, score } satisfies ScreenEntry, i };

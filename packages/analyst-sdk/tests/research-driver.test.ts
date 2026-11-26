@@ -7,7 +7,9 @@
 // returns the variants ranked by the metric, and each variant's run equals
 // runModel on the merged rules with no cache, day for day. Control: one more
 // variant that changes lookback.rank scores once more, so the rank window is in
-// the score key.
+// the score key. A variant keeps its base's version: screen over a v3 base (and
+// over a v5 base on the lex-equity-golden inputs) gives runs equal, as JSON, to
+// runModel of the merged v3 (v5) model, version included.
 //
 // A custom DerivedSeries op with lag L, run through the engine's prepare stage,
 // reads no input value dated after the day minus L on any day of the axis, and
@@ -24,6 +26,7 @@ import {
   type DerivedCustom, type ModelRun, type RegimeModel, type RuleVariant, type ScreenMetric,
 } from "../src/index.ts";
 import { ratioDeclarationsFor } from "../src/transform/ratios.ts";
+import { readFixture, readSupplementaryInputs, servingInputs, servingRuns } from "./support/lex-golden.ts";
 
 const raw = toHistory(parseRawHistory(readFileSync(join(import.meta.dir, "fixtures/raw-indicator-history.json"), "utf8")));
 const v4 = MODELS.v4;
@@ -141,6 +144,40 @@ describe("screen over a rule grid (issue 1765, AC 18)", () => {
     // runModel's options are checked by runModel.
     expect(() => screen(input, v4, GRID, meanComposite, {} as unknown as { asof: string })).toThrow(/asof/);
   }, 120_000);
+
+  // A variant's id is `${base.id}+variant<i>`, never a published tag, so the
+  // version it is stamped with comes from its base (wave 5 review): a v3 or v5
+  // base stamped v4 would read the v4 row tables (src/replay/rows.ts).
+  test("a v3 base stamps every variant v3: each variant's run equals runModel of the merged v3 model as JSON, version included", () => {
+    const v3 = MODELS.v3;
+    const v3Input = ratiosFromLegs(raw, resolveInputHistory(raw, v3.seriesMapping, v3.storedUnder), ratioDeclarationsFor(v3.rules));
+    const grid: readonly RuleVariant[] = [{ labelCut: "series" }, { missingPanel: "nan" }];
+    const cache = stageCache();
+    const ranked = screen(v3Input, v3, grid, meanComposite, { asof, cache });
+    expect(ranked.length).toBe(2);
+    for (const e of ranked) {
+      const want = runModel(modelOf({ ...MODELS.v3, rules: { ...MODELS.v3.rules, ...e.variant } }), v3Input, { asof });
+      expect(want.version).toBe("v3");
+      expect(e.run.version).toBe("v3");
+      expect(JSON.stringify(e.run)).toBe(JSON.stringify(want));
+    }
+    // A version the caller sets still wins over the base's.
+    expect(screen(v3Input, v3, [grid[0]!], meanComposite, { asof, cache, version: "v4" })[0]!.run.version).toBe("v4");
+  }, 300_000);
+
+  test("a v5 base on the lex-equity-golden inputs stamps every variant v5: the variant's run equals runModel of the merged v5 model as JSON", () => {
+    const f = readFixture();
+    const { first } = servingRuns(f.runs);
+    const { history } = servingInputs(f, [first]).next().value!;
+    const v5Input = { ...history, ...readSupplementaryInputs() };
+    const variant: RuleVariant = { missingPanel: "nan" };
+    const [e] = screen(v5Input, MODELS.v5, [variant], meanComposite, { asof: first.asof });
+    const want = runModel(modelOf({ ...MODELS.v5, rules: { ...MODELS.v5.rules, ...variant } }), v5Input, { asof: first.asof });
+    expect(want.version).toBe("v5");
+    expect(e!.run.version).toBe("v5");
+    expect(e!.run.keptRun!.version).toBe("v5");
+    expect(JSON.stringify(e!.run)).toBe(JSON.stringify(want));
+  }, 300_000);
 
   test("screen, stageCache and the custom op types are on the package entry and on src/research", () => {
     expect(typeof sdk.screen).toBe("function");
