@@ -4,6 +4,11 @@
 // scaling inside the band, a loud error for a missing research input, the
 // within-sleeve seam, and the prototype's weekly E1 and E3 weights to 1e-9
 // (tests/fixtures/PROVENANCE.md, "allocate/engine-*.csv").
+//
+// Issue 1765 (AC 10): the regime engine's stage cache. One runModel call for v4
+// scores the registry once, counted by the cache's score-stage misses; an
+// identical second call scores nothing; a variant whose rank window differs
+// scores once more.
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { labelAt } from "../src/allocate/labels.ts";
@@ -12,7 +17,9 @@ import { join } from "node:path";
 import {
   checkHoldings, EngineInputError, engineWeights, equalWeight, fillYieldBook, loadUniverse, parseRawHistory,
   parseRuleFile, tiltWeight, toHistory, type EngineRuleFile, type EngineSignals, type Holdings, type Universe, type Yields,
+  MODELS, modelOf, ratiosFromLegs, resolveInputHistory, runModel, stageCache, STAGES, type RegimeModel,
 } from "../src/index.ts";
+import { ratioDeclarationsFor } from "../src/transform/ratios.ts";
 
 const PKG = join(import.meta.dir, "..");
 const FIX = join(import.meta.dir, "fixtures/allocate");
@@ -256,4 +263,61 @@ describe("the prototype's weekly weights (Oct 2018 to Oct 2026)", () => {
       expect(tilted).toBeGreaterThan(300);
     });
   }
+});
+
+describe("the regime engine's stage cache (issue 1765)", () => {
+  const raw = toHistory(parseRawHistory(readFileSync(join(import.meta.dir, "fixtures/raw-indicator-history.json"), "utf8")));
+  const v4 = MODELS.v4;
+  // The run input of v4: storage names resolved and each ratio set from its legs, as runRegime does.
+  const input = ratiosFromLegs(raw, resolveInputHistory(raw, v4.seriesMapping, v4.storedUnder), ratioDeclarationsFor(v4.rules));
+  let asof = "2018-01-01";
+  for (const id in raw) for (const r of raw[id]!) if (r.date > asof) asof = r.date;
+  const withRank = (days: number): RegimeModel => modelOf({ ...v4, id: `v4-rank-${days}`, rules: { ...v4.rules, lookback: { ...v4.rules.lookback, rank: { kind: "trailing", days } } } });
+  const cache = stageCache();
+  const counts = () => ({ hits: { ...cache.hits }, misses: { ...cache.misses } });
+
+  test("one runModel call for v4 scores the registry once: one score-stage miss, and the run equals an uncached run", () => {
+    const run = runModel(v4, input, { asof, cache });
+    expect(cache.misses.score).toBe(1);
+    expect(counts()).toEqual({ hits: { prepare: 0, score: 0, fit: 0, combine: 0 }, misses: { prepare: 1, score: 1, fit: 1, combine: 1 } });
+    expect(cache.entries.size).toBe(STAGES.length);
+    expect(run.result).toEqual(runModel(v4, input, { asof }).result);
+    expect(run.result.regime.filter((l) => l != null).length).toBeGreaterThan(1000);
+  }, 120_000);
+
+  test("a second identical call adds no score-stage miss: every stage is read from the cache", () => {
+    const first = runModel(v4, input, { asof, cache });
+    expect(cache.misses.score).toBe(1);
+    expect(cache.hits.score).toBeGreaterThanOrEqual(1);
+    const before = counts();
+    const again = runModel(v4, input, { asof, cache });
+    expect(cache.misses).toEqual(before.misses);
+    expect(cache.hits.combine).toBe(before.hits.combine + 1);
+    // The cached result is the stored one: shared, never recomputed.
+    expect(again.result).toBe(first.result);
+  }, 120_000);
+
+  test("a variant whose lookback.rank differs adds exactly one score-stage miss, and reads the prepared inputs from the cache", () => {
+    runModel(v4, input, { asof, cache });
+    const before = counts();
+    const variant = runModel(withRank(400), input, { asof, cache });
+    expect(cache.misses.score).toBe(before.misses.score + 1);
+    expect(cache.hits.prepare).toBe(before.hits.prepare + 1);
+    expect(cache.misses.prepare).toBe(before.misses.prepare);
+    expect(variant.result.ranks).not.toEqual(runModel(v4, input, { asof }).result.ranks);
+    expect(variant.result).toEqual(runModel(withRank(400), input, { asof }).result);
+  }, 120_000);
+
+  test("control: a variant that changes only the label cut scores nothing and fits nothing again; only the combine stage runs", () => {
+    runModel(v4, input, { asof, cache });
+    const before = counts();
+    const cut = modelOf({ ...v4, id: "v4-percentile-cut", rules: { ...v4.rules, labelCut: "percentile" } });
+    const run = runModel(cut, input, { asof, cache });
+    expect(cache.misses.score).toBe(before.misses.score);
+    expect(cache.misses.fit).toBe(before.misses.fit);
+    expect(cache.misses.combine).toBe(before.misses.combine + 1);
+    expect(run.result).toEqual(runModel(cut, input, { asof }).result);
+    // A key names its stage; a key of another shape is refused.
+    expect(() => cache.get("no-digest")).toThrow(RangeError);
+  }, 120_000);
 });

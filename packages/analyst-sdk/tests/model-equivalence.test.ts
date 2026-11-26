@@ -3,15 +3,19 @@
 // the matching MODELS field, by identity: REGIME_RULES[v] is MODELS[v].rules,
 // REGIME_BACKTEST_RULES[v] is MODELS[v].backtest, seriesMappingFor(v) is
 // MODELS[v].seriesMapping, and so on. modelOf names a preset by its tag and
-// checks a passed model. This is the model-value half of the acceptance test;
-// the runModel equivalence and the v4 golden check come with the staged engine.
+// checks a passed model. The staged engine half (issue 1765, AC 9): runModel
+// over each preset equals the engine it replaces day for day (computeRegime
+// under REGIME_RULES.v3 and .v4, computeKeptRegime under .v5), the v4 report
+// runModel gives is the committed golden byte for byte, the positional
+// computeRegime wrapper equals its options form, and a two-panel run reads no
+// weight of the panel it leaves out from the fit every panel shares.
 //
 // Excluded by design: REGIME_LINE, REGIME_ARTIFACT_KIND and
 // REGIME_PUBLISHED_PANELS. They say where and how a version is published, a
 // platform fact and not a model property, so no MODELS field matches them. The
 // coverage test below lists them by name, so a new per-version table must be a
 // view of the presets or be named a platform table here.
-import { describe, expect, test } from "bun:test";
+import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import * as versions from "../src/analyze/regime-versions.ts";
@@ -26,6 +30,18 @@ import { V5_DERIVED_SERIES } from "../src/transform/derived.ts";
 import { SERIES_MAPPING, STORED_UNDER, V5_SERIES_MAPPING, V5_STORED_UNDER } from "../src/series-ids.ts";
 import { MODELS, PRESETS, modelOf, seriesMappingFor, storedUnderFor, type RegimeModel } from "../src/model/index.ts";
 import * as sdk from "../src/index.ts";
+import { computeRegime, type ComputeRegimeOptions } from "../src/analyze/compute.ts";
+import { computeKeptRegime } from "../src/analyze/kept-regime.ts";
+import { prepareRegimeInputs } from "../src/prepare.ts";
+import { buildReport, requireComplete, runRegime } from "../src/run.ts";
+import { runModel } from "../src/engine/run-model.ts";
+import { parseRawHistory, toHistory } from "../src/input/load.ts";
+import { resolveInputHistory } from "../src/series-ids.ts";
+import { ratioDeclarationsFor, ratiosFromLegs } from "../src/transform/ratios.ts";
+import type { Panel } from "../src/analyze/indicators.ts";
+import type { RawIndicatorHistory } from "../src/types.ts";
+
+setDefaultTimeout(300_000);
 
 const SRC = join(import.meta.dir, "..", "src");
 
@@ -208,5 +224,129 @@ describe("no version branch outside the presets (issue 1765)", () => {
     // The archive format reads this one, so it must reach no calculation code (backend/tests/api/public-analytics-archives.test.ts).
     expect(importsOf(readFileSync(join(SRC, "model/preset-series.ts"), "utf8"))).toEqual(["../series-ids.ts"]);
     expect(importsOf(readFileSync(join(SRC, "archive/format1.ts"), "utf8"))).not.toContain("../model/presets.ts");
+  });
+});
+
+// ── The staged engine (issue 1765, AC 9) ─────────────────────────────────────
+
+const FIXTURES = join(import.meta.dir, "fixtures");
+const csv = readFileSync(join(FIXTURES, "raw-indicator-history.csv"), "utf8");
+const goldenText = readFileSync(join(import.meta.dir, "golden", "regime-report.json"), "utf8");
+const raw = toHistory(parseRawHistory(csv));
+const START = "2018-01-01";
+// The golden's as-of day: runRegime's default, the newest row the run reads.
+const ASOF = (JSON.parse(goldenText) as { asof: string }).asof;
+// The run input a model reads: storage names resolved, each ratio set as its rules declare (runRegime's ratio step).
+const inputOf = (m: RegimeModel): RawIndicatorHistory => ratiosFromLegs(raw, resolveInputHistory(raw, m.seriesMapping, m.storedUnder), ratioDeclarationsFor(m.rules));
+const same = (a: number, b: number) => Object.is(a, b) || (Number.isNaN(a) && Number.isNaN(b));
+const TWO: Panel[] = ALL_PANELS.filter((p) => p !== "factor");
+
+// computeRegime over prepared inputs under a preset's rules, in the positional form callers use today.
+function positional(v: "v3" | "v4", panels: Panel[] = [...PANELS]) {
+  const m = MODELS[v];
+  const p = prepareRegimeInputs(inputOf(m), { start: START, asof: ASOF, indicators: m.registry, rules: REGIME_RULES[v] });
+  return { p, result: computeRegime(p.transformed, p.dateAxis, panels, p.ages, undefined, v, undefined, undefined, undefined, p.carried) };
+}
+
+describe("runModel over each preset equals the engine it replaces (issue 1765, AC 9)", () => {
+  for (const v of ["v3", "v4"] as const) {
+    test(`runModel(MODELS.${v}) equals computeRegime under REGIME_RULES.${v}, every array of the result, day for day`, () => {
+      const run = runModel(MODELS[v], inputOf(MODELS[v]), { asof: ASOF, start: START });
+      const { p, result } = positional(v);
+      expect(run.version).toBe(v);
+      expect(run.model).toBe(MODELS[v]);
+      expect(run.dateAxis).toEqual(p.dateAxis);
+      expect(run.result).toEqual(result);
+      const days = result.dateAxis.length;
+      expect(days).toBeGreaterThan(3000);
+      for (let i = 0; i < days; i++) {
+        expect(same(run.result.composite[i]!, result.composite[i]!), `composite ${i}`).toBe(true);
+        expect(same(run.result.compositePercentile[i]!, result.compositePercentile[i]!), `compositePercentile ${i}`).toBe(true);
+        expect(run.result.regime[i], `regime ${i}`).toBe(result.regime[i]!);
+        for (const panel of PANELS) {
+          expect(same(run.result.panelIndices[panel]![i]!, result.panelIndices[panel]![i]!), `${panel} ${i}`).toBe(true);
+          expect(run.result.panelRegimes[panel]![i], `${panel} label ${i}`).toBe(result.panelRegimes[panel]![i]!);
+        }
+      }
+      // The prepared inputs runModel carries are the seam's.
+      expect(run.prepared.transformed).toEqual(p.transformed);
+      expect(run.result.regime.filter((l) => l != null).length).toBeGreaterThan(1000);
+    });
+  }
+
+  test("runModel(MODELS.v5) equals computeKeptRegime day for day: the scores, every computed day, the as-of fit and the record", () => {
+    const input = inputOf(MODELS.v5);
+    const run = runModel(MODELS.v5, input, { asof: ASOF, start: START });
+    const direct = computeKeptRegime(input, { asof: ASOF, start: START });
+    const kept = run.keptRun!;
+    expect(kept.version).toBe("v5");
+    expect(kept.dateAxis).toEqual(direct.dateAxis);
+    expect(kept.scores).toEqual(direct.scores);
+    expect(kept.fit).toEqual(direct.fit);
+    expect(kept.computed).toEqual(direct.computed);
+    expect(kept.record).toEqual(direct.record);
+    const { record } = direct;
+    for (let i = 0; i < record.dateAxis.length; i++) {
+      expect(same(run.result.composite[i]!, record.composite[i]!), `composite ${i}`).toBe(true);
+      expect(same(run.result.compositeMean![i]!, record.compositeMean[i]!), `compositeMean ${i}`).toBe(true);
+      expect(run.result.regime[i], `regime ${i}`).toBe(record.regime[i]!);
+      for (const panel of PANELS) expect(same(run.result.panelIndices[panel]![i]!, record.panelIndices[panel]![i]!), `${panel} ${i}`).toBe(true);
+    }
+    expect(run.result.weightsByPanel).toEqual(direct.fit.weightsByPanel);
+    expect(run.registry).toBe(MODELS.v5.registry);
+    expect(record.regime.filter((l) => l != null).length).toBeGreaterThan(1000);
+  });
+
+  test("the v4 report runModel gives is tests/golden/regime-report.json byte for byte", () => {
+    const run = runModel(MODELS.v4, inputOf(MODELS.v4), { asof: ASOF });
+    expect(JSON.stringify(buildReport(run), null, 2) + "\n").toBe(goldenText);
+    // runRegime, now a wrapper over runModel, gives the same bytes and the same JSON run.
+    const viaRegime = requireComplete(runRegime(raw));
+    expect(JSON.stringify(buildReport(viaRegime), null, 2) + "\n").toBe(goldenText);
+    expect(JSON.stringify(run)).toBe(JSON.stringify(viaRegime));
+  });
+
+  test("the positional computeRegime wrapper equals the options form", () => {
+    const { p, result } = positional("v4");
+    const opts: ComputeRegimeOptions = { panels: [...PANELS], ages: p.ages, rules: REGIME_RULES.v4, carried: p.carried };
+    expect(computeRegime(p.transformed, p.dateAxis, opts)).toEqual(result);
+    // v3 through each form, and the weight fits each records.
+    const v3 = positional("v3");
+    const fits = { recordWeightFits: true, rules: REGIME_RULES.v3 };
+    expect(computeRegime(v3.p.transformed, v3.p.dateAxis, { panels: [...PANELS], ages: v3.p.ages, carried: v3.p.carried, ...fits }))
+      .toEqual(computeRegime(v3.p.transformed, v3.p.dateAxis, [...PANELS], v3.p.ages, undefined, "v3", undefined, undefined, fits, v3.p.carried));
+    // Two arguments read every default in both forms; a misspelt option is refused, never ignored.
+    expect(computeRegime(p.transformed, p.dateAxis, {})).toEqual(computeRegime(p.transformed, p.dateAxis));
+    expect(() => computeRegime(p.transformed, p.dateAxis, { panel: TWO } as unknown as ComputeRegimeOptions)).toThrow(/unknown computeRegime option "panel"/);
+    // An undefined third argument with more after it is the positional form (fill-policy.test.ts calls it so).
+    expect(computeRegime(p.transformed, p.dateAxis, undefined, p.ages, undefined, "v4", undefined, undefined, undefined, p.carried)).toEqual(result);
+  });
+
+  test("with panels macro and onchain, runModel equals positional computeRegime over the whole object, and the report bytes are equal", () => {
+    // The fit covers every panel (`panels` defaults to every panel); the two-panel result reads only its own.
+    const run = runModel(MODELS.v4, inputOf(MODELS.v4), { asof: ASOF, start: START, included: TWO, factor: true });
+    const two = positional("v4", [...TWO]).result;
+    expect(run.result).toEqual(two);
+    expect(Object.keys(run.result.weightsByPanel)).toEqual(TWO);
+    expect("factorIndex" in run.result).toBe(false);
+    expect(run.factor).toEqual(positional("v4", [...ALL_PANELS]).result);
+    expect(run.panelSets.map((s) => s.panels)).toEqual([TWO, ALL_PANELS]);
+    // The report runRegime gives over the two panels (a fit over those two only) has the same bytes.
+    const viaRegime = requireComplete(runRegime(raw, { panels: TWO, factor: true }));
+    expect(JSON.stringify(buildReport(run))).toBe(JSON.stringify(buildReport(viaRegime)));
+    expect(JSON.stringify(buildReport(run, { full: true }))).toBe(JSON.stringify(buildReport(viaRegime, { full: true })));
+    const noFactor = runModel(MODELS.v4, inputOf(MODELS.v4), { asof: ASOF, start: START, included: TWO });
+    expect(JSON.stringify(buildReport(noFactor))).toBe(JSON.stringify(buildReport(requireComplete(runRegime(raw, { panels: TWO })))));
+  });
+
+  test("a bad option is a RangeError naming it", () => {
+    const input = inputOf(MODELS.v4);
+    const bad = (o: unknown, re: RegExp) => expect(() => runModel(MODELS.v4, input, o as never)).toThrow(re);
+    bad({ asof: ASOF, panel: TWO }, /unknown option "panel"/);
+    bad({ asof: "2026-02-30" }, /asof must be a real date/);
+    bad({ asof: ASOF, included: ["macro", "macro"] }, /included must be a non-empty list/);
+    bad({ asof: ASOF, panels: TWO }, /included panels factor are not in panels/);
+    bad({ asof: ASOF, kept: [{ date: "2026-01-01", panelIndices: {} }] }, /recomputes its history: it reads no kept days/);
+    expect(() => runModel("v9" as never, input, { asof: ASOF })).toThrow(/unknown methodology version/);
   });
 });

@@ -99,6 +99,33 @@ describe("package entry exports methodology v5 and the kept record (issue 1753)"
   });
 });
 
+// Issue 1765: the model value and the staged engine are on the package entry,
+// with the model portfolio backtest's inputs moved out of bin/backtest.ts.
+describe("package entry exports the model value, runModel and the stage cache (issue 1765)", () => {
+  test("MODELS, modelOf, runModel and stageCache are on '.', with the stages and drivers they run", () => {
+    for (const name of [
+      "modelOf", "runModel", "stageCache", "stageKey", "inputDigest", "prepareModel", "scoreIndicators", "fitPanels", "refitDays", "combinePanels",
+      "panelIndexSeries", "recomputeHistory", "keptHistory",
+    ] as const) {
+      expect(typeof sdk[name], name).toBe("function");
+    }
+    expect(Object.keys(sdk.MODELS)).toEqual(["v3", "v4", "v5"]);
+    expect(sdk.modelOf("v4")).toBe(sdk.MODELS.v4);
+    expect(sdk.STAGES).toEqual(["prepare", "score", "fit", "combine"]);
+    const cache = sdk.stageCache();
+    expect(cache.entries.size).toBe(0);
+    expect(cache.misses).toEqual({ prepare: 0, score: 0, fit: 0, combine: 0 });
+  });
+  test("the model portfolio backtest's building blocks are on '.'", () => {
+    for (const name of ["checkPortfolio", "checkBacktestOptions", "portfolioSeries", "backtestAxis", "portfolioFill", "portfolioDateAxis", "isDay", "PortfolioError"] as const) {
+      expect(typeof sdk[name], name).toBe("function");
+    }
+    expect(sdk.CASH_RATE_NAMES).toContain("TBILL3M");
+    expect(sdk.BACKTEST_FILL.kind).toBe("forward");
+    expect(sdk.portfolioDateAxis("2026-01-30", "2026-02-02")).toEqual(["2026-01-30", "2026-01-31", "2026-02-01", "2026-02-02"]);
+  });
+});
+
 // Issue 1765 (AC 12): the package's exports map. A temporary consumer whose
 // node_modules/@robotmoney/analyst-sdk is a symlink to this package imports each
 // entry by package name, the way a client does. Nothing is installed and nothing
@@ -139,6 +166,7 @@ describe("the exports map resolves by package name from a temporary consumer (is
 const keys = { ${ENTRIES.map((e, i) => `${JSON.stringify(e)}: Object.keys(m${i}).sort()`).join(", ")} };
 const kinds = {
   "./:runRegime": typeof m0.runRegime, "./:collectRunInputs": typeof m0.collectRunInputs,
+  "./:runModel": typeof m0.runModel, "./:modelOf": typeof m0.modelOf, "./:stageCache": typeof m0.stageCache,
   "./replay:replayRun": typeof m1.replayRun,
   "./archive:collectRunInputs": typeof m2.collectRunInputs, "./archive:openArchive": typeof m2.openArchive, "./archive:encodeCsvRow": typeof m2.encodeCsvRow,
   "./node:openBackupsDir": typeof m3.openBackupsDir, "./node:supplementaryFiles": typeof m3.supplementaryFiles, "./node:sha256": typeof m3.sha256, "./node:universeFromFile": typeof m3.universeFromFile,
@@ -161,7 +189,7 @@ console.log(JSON.stringify({ keys, kinds, sameReader, sameEncoder }));
   test("'.', './replay', './archive', './node' and './src/*' each resolve and expose their building blocks", () => {
     for (const e of ENTRIES) expect(seen.keys[e].length, e).toBeGreaterThan(0);
     for (const [name, kind] of Object.entries(seen.kinds)) expect(kind, name).toBe("function");
-    expect(Object.keys(seen.kinds)).toHaveLength(11);
+    expect(Object.keys(seen.kinds)).toHaveLength(14);
   });
 
   test("'.' is src/index.ts and never carries the node:fs edge; './archive' and './node' share the one reader", () => {

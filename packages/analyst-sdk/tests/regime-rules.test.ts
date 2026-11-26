@@ -4,6 +4,9 @@
 // that rule decides; and runRegime's in-sample end can follow the version computed.
 // Issue 1765: runRegime takes the rules, and rules.keptHistory picks the engine
 // (D-g); the main line is computed once when its panels are ALL_PANELS (D-e).
+// A model value's history picks the engine the same way, through runModel and
+// through runRegime({ model }); a history other than recompute or kept is a
+// RangeError (AC 7).
 import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { join } from "node:path";
 import {
@@ -32,6 +35,9 @@ import {
   REGIME_RULES,
   REGIME_VERSIONS,
   REGIME_WEIGHT_REFRESH,
+  MODELS,
+  runModel,
+  type RegimeModel,
   type RegimeRules,
   type RegimeVersion,
   type RawIndicatorHistory,
@@ -271,6 +277,61 @@ describe("rules pick the engine (issue 1765, D-g)", () => {
     ]) {
       expect(call).toThrow(RangeError);
       expect(call).toThrow(/rules\.weightRefresh\.intervalDays must be 1, got 21/);
+    }
+  });
+});
+
+describe("a model's history picks the engine, through runModel and runRegime (issue 1765, AC 7)", () => {
+  // v4 as a model that keeps its history: the rules above, history "kept".
+  const KEPT_MODEL: RegimeModel = { ...MODELS.v4, id: "v4-kept", rules: KEPT_V4, history: "kept" };
+  let directMemo: ReturnType<typeof computeKeptRegime> | undefined;
+  const directOf = () => (directMemo ??= computeKeptRegime(runInputOf(KEPT_V4), { version: "v4", rules: KEPT_V4, asof, start: START }));
+  const sameDays = (got: { composite: number[]; regime: (string | null)[]; panelIndices: Record<string, number[]>; compositeMean?: number[] }) => {
+    const { record } = directOf();
+    expect(got.composite).toEqual(record.composite);
+    expect(got.regime).toEqual(record.regime);
+    expect(got.compositeMean).toEqual(record.compositeMean);
+    for (const p of PANELS) expect(got.panelIndices[p]).toEqual(record.panelIndices[p]!);
+    expect(record.regime.filter((l) => l != null).length).toBeGreaterThan(1000);
+  };
+
+  test("runModel with a model whose history is kept runs the kept engine, equal day for day to computeKeptRegime", () => {
+    const run = runModel(KEPT_MODEL, runInputOf(KEPT_V4), { asof, start: START });
+    const direct = directOf();
+    expect(run.keptRun!.record).toEqual(direct.record);
+    expect(run.keptRun!.computed).toEqual(direct.computed);
+    expect(run.keptRun!.fit).toEqual(direct.fit);
+    sameDays(run.result);
+    expect(run.result.weightsByPanel).toEqual(direct.fit.weightsByPanel);
+    expect(run.result.compositePercentile.every(Number.isNaN)).toBe(true);
+    // A research model's run is stamped with the current version.
+    expect(run.version).toBe("v4");
+  });
+
+  test("runRegime({ model }) runs the same kept engine, and equals the run its rules give", () => {
+    const run = requireComplete(runRegime(raw, { model: KEPT_MODEL, asof, start: START }));
+    sameDays(run.result);
+    expect(run.keptRun!.record).toEqual(directOf().record);
+    // The model states its rules and its registry: they are not options beside it.
+    expect(() => runRegime(raw, { model: KEPT_MODEL, rules: KEPT_V4 })).toThrow(RangeError);
+    expect(() => runRegime(raw, { model: "v4", version: "v3" })).toThrow(/two methodologies/);
+    // A preset named by its tag is the run of its version.
+    expect(requireComplete(runRegime(raw, { model: "v3", asof }))).toEqual(requireComplete(runRegime(raw, { version: "v3", asof })));
+  });
+
+  test("the same model with history recompute runs the recompute engine", () => {
+    const rec: RegimeModel = { ...KEPT_MODEL, id: "v4-recompute", rules: RECOMPUTE_V4, history: "recompute" };
+    const run = runModel(rec, runInputOf(RECOMPUTE_V4), { asof, start: START });
+    expect(run.keptRun).toBeUndefined();
+    expect(run.result).toEqual(requireComplete(runRegime(raw, { version: "v4", rules: RECOMPUTE_V4, asof, start: START })).result);
+    expect(run.result.compositePercentile.filter(Number.isFinite).length).toBeGreaterThan(1000);
+  });
+
+  test("a history other than recompute or kept is a RangeError, through runModel and through runRegime", () => {
+    const bogus = { ...MODELS.v4, history: "bogus" } as unknown as RegimeModel;
+    for (const call of [() => runModel(bogus, runInputOf(REGIME_RULES.v4), { asof }), () => runRegime(raw, { model: bogus })]) {
+      expect(call).toThrow(RangeError);
+      expect(call).toThrow(/model\.history must be "recompute" or "kept", got "bogus"/);
     }
   });
 });
