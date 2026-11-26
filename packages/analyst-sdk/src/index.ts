@@ -32,6 +32,10 @@ export {
   type RegimeSnapshot, type RegimeHistoryPoint, type RegimeStaleness, type RegimeIndicator,
 } from "./report/regime-snapshots.ts";
 export { buildRichIndicators, monthlySparkline } from "./report/indicator-rows.ts";
+// One snapshot column table (issue 1765): every row mapper reads it.
+export { SNAPSHOT_COLUMNS, type SnapshotColumn, type SnapshotColumnKind, type SnapshotKey } from "./report/snapshot-columns.ts";
+// The replay module (issue 1765): the row builder, the comparison and the replay of a published run.
+export * from "./replay/index.ts";
 export { computeCorrelations, type CorrelationsPayload, type CorrelationInput } from "./analyze/correlations.ts";
 export {
   computeBacktest, stripDailyFromSnapshot, simulatePortfolio, simulateDrift, periodStats, scheduleFromLabels, PORTFOLIO_SPECS,
@@ -62,6 +66,10 @@ export {
   REGIME_LABEL_CUT,
   REGIME_LINE,
   BESIDE_REGIME_VERSIONS,
+  REGIME_ARTIFACT_KIND,
+  REGIME_PUBLISHED_PANELS,
+  regimeArtifactKindOf,
+  type RegimeArtifactKind,
   REGIME_REGISTRY,
   REGIME_DERIVED_SERIES,
   REGIME_COMPOSITE_NORMALISATION,
