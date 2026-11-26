@@ -21,6 +21,8 @@ import { on, registerQuery } from "../../db/registry.ts";
 // mapper can import it without pulling in this Postgres client. Re-exported here
 // for the store's own long-standing consumers (analytics index, tests).
 import type { RegimeSnapshotRow } from "../report/regime-projection.ts";
+import { SNAPSHOT_COLUMNS } from "../report/published-rows.ts";
+import { toDbRow } from "../report/regime-eq-map.ts";
 export type { RegimeSnapshotRow };
 
 export async function saveRegimeSnapshots(
@@ -41,29 +43,21 @@ export async function saveRegimeSnapshots(
   }
 }
 
-// The columns the upsert writes, in the statement's order. The probe below is
-// built from this list, so it cannot drift from the column list it proves. Every
+// The columns the upsert writes, in the statement's order: every column of the
+// snapshot column table (SNAPSHOT_COLUMNS, issue 1765). The probe below is built
+// from this list, so it cannot drift from the column list it proves. Every
 // column but the `date` key is both SET and compared by the no-op guard.
-const UPSERT_COLUMNS = [
-  "date", "composite", "composite_percentile", "regime",
-  "macro_regime", "onchain_regime", "factor_regime",
-  "macro_index", "onchain_index", "factor_index",
-  "macro_percentile", "onchain_percentile", "factor_percentile",
-  "panel_weights", "version", "source", "percentiles", "indicators",
-  "panels", "bucket_thresholds", "backtest", "correlations", "extras",
-] as const;
+const UPSERT_COLUMNS: readonly string[] = SNAPSHOT_COLUMNS.map((c) => c.column);
 
 // The non-key columns, in UPSERT_COLUMNS order: the SET list and both sides of the guard.
 const UPDATED_COLUMNS = UPSERT_COLUMNS.filter((c) => c !== "date");
 
-// The column definition list of the jsonb document: the column names are the document keys.
-// upsertSnapshots below spells the same list out, because a registered statement is a tagged template.
-const UPSERT_RECORD_TYPES = `date date, composite numeric, composite_percentile numeric, regime text,
-  macro_regime text, onchain_regime text, factor_regime text,
-  macro_index numeric, onchain_index numeric, factor_index numeric,
-  macro_percentile numeric, onchain_percentile numeric, factor_percentile numeric,
-  panel_weights jsonb, version text, source text, percentiles jsonb, indicators jsonb,
-  panels jsonb, bucket_thresholds jsonb, backtest jsonb, correlations jsonb, extras jsonb`;
+// The column definition list of the jsonb document: the column names are the document keys,
+// each with its type in the table.
+// upsertSnapshots below spells the same lists out, because a registered statement is a tagged
+// template whose text cannot be generated. tests/snapshot-columns.test.ts holds each list in it
+// equal to SNAPSHOT_COLUMNS.
+const UPSERT_RECORD_TYPES = SNAPSHOT_COLUMNS.map((c) => `${c.column} ${c.sqlType}`).join(", ");
 
 const upsertRegime = registerQuery({
   role: "rm_app",
@@ -87,31 +81,8 @@ const upsertRegime = registerQuery({
 });
 
 async function upsertSnapshots(rows: RegimeSnapshotRow[], db: DbHandle): Promise<void> {
-  const documents = rows.map((s) => ({
-    date: s.date,
-    composite: s.composite,
-    composite_percentile: s.compositePercentile,
-    regime: s.regime,
-    macro_regime: s.macroRegime,
-    onchain_regime: s.onchainRegime,
-    factor_regime: s.factorRegime,
-    macro_index: s.macroIndex ?? null,
-    onchain_index: s.onchainIndex ?? null,
-    factor_index: s.factorIndex ?? null,
-    macro_percentile: s.macroPercentile ?? null,
-    onchain_percentile: s.onchainPercentile ?? null,
-    factor_percentile: s.factorPercentile ?? null,
-    panel_weights: s.panelWeights ?? null,
-    version: s.version ?? null,
-    source: s.source ?? null,
-    percentiles: s.percentiles,
-    indicators: s.indicators,
-    panels: s.panels ?? null,
-    bucket_thresholds: s.bucketThresholds ?? null,
-    backtest: s.backtest ?? null,
-    correlations: s.correlations ?? null,
-    extras: s.extras ?? null,
-  }));
+  // One document per row, keyed by column (toDbRow: one cell per SNAPSHOT_COLUMNS entry).
+  const documents = rows.map(toDbRow);
   await on(db, upsertRegime)`
       INSERT INTO regime_snapshots
         (date, composite, composite_percentile, regime,

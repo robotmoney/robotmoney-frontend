@@ -15,6 +15,7 @@ import type { RegimeHistoryPoint, RegimeSnapshot } from "@robotmoney/contract";
 // mapper — shared with the root-scoped Playwright stub — never transitively
 // reaches the Postgres client. Keeps the module genuinely I/O-free.
 import { rowToSnapshot, forHistory, type RegimeSnapshotRow } from "./regime-projection.ts";
+import { SNAPSHOT_COLUMNS } from "./published-rows.ts";
 
 // One enriched per-indicator object in the canonical snapshot.
 interface EqIndicator {
@@ -130,32 +131,16 @@ export function eqSnapshotToRows(snap: EqSnapshot): RegimeSnapshotRow[] {
 // Re-shape a camelCase RegimeSnapshotRow into the snake_case object a Postgres
 // `SELECT * FROM regime_snapshots` row would yield, so it can pass through the
 // endpoint's exact rowToSnapshot projection (parity with the live endpoint).
-function toDbRow(r: RegimeSnapshotRow): Record<string, unknown> {
-  return {
-    date: r.date,
-    composite: r.composite,
-    composite_percentile: r.compositePercentile,
-    regime: r.regime,
-    macro_regime: r.macroRegime,
-    onchain_regime: r.onchainRegime,
-    factor_regime: r.factorRegime,
-    macro_index: r.macroIndex ?? null,
-    onchain_index: r.onchainIndex ?? null,
-    factor_index: r.factorIndex ?? null,
-    macro_percentile: r.macroPercentile ?? null,
-    onchain_percentile: r.onchainPercentile ?? null,
-    factor_percentile: r.factorPercentile ?? null,
-    panel_weights: r.panelWeights ?? null,
-    version: r.version ?? null,
-    source: r.source ?? null,
-    percentiles: r.percentiles,
-    indicators: r.indicators,
-    panels: r.panels ?? null,
-    bucket_thresholds: r.bucketThresholds ?? null,
-    backtest: r.backtest ?? null,
-    correlations: r.correlations ?? null,
-    extras: r.extras ?? null,
-  };
+// One cell per SNAPSHOT_COLUMNS entry, in its order (issue 1765): a date or
+// label cell as read, any other cell its value or null (NULL, as Postgres reads
+// an unset column). The regime store writes these documents
+// (store/regime-store.ts), and the ledger read mode serves rowToSnapshot of them
+// (report/projections.ts).
+export function toDbRow(r: RegimeSnapshotRow): Record<string, unknown> {
+  const row = r as unknown as Record<string, unknown>;
+  const out: Record<string, unknown> = {};
+  for (const c of SNAPSHOT_COLUMNS) out[c.column] = c.kind === "date" || c.kind === "label" ? row[c.key] : (row[c.key] ?? null);
+  return out;
 }
 
 // Produce the SAME { latest, history } DTO the live endpoint returns for this

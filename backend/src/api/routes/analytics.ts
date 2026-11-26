@@ -26,7 +26,8 @@ import { bearer, hasAnalyticsProviderRole } from "../auth.ts";
 import { requestWaits } from "../../lib/request-waits.ts";
 import { ANALYTICS_CONCURRENCY, createLimiter } from "../../lib/analytics-concurrency.ts";
 import type { RawIndicatorHistory } from "../../analytics/types.ts";
-import type { RegimeSnapshotRow, JsonValue } from "../../analytics/report/regime-projection.ts";
+import type { RegimeSnapshotRow } from "../../analytics/report/regime-projection.ts";
+import { SNAPSHOT_COLUMNS, type SnapshotColumn, type SnapshotColumnKind } from "../../analytics/report/published-rows.ts";
 import type { ResearchPayload } from "../../analytics/analyze/research.ts";
 import { loadRawIndicatorHistory, saveRawIndicatorHistory } from "../../analytics/store/raw-history-store.ts";
 import { applyRawFloorSeed } from "../../analytics/store/floor-seed.ts";
@@ -155,61 +156,69 @@ function parseRawHistorySource(body: unknown): string | null | Invalid {
 }
 
 // ── regime snapshots payload: { snapshots: RegimeSnapshotRow[] } ─────────────
+// The validation groups come from the kinds of the snapshot column table
+// (SNAPSHOT_COLUMNS, issue 1765), checked in this order: the date, the numbers,
+// the labels and text, the jsonb cells that have an empty value (required),
+// then the nullable jsonb cells. Two columns carry a rule of their own: `source`
+// is a provenance label, and `panels` is the one nullable jsonb cell that is a
+// list. The first failing check names the row's error.
+const columnsOfKind = (...kinds: SnapshotColumnKind[]): SnapshotColumn[] => SNAPSHOT_COLUMNS.filter((c) => kinds.includes(c.kind));
+const DATE_COLUMNS = columnsOfKind("date");
+const NUMBER_COLUMNS = columnsOfKind("number");
+const STRING_COLUMNS = columnsOfKind("label", "text");
+const REQUIRED_JSON_COLUMNS = columnsOfKind("json").filter((c) => c.empty !== null);
+const NULLABLE_JSON_COLUMNS = columnsOfKind("json").filter((c) => c.empty === null);
+
 function parseSnapshotRow(v: unknown, i: number): RegimeSnapshotRow | Invalid {
   if (!isPlainObject(v)) return invalid(`snapshots[${i}] must be an object`);
-  if (!isIsoDate(v.date)) return invalid(`snapshots[${i}].date must be a valid YYYY-MM-DD date`);
-  for (const k of ["composite", "compositePercentile", "macroIndex", "onchainIndex", "factorIndex", "macroPercentile", "onchainPercentile", "factorPercentile"] as const) {
-    if (!isFiniteOrNull(v[k])) return invalid(`snapshots[${i}].${k} must be a finite number or null`);
+  for (const { key } of DATE_COLUMNS) {
+    if (!isIsoDate(v[key])) return invalid(`snapshots[${i}].${key} must be a valid YYYY-MM-DD date`);
   }
-  for (const k of ["regime", "macroRegime", "onchainRegime", "factorRegime", "version"] as const) {
-    if (!isShortStringOrNull(v[k])) return invalid(`snapshots[${i}].${k} must be a short string or null`);
+  for (const { key } of NUMBER_COLUMNS) {
+    if (!isFiniteOrNull(v[key])) return invalid(`snapshots[${i}].${key} must be a finite number or null`);
   }
-  // Row-level provenance (issue #397) — omitted/null accepted (older callers);
-  // any other value must be one of the recognized data-source labels.
-  if (!isProvenanceOrNull(v.source)) return invalid(`snapshots[${i}].source must be one of ${VALID_PROVENANCE.join(", ")}, or omitted/null`);
-  if (!isPlainObject(v.percentiles)) return invalid(`snapshots[${i}].percentiles must be an object`);
-  for (const [pk, pv] of Object.entries(v.percentiles)) {
-    if (pk.length > MAX_INDICATOR_ID || !isFiniteNumber(pv)) return invalid(`snapshots[${i}].percentiles[${pk.slice(0, 80)}] must be a finite number`);
+  for (const { key } of STRING_COLUMNS) {
+    // Row-level provenance (issue #397) — omitted/null accepted (older callers);
+    // any other value must be one of the recognized data-source labels.
+    if (key === "source") {
+      if (!isProvenanceOrNull(v[key])) return invalid(`snapshots[${i}].${key} must be one of ${VALID_PROVENANCE.join(", ")}, or omitted/null`);
+    } else if (!isShortStringOrNull(v[key])) return invalid(`snapshots[${i}].${key} must be a short string or null`);
   }
-  if (!Array.isArray(v.indicators)) return invalid(`snapshots[${i}].indicators must be an array`);
-  if (v.panelWeights != null && !isPlainObject(v.panelWeights)) return invalid(`snapshots[${i}].panelWeights must be an object or null`);
-  if (v.panels != null && (!Array.isArray(v.panels) || !v.panels.every((p) => typeof p === "string" && p.length <= MAX_LABEL))) {
-    return invalid(`snapshots[${i}].panels must be an array of short strings or null`);
+  for (const { key, empty } of REQUIRED_JSON_COLUMNS) {
+    const cell = v[key];
+    if (Array.isArray(empty)) {
+      if (!Array.isArray(cell)) return invalid(`snapshots[${i}].${key} must be an array`);
+      continue;
+    }
+    if (!isPlainObject(cell)) return invalid(`snapshots[${i}].${key} must be an object`);
+    // The one map cell (percentiles): indicator id to a finite number.
+    for (const [pk, pv] of Object.entries(cell)) {
+      if (pk.length > MAX_INDICATOR_ID || !isFiniteNumber(pv)) return invalid(`snapshots[${i}].${key}[${pk.slice(0, 80)}] must be a finite number`);
+    }
   }
-  for (const k of ["bucketThresholds", "backtest", "correlations", "extras"] as const) {
-    if (v[k] != null && !isPlainObject(v[k])) return invalid(`snapshots[${i}].${k} must be an object or null`);
+  for (const { key } of NULLABLE_JSON_COLUMNS) {
+    const cell = v[key];
+    if (cell == null) continue;
+    if (key === "panels") {
+      if (!Array.isArray(cell) || !cell.every((p) => typeof p === "string" && p.length <= MAX_LABEL)) {
+        return invalid(`snapshots[${i}].${key} must be an array of short strings or null`);
+      }
+    } else if (!isPlainObject(cell)) return invalid(`snapshots[${i}].${key} must be an object or null`);
   }
-  // Rebuild the row explicitly (never pass unknown client fields through).
-  // Issue 1765 (D-f): bucketThresholds and extras are carried only when the
-  // sender sent them (an explicit null stays null). No row builder sets them,
-  // and canonicalStringify keeps a null key, so adding them here made the HTTP
-  // path freeze different artifact bytes than the direct path. Every reader
-  // treats a missing key as null (store/regime-store.ts, report/projections.ts).
-  return {
-    date: v.date,
-    composite: (v.composite ?? null) as number | null,
-    compositePercentile: (v.compositePercentile ?? null) as number | null,
-    regime: (v.regime ?? null) as string | null,
-    macroRegime: (v.macroRegime ?? null) as string | null,
-    onchainRegime: (v.onchainRegime ?? null) as string | null,
-    factorRegime: (v.factorRegime ?? null) as string | null,
-    macroIndex: (v.macroIndex ?? null) as number | null,
-    onchainIndex: (v.onchainIndex ?? null) as number | null,
-    factorIndex: (v.factorIndex ?? null) as number | null,
-    macroPercentile: (v.macroPercentile ?? null) as number | null,
-    onchainPercentile: (v.onchainPercentile ?? null) as number | null,
-    factorPercentile: (v.factorPercentile ?? null) as number | null,
-    panelWeights: (v.panelWeights ?? null) as RegimeSnapshotRow["panelWeights"],
-    version: (v.version ?? null) as string | null,
-    source: (v.source ?? null) as string | null,
-    percentiles: v.percentiles as Record<string, number>,
-    indicators: v.indicators as JsonValue[],
-    panels: (v.panels ?? null) as readonly string[] | null,
-    ...(Object.hasOwn(v, "bucketThresholds") ? { bucketThresholds: v.bucketThresholds ?? null } : {}),
-    backtest: v.backtest ?? null,
-    correlations: v.correlations ?? null,
-    ...(Object.hasOwn(v, "extras") ? { extras: v.extras ?? null } : {}),
-  };
+  // Rebuild the row explicitly (never pass unknown client fields through): one
+  // key per column, in the table's order, an absent cell as null.
+  // Issue 1765 (D-f): a column no row builder writes (bucketThresholds and
+  // extras, builderEmits false) is carried only when the sender sent it (an
+  // explicit null stays null). canonicalStringify keeps a null key, so adding
+  // them here made the HTTP path freeze different artifact bytes than the
+  // direct path. Every reader treats a missing key as null
+  // (store/regime-store.ts, report/projections.ts).
+  const row: Record<string, unknown> = {};
+  for (const c of SNAPSHOT_COLUMNS) {
+    if (!c.builderEmits && !Object.hasOwn(v, c.key)) continue;
+    row[c.key] = v[c.key] ?? null;
+  }
+  return row as unknown as RegimeSnapshotRow;
 }
 
 // Exported (issue #361 Phase 4): POST /api/swarm/regime is a genuine

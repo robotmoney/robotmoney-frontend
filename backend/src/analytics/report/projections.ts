@@ -15,6 +15,7 @@ import { getAnalyticsReadMode } from "../cutover/read-mode.ts";
 import { MAIN_REGIME_LINE, besideRegimeLine, ledgerCurrentLatestResearchSignal, ledgerPublishedRegimeHistory, type RegimeLineSelector } from "../cutover/ledger-current.ts";
 import { REGIME_LINE, type RegimeVersion } from "../analyze/regime-versions.ts";
 import type { RegimeSnapshotRow } from "./regime-projection.ts";
+import { toDbRow } from "./regime-eq-map.ts";
 import { on, registerQuery } from "../../db/registry.ts";
 
 // Registered queries (smoke-production-spec.md §7.1): the compatibility-mode
@@ -102,33 +103,11 @@ export async function fetchLatestResearchSignal(key: string) {
 // Normalize a ledger-replayed store row (camelCase, JS numbers already —
 // JSON.parse's inverse of the exact canonicalStringify the ledger writer
 // serialized) into the same DTO shape rowToSnapshot produces from a raw SQL
-// row, so a caller cannot tell which mode answered it.
-function ledgerRowToSnapshot(r: RegimeSnapshotRow): RegimeSnapshot {
-  return {
-    date: r.date,
-    composite: r.composite,
-    compositePercentile: r.compositePercentile,
-    regime: r.regime,
-    macroRegime: r.macroRegime,
-    onchainRegime: r.onchainRegime,
-    factorRegime: r.factorRegime,
-    macroIndex: r.macroIndex ?? null,
-    onchainIndex: r.onchainIndex ?? null,
-    factorIndex: r.factorIndex ?? null,
-    macroPercentile: r.macroPercentile ?? null,
-    onchainPercentile: r.onchainPercentile ?? null,
-    factorPercentile: r.factorPercentile ?? null,
-    panelWeights: r.panelWeights ?? null,
-    version: r.version ?? null,
-    source: r.source ?? null,
-    percentiles: r.percentiles ?? {},
-    indicators: r.indicators ?? [],
-    panels: r.panels ?? null,
-    bucketThresholds: r.bucketThresholds ?? null,
-    backtest: r.backtest ?? null,
-    correlations: r.correlations ?? null,
-    extras: r.extras ?? null,
-  } as unknown as RegimeSnapshot;
+// row, so a caller cannot tell which mode answered it. By construction (issue
+// 1765): the row as the table would hold it (toDbRow, one cell per
+// SNAPSHOT_COLUMNS entry), through rowToSnapshot itself.
+export function ledgerRowToSnapshot(r: RegimeSnapshotRow): RegimeSnapshot {
+  return rowToSnapshot(toDbRow(r)) as unknown as RegimeSnapshot;
 }
 
 // Which read path produced a regime response (issue #1095): the compatibility
