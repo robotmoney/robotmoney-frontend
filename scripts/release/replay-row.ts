@@ -27,7 +27,7 @@
 // reads only. Exit 0: the rows are equal. Exit 1: they differ, a side is
 // missing, or the SDK is too old. Exit 2: usage.
 import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 // Types only (erased at run time): the code itself comes from --sdk.
 import type { Archive } from "../../packages/analyst-sdk/src/archive/reader.ts";
 import type { PublishedRunCandidate, ReplayOptions, ReplayResult, RowComparison } from "../../packages/analyst-sdk/src/replay/index.ts";
@@ -81,7 +81,8 @@ export interface ReplaySdk {
 }
 
 /** The SDK's replay at `dir`, or null when that commit has no src/replay (it predates issue 1765). */
-export async function loadReplaySdk(dir: string): Promise<ReplaySdk | null> {
+export async function loadReplaySdk(sdkDir: string): Promise<ReplaySdk | null> {
+  const dir = resolve(sdkDir);
   if (!existsSync(join(dir, "src", "replay", "index.ts"))) return null;
   const [replay, local, ver] = await Promise.all([import(join(dir, "src/replay/index.ts")), import(join(dir, "bin/backups-dir.ts")), import(join(dir, "src/analyze/regime-versions.ts"))]);
   return {
