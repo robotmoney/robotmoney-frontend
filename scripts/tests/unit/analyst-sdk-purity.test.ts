@@ -20,6 +20,9 @@
 // `@robotmoney/analyst-sdk/node`. Every other entry of the package's exports
 // map reaches only src/ code, and './node' really does reach node:fs.
 //
+// node/ may import node:fs, but it imports no csvb and no HTTP client and never
+// calls fetch (issue 1765, its own scan below, with a planted red control).
+//
 // Also asserted here: the SDK imports nothing from backend/src, and
 // backend/src/api imports nothing from packages/ (the API reaches the SDK only
 // through the analytics/ shims).
@@ -414,9 +417,9 @@ const DIRECT_HTTP: Array<[RegExp, string]> = [
   [/\bnavigator\s*\.\s*sendBeacon\b/, "uses navigator.sendBeacon"],
 ];
 
-/** codeOnly() with string and template literal contents blanked, for checks on code alone. */
+/** codeOnly() with string and template literal contents blanked, for checks on code alone. Newlines are kept, so a line number still names its line. */
 function codeWithoutStrings(text: string): string {
-  return codeOnly(text).replace(/"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|`(?:[^`\\]|\\.)*`/g, '""');
+  return codeOnly(text).replace(/"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|`(?:[^`\\]|\\.)*`/g, (m) => '""' + m.replace(/[^\n]/g, ""));
 }
 
 function resolveRelative(from: string, spec: string): string | null {
@@ -564,6 +567,72 @@ describe("issue 1421: no downstream acquisition", () => {
       const files = plant(`${S}/analyze/y.ts`, '// we never fetch( here\nexport const y = () => console.log(`fetch (${1}) skipped`, "fetch(x)");\nexport const viaClient = (o: { get: () => void; fetch: () => void }) => o.fetch();');
       expect(importGraphViolations(files, REPO_RULES).join("\n")).toBe("");
     });
+  });
+});
+
+// ── issue 1765: node/ reads and writes files, and reaches nothing else ─────
+// node/ is the package's fs edge, so it may import node:fs. It must not import
+// csvb (the SDK never downloads an archive: a client hands it a folder csvb
+// filled), a third-party HTTP client or node's http modules, or call fetch:
+// the SDK's one provider HTTP path is src/extract/http.ts, reached through the
+// injected fetch. The issue 1421 scan above covers src/ only; this covers node/.
+// The red control plants each violation in a real temporary node/ tree and
+// expects it named with its file and line.
+const NODE_HTTP_MODULES = new Set(["node:http", "http", "node:https", "https", "node:http2", "http2"]);
+
+/** Violations of the node/ edge rule in one file, each with its 1-based line. */
+export function nodeEdgeViolations(file: string, text: string): string[] {
+  const found: string[] = [];
+  for (const { spec, line } of specifierLines(codeOnly(text))) {
+    if (CSVB_IMPORT.test(spec)) found.push(`${file}:${line}: imports ${spec} (the SDK never imports csvb)`);
+    if (HTTP_CLIENT_PACKAGES.has(spec) || NODE_HTTP_MODULES.has(spec)) found.push(`${file}:${line}: imports the HTTP client ${spec}`);
+  }
+  codeWithoutStrings(text).split("\n").forEach((code, i) => {
+    for (const [re, what] of DIRECT_HTTP) if (re.test(code)) found.push(`${file}:${i + 1}: ${what} (node/ reads and writes local files only)`);
+  });
+  return found;
+}
+
+/** Every node/ edge violation under `<base>/packages/analyst-sdk/node`, each file named relative to `base`. */
+function scanNodeEdge(base: string): string[] {
+  return tsFiles(join(base, SDK_PKG, "node")).flatMap((f) => nodeEdgeViolations(relative(base, f), readFileSync(f, "utf8")));
+}
+
+describe("issue 1765: node/ imports no csvb and no HTTP client, and never calls fetch", () => {
+  test("the scan is non-vacuous: it reads every node/ file, the fs edge among them", () => {
+    const names = tsFiles(join(root, SDK_PKG, "node")).map((f) => relative(join(root, SDK_PKG, "node"), f)).sort();
+    expect(names).toContain("backups-dir.ts");
+    expect(names).toContain("supplementary-dir.ts");
+    expect(names.length).toBeGreaterThanOrEqual(4);
+  });
+
+  test("the real node/ tree has no violation", () => {
+    expect(scanNodeEdge(root)).toEqual([]);
+  });
+
+  test("red control: planted node/ files on disk are flagged with file and line; node:fs, a comment and a string are not", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "analyst-sdk-node-edge-"));
+    try {
+      const node = join(tmp, SDK_PKG, "node");
+      mkdirSync(node, { recursive: true });
+      writeFileSync(join(node, "planted-csvb.ts"), '// the csvb client\nimport { fill } from "@robotmoney/csvb";\nexport const f = fill;\n');
+      writeFileSync(join(node, "planted-csvb-path.ts"), 'export { fill } from "../../csvb/src/cli.ts";\n');
+      writeFileSync(join(node, "planted-axios.ts"), 'import { readFileSync } from "node:fs";\nimport axios from "axios";\nexport const a = [axios, readFileSync];\n');
+      writeFileSync(join(node, "planted-https.ts"), 'import { request } from "node:https";\nexport const r = request;\n');
+      writeFileSync(join(node, "planted-fetch.ts"), 'const note = `a template\nover two lines`;\n\nexport const get = (u: string) => fetch(u);\n');
+      writeFileSync(join(node, "planted-global-fetch.ts"), "export const g = globalThis.fetch;\n");
+      writeFileSync(join(node, "clean.ts"), '// never fetch( here, and never import "@robotmoney/csvb"\nimport { readFileSync } from "node:fs";\nexport const msg = "fetch(x) is the extractors\' job";\nexport const read = readFileSync;\n');
+      expect(scanNodeEdge(tmp).sort()).toEqual([
+        `${SDK_PKG}/node/planted-axios.ts:2: imports the HTTP client axios`,
+        `${SDK_PKG}/node/planted-csvb-path.ts:1: imports ../../csvb/src/cli.ts (the SDK never imports csvb)`,
+        `${SDK_PKG}/node/planted-csvb.ts:2: imports @robotmoney/csvb (the SDK never imports csvb)`,
+        `${SDK_PKG}/node/planted-fetch.ts:4: calls fetch (node/ reads and writes local files only)`,
+        `${SDK_PKG}/node/planted-global-fetch.ts:1: uses globalThis.fetch (node/ reads and writes local files only)`,
+        `${SDK_PKG}/node/planted-https.ts:1: imports the HTTP client node:https`,
+      ]);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
   });
 });
 
