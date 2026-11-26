@@ -15,11 +15,9 @@
 // publicationCandidates lists the runs that published, newest first, for the
 // release check to pick from (D-c).
 import { createHash } from "node:crypto";
-import type { Archive } from "../archive/reader.ts";
-import { collectRunInputs } from "../archive/reader.ts";
+import { collectRunInputs, type Archive } from "../archive/reader.ts";
 import { ArchiveError, type GeneratedRow, type Row, type RunIdentity } from "../archive/format1.ts";
-import { inputHistory } from "../input/load.ts";
-import { parsePlainDecimal } from "../input/load.ts";
+import { inputHistory, parsePlainDecimal } from "../input/load.ts";
 import { BACKFILL_START, EXTRA_IDS, requireComplete, runRegime } from "../run.ts";
 import { computeKeptRegime, type KeptDay, type KeptRegimeRun } from "../analyze/kept-regime.ts";
 import { ALL_PANELS, type Panel } from "../analyze/indicators.ts";
