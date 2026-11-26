@@ -3,174 +3,94 @@
 // published run with the analyst SDK and compare the SDK's as-of row, field by
 // field, with the as-of row the run published.
 //
-//   bun scripts/release/replay-row.ts --sdk <packages/analyst-sdk> --archive <local copy> --run <run key> [--inputs <inputs.csv>] [--print-row]
+//   bun scripts/release/replay-row.ts --sdk <packages/analyst-sdk> --archive <local copy> --run <run key> [--inputs <inputs.csv>] [--tier full|label] [--print-row]
 //
-// The comparison is the one PR 1448 established
-// (backend/tests/support/published-replay.ts, backend/tests/regime-replay-archive.test.ts):
-// the SDK replays the run's frozen inputs with factor figures on, and every
-// compared field of its as-of row is compared exactly, in a fixed order, with
-// the same fields of the as-of row in the run's published `regime_snapshots`
-// artifact (analytics_output_snapshots, read from the local copy the SDK's
-// reader verified). It also hashes the canonical JSON of both rows. The
-// published report (`/reports?run=`) is the envelope
-// {asof, toolId, results} and `bun run regime` prints the regime report, so the
-// two are never byte-equal and are not compared.
+// The replay and the comparison are the SDK's own (issue 1765): replayRun of
+// <sdk>/src/replay/index.ts over the local copy, opened with the SDK's archive
+// reader (<sdk>/bin/backups-dir.ts). It reads the run's frozen vintage, the
+// rows the run published under its line's artifact kind (their payload checked
+// against payload_sha256), replays the run under its methodology label and
+// compares the as-of rows with compareRows: every compared field exactly, in a
+// fixed order, and the sha256 of the canonical JSON of each side. A label this
+// SDK does not compute (the fixtures' regime-v3) replays under the SDK's
+// current version, as before. The published report (`/reports?run=`) is the
+// envelope {asof, toolId, results} and `bun run regime` prints the regime
+// report, so the two are never byte-equal and are not compared.
+//
+// `--inputs` is accepted for the callers that pass it (scripts/release/sdk-lib.ts)
+// and not read: the replay reads the run's vintage from the copy, the same
+// rows `bun run inputs` writes to that file.
 //
 // The SDK modules are imported from --sdk (the release commit's sparse clone),
-// so this file needs nothing from backend/. It reads only. Exit 0: the rows are
-// equal. Exit 1: they differ or a side is missing. Exit 2: usage.
-import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+// so this file needs nothing from backend/ and computes nothing itself. An SDK
+// commit without src/replay predates issue 1765 and is refused by name. It
+// reads only. Exit 0: the rows are equal. Exit 1: they differ, a side is
+// missing, or the SDK is too old. Exit 2: usage.
+import { existsSync } from "node:fs";
 import { join } from "node:path";
+// Types only (erased at run time): the code itself comes from --sdk.
+import type { Archive } from "../../packages/analyst-sdk/src/archive/reader.ts";
+import type { PublishedRunCandidate, ReplayOptions, ReplayResult, RowComparison } from "../../packages/analyst-sdk/src/replay/index.ts";
 
-/** The fields a replay recomputes, in the order they are compared (the label first). */
-export const COMPARED_FIELDS = [
-  "regime", "composite", "compositePercentile", "macroRegime", "onchainRegime", "factorRegime",
-  "macroIndex", "onchainIndex", "factorIndex", "macroPercentile", "onchainPercentile", "factorPercentile",
-  "percentiles", "correlations", "backtest",
-] as const;
-export type ComparedField = (typeof COMPARED_FIELDS)[number];
-export type AsofRow = Partial<Record<ComparedField, unknown>> & { date?: string };
+/** The refusal of an SDK commit older than its replay module (issue 1765). */
+export const SDK_TOO_OLD = "this SDK predates its replay module (issue 1765); the post-seal replay needs an SDK commit that has src/replay";
 
-/** Key-sorted JSON, as backend/src/analytics/run-ledger.ts canonicalStringify writes it. */
-export function canonicalStringify(value: unknown): string {
-  const sort = (v: unknown): unknown => {
-    if (Array.isArray(v)) return v.map(sort);
-    if (v instanceof Date) return v.toISOString();
-    if (v !== null && typeof v === "object") {
-      const out: Record<string, unknown> = {};
-      for (const k of Object.keys(v as object).sort()) out[k] = sort((v as Record<string, unknown>)[k]);
-      return out;
-    }
-    return v;
-  };
-  return JSON.stringify(sort(value));
-}
-
-const sha256 = (s: string): string => createHash("sha256").update(s).digest("hex");
-
-/** PURE. The compared fields of a row, in order, absent ones as null. */
-export function projectRow(row: AsofRow): Record<ComparedField, unknown> {
-  return Object.fromEntries(COMPARED_FIELDS.map((f) => [f, row[f] ?? null])) as Record<ComparedField, unknown>;
-}
-
-export interface RowComparison {
-  readonly match: boolean;
-  /** Every differing field, in compared order. */
-  readonly differing: string[];
-  readonly firstDiff: { field: string; published: string; replay: string } | null;
-  /** sha256 of the canonical JSON of each side's compared fields. */
-  readonly publishedSha256: string | null;
-  readonly replaySha256: string;
-}
-
-/** PURE. The replayed as-of row against the published one. A missing published row is a mismatch, never a pass. */
-export function compareRows(published: AsofRow | null, replay: AsofRow): RowComparison {
-  const r = projectRow(replay);
-  const replaySha256 = sha256(canonicalStringify(r));
-  if (published === null) return { match: false, differing: ["as-of row"], firstDiff: { field: "as-of row", published: "absent", replay: canonicalStringify(r.regime) }, publishedSha256: null, replaySha256 };
-  const p = projectRow(published);
-  const differing: string[] = [];
-  let firstDiff: RowComparison["firstDiff"] = null;
-  for (const f of COMPARED_FIELDS) {
-    const [a, b] = [canonicalStringify(p[f]), canonicalStringify(r[f])];
-    if (a === b) continue;
-    differing.push(f);
-    firstDiff ??= { field: f, published: a, replay: b };
-  }
-  const publishedSha256 = sha256(canonicalStringify(p));
-  return { match: differing.length === 0 && publishedSha256 === replaySha256, differing, firstDiff, publishedSha256, replaySha256 };
-}
-
-/** PURE. The as-of row of a published regime_snapshots payload (text), or null when it has none for the day. */
-export function publishedAsofRow(payloadText: string, asof: string): AsofRow | null {
-  const rows = JSON.parse(payloadText) as AsofRow[];
-  return rows.find((r) => r.date === asof) ?? null;
-}
-
-/** The as-of labels: a replay must reproduce them exactly for any archived run (issue 1431). */
-export const LABEL_FIELDS = ["regime", "macroRegime", "onchainRegime", "factorRegime"] as const;
-
-/**
- * PURE. The label tier: only the as-of labels must be equal. Any other differing field is info, not a
- * problem: a run made before issue 1421's fix computed from freshly fetched values stored to a relative
- * tolerance (D56), so its numbers differ by about 1e-6 (regime-engine.md 8.1.1). A missing published row is a problem.
- */
-export function labelProblems(c: RowComparison, run: string, asof: string): string[] {
-  if (c.publishedSha256 === null) return [`run ${run}: the published regime_snapshots artifact has no as-of row for ${asof}`];
-  const bad = c.differing.filter((f) => (LABEL_FIELDS as readonly string[]).includes(f));
-  return bad.length === 0 ? [] : [`run ${run} as of ${asof}: the SDK's as-of label differs from the published one in ${bad.join(", ")}`];
-}
-
-/** PURE. Why a comparison is a problem, in one line per fact; empty when the rows are equal. */
+/** PURE. Why a full-tier comparison is a problem, in one line per fact; empty when the rows are equal. */
 export function comparisonProblems(c: RowComparison, run: string, asof: string): string[] {
   if (c.match) return [];
-  if (c.publishedSha256 === null) return [`run ${run}: the published regime_snapshots artifact has no as-of row for ${asof}`];
+  const missing = missingRowProblems(c, run, asof);
+  if (missing.length > 0) return missing;
   const d = c.firstDiff!;
   return [`run ${run} as of ${asof}: the SDK's as-of row differs from the published one in ${c.differing.join(", ")}; first ${d.field}: published ${d.published.slice(0, 80)}, SDK ${d.replay.slice(0, 80)}; sha256 published ${c.publishedSha256}, SDK ${c.replaySha256}`];
 }
 
-// ── the SDK side: imported from the clone, never from this checkout ──
-interface Sdk {
-  openBackupsDir(root: string): { table(name: string): Record<string, string | null>[]; files(t: string): unknown[]; readRows(f: unknown): Record<string, string | null>[] };
-  parseInput(text: string, o: { replay: boolean }): { history: unknown };
-  runRegime(history: unknown, o: { asof: string; factor: boolean; version?: string }): {
-    dateAxis: string[];
-    result: Record<string, any>;
-    factor?: Record<string, any>;
-    correlations?: unknown;
-    backtest?: unknown;
-  };
-  INDICATORS: { id: string }[];
-  /** The methodology versions the SDK computes (issue 1652); absent on an SDK before v4. */
-  REGIME_VERSIONS?: readonly string[];
-}
-
-async function loadSdk(dir: string): Promise<Sdk> {
-  const [local, load, run, ind, ver] = await Promise.all([
-    import(join(dir, "bin/backups-dir.ts")), import(join(dir, "src/input/load.ts")), import(join(dir, "src/run.ts")), import(join(dir, "src/analyze/indicators.ts")),
-    import(join(dir, "src/analyze/regime-versions.ts")),
-  ]);
-  return { openBackupsDir: local.openBackupsDir, parseInput: load.parseInput, runRegime: run.runRegime, INDICATORS: ind.INDICATORS, REGIME_VERSIONS: ver.REGIME_VERSIONS };
-}
-
-const nn = (v: unknown): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
-
 /**
- * The SDK's as-of row for `inputText` (replay contract), the way published-replay.ts builds it.
- * `methodology` is the run's methodology label: when the SDK computes that version (issue 1652),
- * the run replays under it, so a run published under v3 replays as v3.
+ * PURE. The label tier: only the as-of labels must be equal. `mismatches` is the
+ * SDK's labelMismatches(c): the differing label fields, or the missing-row name
+ * when a side has no row. Any other differing field is info, not a problem: a
+ * run made before issue 1421's fix computed from freshly fetched values stored
+ * to a relative tolerance (D56), so its numbers differ by about 1e-6
+ * (regime-engine.md 8.1.1). A missing row on either side is a problem.
  */
-export function replayRow(sdk: Sdk, inputText: string, asof: string, methodology?: string | null): AsofRow {
-  const { history } = sdk.parseInput(inputText, { replay: true });
-  const version = methodology && sdk.REGIME_VERSIONS?.includes(methodology) ? methodology : undefined;
-  const run = sdk.runRegime(history, { asof, factor: true, ...(version ? { version } : {}) });
-  const last = run.dateAxis.length - 1;
-  if (run.dateAxis[last] !== asof) throw new Error(`replay date axis ends ${run.dateAxis[last]}, not the run's as-of day ${asof}`);
-  const r2 = run.result;
-  const r3 = run.factor!;
-  const percentiles: Record<string, number> = {};
-  for (const ind of sdk.INDICATORS) {
-    const s = r2.signed?.[ind.id]?.[last];
-    if (typeof s === "number" && Number.isFinite(s)) percentiles[ind.id] = Number(s.toFixed(6));
-  }
+export function labelProblems(c: RowComparison, mismatches: readonly string[], run: string, asof: string): string[] {
+  const missing = missingRowProblems(c, run, asof);
+  if (missing.length > 0) return missing;
+  return mismatches.length === 0 ? [] : [`run ${run} as of ${asof}: the SDK's as-of label differs from the published one in ${mismatches.join(", ")}`];
+}
+
+// The comparison has no row on a side: the published artifact holds none for
+// the day, or the SDK computed none.
+function missingRowProblems(c: RowComparison, run: string, asof: string): string[] {
+  if (c.publishedSha256 === null) return [`run ${run}: the published regime artifact has no as-of row for ${asof}`];
+  if (c.replaySha256 === null) return [`run ${run}: the SDK computed no as-of row for ${asof}`];
+  return [];
+}
+
+// ── the SDK side: imported from the clone, never from this checkout ──
+/** An archive opened by the SDK's reader; only the SDK reads it. */
+export type SdkArchive = Archive;
+
+/** What the release checks use of the SDK at the release commit: its archive reader and its replay module. */
+export interface ReplaySdk {
+  openBackupsDir(root: string): SdkArchive;
+  replayRun(archive: SdkArchive, runKey: string, opts?: ReplayOptions): ReplayResult;
+  publicationCandidates(archive: SdkArchive, toolId: string, opts?: { line?: "main" | "beside"; methodology?: string }): PublishedRunCandidate[];
+  labelMismatches(c: RowComparison): string[];
+  UnknownRunError: new (runKey: string) => Error;
+  CURRENT_REGIME_VERSION: NonNullable<ReplayOptions["fallbackVersion"]>;
+}
+
+/** The SDK's replay at `dir`, or null when that commit has no src/replay (it predates issue 1765). */
+export async function loadReplaySdk(dir: string): Promise<ReplaySdk | null> {
+  if (!existsSync(join(dir, "src", "replay", "index.ts"))) return null;
+  const [replay, local, ver] = await Promise.all([import(join(dir, "src/replay/index.ts")), import(join(dir, "bin/backups-dir.ts")), import(join(dir, "src/analyze/regime-versions.ts"))]);
   return {
-    date: asof,
-    regime: r2.regime[last] ?? null,
-    composite: nn(r2.composite[last]),
-    compositePercentile: nn(r2.compositePercentile[last]),
-    macroRegime: r2.macroRegime?.[last] ?? null,
-    onchainRegime: r2.onchainRegime?.[last] ?? null,
-    factorRegime: r3.factorRegime?.[last] ?? null,
-    macroIndex: nn(r2.macroIndex?.[last]),
-    onchainIndex: nn(r2.onchainIndex?.[last]),
-    factorIndex: nn(r3.factorIndex?.[last]),
-    macroPercentile: nn(r2.macroPercentile?.[last]),
-    onchainPercentile: nn(r2.onchainPercentile?.[last]),
-    factorPercentile: nn(r3.factorPercentile?.[last]),
-    percentiles,
-    correlations: run.correlations ?? null,
-    backtest: run.backtest ?? null,
+    openBackupsDir: local.openBackupsDir,
+    replayRun: replay.replayRun,
+    publicationCandidates: replay.publicationCandidates,
+    labelMismatches: replay.labelMismatches,
+    UnknownRunError: replay.UnknownRunError,
+    CURRENT_REGIME_VERSION: ver.CURRENT_REGIME_VERSION,
   };
 }
 
@@ -180,49 +100,43 @@ const flag = (name: string): string | undefined => {
 };
 
 async function main(): Promise<number> {
-  const [sdkDir, archive, run, inputs] = [flag("--sdk"), flag("--archive"), flag("--run"), flag("--inputs")];
-  if (!sdkDir || !archive || !run || !inputs) {
-    console.error("usage: bun scripts/release/replay-row.ts --sdk <sdk dir> --archive <local copy> --run <run key> --inputs <inputs.csv> [--tier full|label] [--print-row]");
+  const [sdkDir, archive, run] = [flag("--sdk"), flag("--archive"), flag("--run")];
+  const tier = flag("--tier") ?? "full";
+  if (!sdkDir || !archive || !run || (tier !== "full" && tier !== "label")) {
+    console.error("usage: bun scripts/release/replay-row.ts --sdk <sdk dir> --archive <local copy> --run <run key> [--inputs <inputs.csv>] [--tier full|label] [--print-row]");
     return 2;
   }
-  const sdk = await loadSdk(sdkDir);
-  const copy = sdk.openBackupsDir(archive);
-  const runRow = copy.table("analytics_ledger_runs").find((r) => r.run_key === run);
-  if (!runRow) {
-    console.log(JSON.stringify({ problems: [`run ${run} is not in the local copy's run ledger`] }));
+  const sdk = await loadReplaySdk(sdkDir);
+  if (sdk === null) {
+    console.log(JSON.stringify({ problems: [SDK_TOO_OLD] }));
     return 1;
   }
-  const asof = runRow.asof!;
-  const methodology = copy.table("analytics_ledger_methodology_versions").find((m) => m.id === runRow.methodology_version_id)?.version_label ?? null;
-  const replay = replayRow(sdk, readFileSync(inputs, "utf8"), asof, methodology);
+  let r: ReplayResult;
+  try {
+    r = sdk.replayRun(sdk.openBackupsDir(archive), run, { fallbackVersion: sdk.CURRENT_REGIME_VERSION });
+  } catch (e) {
+    if (e instanceof sdk.UnknownRunError) {
+      console.log(JSON.stringify({ problems: [(e as Error).message] }));
+      return 1;
+    }
+    throw e;
+  }
+  const asof = r.run.asof;
   if (process.argv.includes("--print-row")) {
-    console.log(JSON.stringify(replay));
+    if (r.computed.asof === null) {
+      console.log(JSON.stringify({ problems: [`run ${run}: the SDK computed no as-of row for ${asof}`, ...r.problems] }));
+      return 1;
+    }
+    console.log(JSON.stringify(r.computed.asof));
     return 0;
   }
-  let published: AsofRow | null = null;
-  let found = false;
-  for (const f of copy.files("analytics_output_snapshots")) {
-    for (const o of copy.readRows(f)) {
-      if (o.run_id !== runRow.id || o.artifact_kind !== "regime_snapshots") continue;
-      if (sha256(o.payload_json!) !== o.payload_sha256) {
-        console.log(JSON.stringify({ problems: [`run ${run}: the published payload does not match its stored sha256`] }));
-        return 1;
-      }
-      found = true;
-      published = publishedAsofRow(o.payload_json!, asof);
-    }
-  }
-  if (!found) {
-    console.log(JSON.stringify({ problems: [`run ${run} has no regime_snapshots artifact in the local copy: the published record of the run is not in the archive`] }));
+  // A missing or unverified artifact, an unknown label: the replay is not a clean comparison.
+  if (r.problems.length > 0 || r.diff === null) {
+    console.log(JSON.stringify({ run, asof, tier, match: false, differing: r.diff?.differing ?? [], publishedSha256: r.diff?.publishedSha256 ?? null, replaySha256: r.diff?.replaySha256 ?? null, problems: r.problems.length > 0 ? r.problems : [`run ${run}: the SDK did not replay the run`] }));
     return 1;
   }
-  const c = compareRows(published, replay);
-  const tier = flag("--tier") ?? "full";
-  if (tier !== "full" && tier !== "label") {
-    console.error("--tier is full or label");
-    return 2;
-  }
-  const problems = tier === "label" ? labelProblems(c, run, asof) : comparisonProblems(c, run, asof);
+  const c = r.diff;
+  const problems = tier === "label" ? labelProblems(c, sdk.labelMismatches(c), run, asof) : comparisonProblems(c, run, asof);
   console.log(JSON.stringify({ run, asof, tier, match: c.match, differing: c.differing, publishedSha256: c.publishedSha256, replaySha256: c.replaySha256, problems }));
   return problems.length === 0 ? 0 : 1;
 }

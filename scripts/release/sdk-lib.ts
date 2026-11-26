@@ -11,8 +11,8 @@
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, relative } from "node:path";
-import { gunzipSync } from "node:zlib";
 import { getWithRetry, latestReport, listReports, noRunMessage, PUBLIC_API, sha256Hex, type Net, type ReportRow } from "./public-analytics-read.ts";
+import { loadReplaySdk, SDK_TOO_OLD, type ReplaySdk } from "./replay-row.ts";
 
 export interface RunResult {
   readonly code: number;
@@ -187,31 +187,35 @@ export const PRE_D78_RELEASE_COMMITS: ReadonlySet<string> = new Set([
 export interface ArchivedRun {
   readonly created: string;
   readonly buildIdentity: string;
+  readonly asof: string;
+  /** The run's methodology label; null when the copy records none. */
+  readonly methodology: string | null;
 }
 
-/** The runs (by key) in a filled archive copy's run ledger (every csv/<backup>/data/analytics_ledger_runs.*.csv.gz). */
-export function archivedRuns(copyDir: string): Map<string, ArchivedRun> {
+/**
+ * The main-line regime runs that published, newest first (by run id), in a filled archive copy, keyed by run key
+ * (issue 1765, D-c): publicationCandidates(archive, "regime", { line: "main" }) of the release commit's SDK over the
+ * copy opened with that SDK's reader. A run of a beside version (v5) is never listed: the post-seal replay checks the
+ * served line. A folder with no csv/ is no copy and lists none; a corrupt copy throws the reader's error.
+ */
+export function archivedRuns(sdk: Pick<ReplaySdk, "openBackupsDir" | "publicationCandidates">, copyDir: string): Map<string, ArchivedRun> {
   const runs = new Map<string, ArchivedRun>();
-  const csv = join(copyDir, "csv");
-  if (!existsSync(csv)) return runs;
-  for (const backup of readdirSync(csv)) {
-    const data = join(csv, backup, "data");
-    if (!existsSync(data)) continue;
-    for (const f of readdirSync(data)) {
-      if (!/^analytics_ledger_runs\..*\.csv\.gz$/.test(f)) continue;
-      // id,run_key,asof,tool_id,source_label,methodology_version_id,build_identity,job_id,created_at
-      for (const line of gunzipSync(readFileSync(join(data, f))).toString("utf8").split("\n")) {
-        const c = line.split(",");
-        if (c.length === 9 && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(c[1]!)) runs.set(c[1]!, { created: c[8]!, buildIdentity: c[6]! });
-      }
-    }
+  if (!existsSync(join(copyDir, "csv"))) return runs;
+  for (const c of sdk.publicationCandidates(sdk.openBackupsDir(copyDir), "regime", { line: "main" })) {
+    runs.set(c.runKey, { created: c.createdAt ?? "", buildIdentity: c.buildIdentity ?? "", asof: c.asof, methodology: c.methodology });
   }
   return runs;
 }
 
-/** PURE. The newest published report (highest report id) whose run is in the archive copy, or undefined. */
+/** PURE. The report of the newest archived run (in `archived` order, newest first) that a published report names, or undefined. */
 export function newestArchivedReport(reports: readonly ReportRow[], archived: ReadonlyMap<string, ArchivedRun>): ReportRow | undefined {
-  return latestReport(reports.filter((r) => archived.has(r.run_key)));
+  const byRun = new Map<string, ReportRow[]>();
+  for (const r of reports) byRun.set(r.run_key, [...(byRun.get(r.run_key) ?? []), r]);
+  for (const key of archived.keys()) {
+    const listed = byRun.get(key);
+    if (listed) return latestReport(listed);
+  }
+  return undefined;
 }
 
 type Format1 = typeof import("../../packages/analyst-sdk/src/archive/format1.ts");
@@ -349,9 +353,12 @@ export async function quickstartCheck(deps: SdkDeps, commit: string): Promise<Ch
 /**
  * The post-seal check, run on its own after the UTC day a fixed-release run ran in is sealed (never a
  * cutover step): the README quickstart's `fill` of the whole archive, `bun run inputs --run <run>`, `bun run
- * regime --replay`, then scripts/release/replay-row.ts. The newest archived published run must have been
- * made at or after the fix, and its whole as-of row must equal the as-of row of the run's published
- * regime_snapshots artifact (the comparison of PR 1448), else the check fails naming the missing sealed day.
+ * regime --replay`, then scripts/release/replay-row.ts, which replays the run with the SDK's replayRun. The run is
+ * chosen with the SDK's publicationCandidates over the filled copy (issue 1765, D-c): the newest main-line run that
+ * published, intersected with the /reports list; a beside run (v5) is never chosen. It must have been made at or
+ * after the fix, and its whole as-of row must equal the as-of row of its published artifact (the comparison of PR
+ * 1448), else the check fails naming the missing sealed day. An SDK commit without src/replay (before issue 1765)
+ * is refused by name: this check replays through that module.
  */
 export async function postSealCheck(deps: SdkDeps, commit: string): Promise<CheckResult> {
   const found: Record<string, unknown> = { commit, mode: "post-seal" };
@@ -361,17 +368,24 @@ export async function postSealCheck(deps: SdkDeps, commit: string): Promise<Chec
   if (newest === undefined) return { found, problems: [noRunMessage("the post-seal check")] };
   const sdk = await deps.prepareSdk(commit, deps.scratch());
   if ("problem" in sdk) return { found, problems: [sdk.problem] };
+  const replay = await loadReplaySdk(sdk.sdkDir);
+  if (replay === null) return { found, problems: [SDK_TOO_OLD] };
   const filled = await fillInto(deps, sdk.sdkDir, "api-copy");
   if (filled !== null) return { found, problems: [filled] };
   // The archive is sealed a UTC day at a time, so the newest published run may postdate the newest sealed backup.
-  const archived = archivedRuns(join(sdk.sdkDir, "api-copy"));
+  let archived: Map<string, ArchivedRun>;
+  try {
+    archived = archivedRuns(replay, join(sdk.sdkDir, "api-copy"));
+  } catch (e) {
+    return { found, problems: [`the filled archive copy does not open with the SDK's reader: ${(e as Error).message}`] };
+  }
   const run = newestArchivedReport(listed.reports, archived);
   Object.assign(found, { newestPublishedRun: newest.run_key, newestPublishedAsof: newest.asof });
-  if (run === undefined) return { found, problems: [`none of the ${listed.reports.length} published run(s) is in the filled archive copy (${archived.size} run(s) in its ledger): no sealed backup holds a published run yet`] };
+  if (run === undefined) return { found, problems: [`none of the ${listed.reports.length} published run(s) is a main-line run in the filled archive copy (${archived.size} published main-line run(s) in it): no sealed backup holds a published run yet`] };
   const { run_key, asof } = run;
-  const { created, buildIdentity } = archived.get(run_key)!;
+  const { created, buildIdentity, methodology } = archived.get(run_key)!;
   const fixed = isFixedProducer(buildIdentity);
-  Object.assign(found, { run_key, asof, created, buildIdentity, fixedProducer: fixed });
+  Object.assign(found, { run_key, asof, created, buildIdentity, methodology, fixedProducer: fixed });
   if (!fixed) {
     const sealedThrough = [...readdirSync(join(sdk.sdkDir, "api-copy", "csv"))].sort().at(-1) ?? "none";
     return { found, problems: [`the newest archived run (${run_key}, made ${created}) was made by the old producer (build identity ${buildIdentity}, before issue 1421's fix or before v0.7.1's D78 arithmetic): the sealed backups run through ${sealedThrough}, none holds a run of the fixed release; a day is sealed one hour after its UTC midnight: rerun this check once the day a v0.7.0 run was made in is sealed`] };
@@ -386,7 +400,7 @@ export async function postSealCheck(deps: SdkDeps, commit: string): Promise<Chec
     ["bun", join(import.meta.dir, "replay-row.ts"), "--sdk", sdk.sdkDir, "--archive", join(sdk.sdkDir, "api-copy"), "--run", run_key, "--inputs", join(out, "inputs.csv"), "--tier", tier],
     { cwd: sdk.sdkDir },
   );
-  let body: { problems?: string[]; publishedSha256?: string | null; replaySha256?: string; differing?: string[] } = {};
+  let body: { problems?: string[]; publishedSha256?: string | null; replaySha256?: string | null; differing?: string[] } = {};
   try { body = JSON.parse(text(cmp.stdout)); } catch { /* reported below */ }
   Object.assign(found, { tier, publishedRowSha256: body.publishedSha256 ?? null, sdkRowSha256: body.replaySha256 ?? null, differingFields: body.differing ?? null });
   if (!(cmp.code === 0 && body.problems?.length === 0)) {
