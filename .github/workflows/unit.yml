@@ -194,7 +194,7 @@ jobs:
       - name: Analytics engine guards ran (issue 1765)
         run: >-
           bun scripts/checks/assert-junit-suites.ts /tmp/test-unit.junit.xml
-          scripts/tests/unit/analyst-sdk-one-row-builder.test.ts:16
+          scripts/tests/unit/analyst-sdk-one-row-builder.test.ts:22
           scripts/tests/unit/regime-seam-guard.test.ts:11
           scripts/tests/unit/analyst-sdk-purity.test.ts:71
           scripts/tests/unit/analyst-sdk-readme-commands.test.ts:6

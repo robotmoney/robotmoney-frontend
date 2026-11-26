@@ -45,6 +45,13 @@
 //
 // Comments and regex literals are blanked before matching, with newlines kept
 // so a line number names its line: prose that names a pattern is not a site.
+// A template's ${...} is scanned as code, so a regex or a nested template in it
+// (`${s.replace(/"/g, '""')}`, `${a ? `https://x/${p}` : ""}`) cannot open a
+// string or a comment that blanks the rest of the file. Two checks keep a lost
+// scanner from passing for a clean file: both scanners must end clean on every
+// walked file (each literal, comment and ${...} closed, each brace matched,
+// each line kept), and a backstop runs the strict === and !== comparisons over
+// each line scanned on its own.
 //
 // RED CONTROLS: scan() runs over planted maps built from scratch and must name
 // each planted site by file and line, and the git walk runs over a planted
@@ -82,6 +89,11 @@ const KIND_CHECKS: RegExp[] = [
   // ["regime_snapshots", ...].includes(o.artifact_kind), (... as const).includes, new Set([...]).has, [...].indexOf(...)
   new RegExp(String.raw`\[[^\[\]]*${LIT}[^\[\]]*\](?:\s+as\s+const)?\s*\)?\s*\??\.\s*(?:includes|has|indexOf)\s*\(\s*${KIND_HEAD}${KIND}`, "g"),
 ];
+// The backstop: the strict comparisons (=== and !==, which SQL never writes)
+// over each codeOnly() line run through kindCode() on its own. A scanner that
+// loses its place on one line cannot carry that into a later line here, so it
+// can never hide a plain `o.artifact_kind === "regime_snapshots"`.
+const STRICT_KIND_CHECKS: RegExp[] = [new RegExp(String.raw`${KIND}${KIND_TAIL}\s*[!=]==\s*\(*\s*${LIT}`), new RegExp(String.raw`${LIT}\s*[!=]==\s*${KIND_HEAD}${KIND}`)];
 // A `case "regime_snapshots":` label; it is a site only inside a switch on an artifact kind.
 const KIND_CASE = new RegExp(String.raw`\bcase\s*\(?\s*${LIT}\s*\)?\s*:`, "g");
 // A literal whose whole text is one of these is kept in kindCode(); every other literal's text is blanked.
@@ -92,86 +104,156 @@ const COMPARED_FIELDS_DECL = /(?<!\btypeof\s+)\bCOMPARED_FIELDS\s*(:[^=]+)?=(?!=
 const NEEDLES = ["toFixed(6)", "regime_snapshots", "COMPARED_FIELDS"];
 
 // True when a `/` here starts a regex literal rather than dividing: the last
-// significant character before it cannot end an operand. The same scanner as
-// scripts/tests/unit/analyst-sdk-purity.test.ts.
+// significant character before it cannot end an operand. Derived from the
+// scanner in scripts/tests/unit/analyst-sdk-purity.test.ts, plus one case: a
+// TypeScript non-null assertion (`a[i]! / b`) ends an operand, so the `/`
+// after it divides.
 function startsRegex(before: string): boolean {
   const t = before.trimEnd();
   if (t === "") return true;
+  if (/[\w$)\]]!$/.test(t)) return false;
   if (/[(,=:[!&|?{};+\-*%<>~^]$/.test(t)) return true;
   return /(?:^|[^\w$.])(?:return|typeof|case|in|of|delete|void|throw|new|else|do|yield|await)$/.test(t);
 }
 
-/** The text with comments and regex literals blanked; strings and template literals are kept, and so is every newline. */
-function codeOnly(text: string): string {
+/** A scanner's output: its text, with every newline kept, and what kept the scan from ending clean. */
+export interface Scan {
+  text: string;
+  /** Each is `line N: what`. Empty when every literal, comment and ${...} closed (and, for kindCode, every brace matched). */
+  problems: string[];
+}
+
+const lineOf = (text: string, offset: number) => text.slice(0, offset).split("\n").length;
+
+/**
+ * The text with comments and regex literals blanked; strings and template
+ * literals are kept, and so is every newline. A template's ${...} is scanned
+ * as code, so a regex literal or a comment inside it is blanked and a template
+ * nested in it is read as one: `${name.replace(/"/g, '""')}` and
+ * `${base ? `https://x/${p}` : ""}` neither open a string nor start a comment.
+ * A string literal ends at its line's end, so one stray quote cannot swallow
+ * the lines after it.
+ */
+export function codeOnly(text: string): Scan {
   let out = "";
   let i = 0;
-  while (i < text.length) {
-    const c = text[i];
-    const n = text[i + 1];
-    if (c === "/" && n === "/") {
-      while (i < text.length && text[i] !== "\n") i++;
-    } else if (c === "/" && n === "*") {
-      i += 2;
-      while (i < text.length && !(text[i] === "*" && text[i + 1] === "/")) out += text[i++] === "\n" ? "\n" : "";
-      i += 2;
-      out += " ";
-    } else if (c === "/" && startsRegex(out)) {
-      // Regex literal: skip to the closing unescaped `/` (a `/` inside [...] does not close it), then the flags.
-      i++;
-      let inClass = false;
-      while (i < text.length && text[i] !== "\n" && (inClass || text[i] !== "/")) {
-        if (text[i] === "\\") i++;
-        else if (text[i] === "[") inClass = true;
-        else if (text[i] === "]") inClass = false;
+  const problems: string[] = [];
+  const problem = (at: number, what: string) => problems.push(`line ${lineOf(text, at)}: ${what}`);
+  // A shebang line is not code.
+  if (text.startsWith("#!")) while (i < text.length && text[i] !== "\n") i++;
+  // Code up to the `}` that closes the ${...} opened at `open`, or to the end of the text when `open` is undefined.
+  const code = (open?: number): void => {
+    let depth = 0;
+    while (i < text.length) {
+      const c = text[i];
+      const n = text[i + 1];
+      if (c === "/" && n === "/") {
+        while (i < text.length && text[i] !== "\n") i++;
+      } else if (c === "/" && n === "*") {
+        const start = i;
+        i += 2;
+        while (i < text.length && !(text[i] === "*" && text[i + 1] === "/")) out += text[i++] === "\n" ? "\n" : "";
+        if (i >= text.length) problem(start, "a block comment is not closed");
+        i += 2;
+        out += " ";
+      } else if (c === "/" && startsRegex(out)) {
+        // Regex literal: skip to the closing unescaped `/` (a `/` inside [...] does not close it), then the flags.
+        const start = i++;
+        let inClass = false;
+        while (i < text.length && text[i] !== "\n" && (inClass || text[i] !== "/")) {
+          if (text[i] === "\\") i++;
+          else if (text[i] === "[") inClass = true;
+          else if (text[i] === "]") inClass = false;
+          i++;
+        }
+        if (text[i] === "/") {
+          i++;
+          while (i < text.length && /[a-z]/i.test(text[i]!)) i++;
+        } else problem(start, "a regex literal is not closed on its line");
+        out += "/_/";
+      } else if (c === '"' || c === "'") {
+        const start = i;
+        out += text[i++];
+        while (i < text.length && text[i] !== c && text[i] !== "\n") {
+          if (text[i] === "\\") out += text[i++];
+          out += text[i++] ?? "";
+        }
+        if (text[i] === c) out += text[i++];
+        else problem(start, "a string literal is not closed on its line");
+      } else if (c === "`") {
+        template();
+      } else if (c === "}" && depth === 0 && open !== undefined) {
+        return;
+      } else {
+        if (c === "{") depth++;
+        else if (c === "}" && depth > 0) depth--;
+        out += c;
         i++;
       }
-      i++;
-      while (i < text.length && /[a-z]/i.test(text[i]!)) i++;
-      out += "/_/";
-    } else if (c === '"' || c === "'" || c === "`") {
-      out += c;
-      i++;
-      while (i < text.length && text[i] !== c) {
-        if (text[i] === "\\") out += text[i++];
-        out += text[i++] ?? "";
-      }
-      out += text[i++] ?? "";
-    } else {
-      out += c;
-      i++;
     }
-  }
-  return out;
+    if (open !== undefined) problem(open, "a template's ${...} is not closed");
+  };
+  // A template literal from its opening backtick; each ${...} in it is code.
+  const template = (): void => {
+    const start = i;
+    out += text[i++];
+    while (i < text.length && text[i] !== "`") {
+      if (text[i] === "\\") {
+        out += text.slice(i, i + 2);
+        i += 2;
+      } else if (text[i] === "$" && text[i + 1] === "{") {
+        const open = i;
+        out += "${";
+        i += 2;
+        code(open);
+        if (i < text.length) out += text[i++];
+      } else {
+        out += text[i++];
+      }
+    }
+    if (i < text.length) out += text[i++];
+    else problem(start, "a template literal is not closed");
+  };
+  code();
+  return { text: out, problems };
 }
 
 /**
- * codeOnly() output with every string and template literal's text blanked, so
+ * codeOnly() text with every string and template literal's text blanked, so
  * SQL or prose inside a literal cannot match a kind check. A literal whose whole
  * text is the kind or an artifact kind property name is kept, written in double
  * quotes, so `regime_snapshots` (a template with no substitution) reads like
  * "regime_snapshots". A template's ${...} code is kept and scanned. Every
- * newline is kept, so an offset still names its line.
+ * newline is kept, so an offset still names its line. A `}` with no `{` is a
+ * problem, not the end of the scan: the text after it is still scanned.
  */
-export function kindCode(code: string): string {
+export function kindCode(code: string): Scan {
   let i = 0;
+  const problems: string[] = [];
+  const problem = (at: number, what: string) => problems.push(`line ${lineOf(code, at)}: ${what}`);
   const blank = (t: string) => t.replace(/[^\n]/g, "");
   const literal = (body: string, raw: string) => (KEPT_LITERAL.test(body) ? `"${body}"` : `""${blank(raw)}`);
-  // Code up to an unmatched `}` (the end of a template's ${...}) or the end of the text.
-  const codeRun = (): string => {
+  // Code up to the `}` that closes the ${...} opened at `open`, or to the end of the text when `open` is undefined.
+  const codeRun = (open?: number): string => {
     let out = "";
     let depth = 0;
     while (i < code.length) {
       const c = code[i]!;
       if (c === '"' || c === "'") {
         const start = i++;
-        while (i < code.length && code[i] !== c) i += code[i] === "\\" ? 2 : 1;
-        i++;
+        while (i < code.length && code[i] !== c && code[i] !== "\n") i += code[i] === "\\" ? 2 : 1;
+        const closed = code[i] === c;
+        if (closed) i++;
+        else problem(start, "a string literal is not closed on its line");
         const raw = code.slice(start, i);
-        out += literal(raw.slice(1, -1), raw);
+        out += closed ? literal(raw.slice(1, -1), raw) : `""${blank(raw)}`;
       } else if (c === "`") {
         out += template();
       } else if (c === "}" && depth === 0) {
-        return out;
+        if (open !== undefined) return out;
+        problem(i, "a `}` with no `{`");
+        out += c;
+        i++;
       } else {
         if (c === "{") depth++;
         if (c === "}") depth--;
@@ -179,11 +261,13 @@ export function kindCode(code: string): string {
         i++;
       }
     }
+    if (open !== undefined) problem(open, "a template's ${...} is not closed");
+    else if (depth > 0) problem(code.length, `${depth} \`{\` not closed at the end of the text`);
     return out;
   };
   // A template literal from its opening backtick.
   const template = (): string => {
-    i++;
+    const start = i++;
     let text = "";
     let out = "";
     let substitutions = 0;
@@ -192,8 +276,9 @@ export function kindCode(code: string): string {
         text += code.slice(i, i + 2);
         i += 2;
       } else if (code[i] === "$" && code[i + 1] === "{") {
+        const open = i;
         i += 2;
-        out += `${blank(text)}\${${codeRun()}}`;
+        out += `${blank(text)}\${${codeRun(open)}}`;
         i++;
         text = "";
         substitutions++;
@@ -201,10 +286,12 @@ export function kindCode(code: string): string {
         text += code[i++];
       }
     }
-    i++;
+    if (i < code.length) i++;
+    else problem(start, "a template literal is not closed");
     return substitutions === 0 ? literal(text, `\`${text}\``) : `\`${out}${blank(text)}\``;
   };
-  return codeRun();
+  const text = codeRun();
+  return { text, problems };
 }
 
 /** The offset just past the bracket that closes the one at `open` (`(` or `{`) in kindCode() text, or the text's length. */
@@ -267,14 +354,19 @@ export function sitesOf(files: ReadonlyMap<string, string>): { rows: Site[]; kin
   const decls: Site[] = [];
   for (const [file, text] of files) {
     if (!NEEDLES.some((n) => text.includes(n))) continue;
-    const code = codeOnly(text);
+    const code = codeOnly(text).text;
     const lines = code.split("\n");
     lines.forEach((line, i) => {
       const site = { file, line: i + 1, text: line.trim() };
       if (ROW_BUILDER.test(line)) rows.push(site);
       if (COMPARED_FIELDS_DECL.test(line)) decls.push(site);
     });
-    if (text.includes("regime_snapshots")) for (const n of kindCheckLines(kindCode(code))) kinds.push({ file, line: n, text: lines[n - 1]?.trim() ?? "" });
+    if (!text.includes("regime_snapshots")) continue;
+    const found = new Set(kindCheckLines(kindCode(code).text));
+    lines.forEach((line, i) => {
+      if (line.includes("regime_snapshots") && STRICT_KIND_CHECKS.some((re) => re.test(kindCode(line).text))) found.add(i + 1);
+    });
+    for (const n of [...found].sort((a, b) => a - b)) kinds.push({ file, line: n, text: lines[n - 1]?.trim() ?? "" });
   }
   return { rows, kinds, decls };
 }
@@ -342,6 +434,29 @@ describe("one row builder, no literal artifact kind outside the SDK, one COMPARE
     expect(decls[0]!.file.startsWith(SDK_REPLAY)).toBe(true);
     // The SDK's line lookup names the literal; callers use it.
     expect(files.get("packages/analyst-sdk/src/analyze/regime-versions.ts")).toMatch(/export const REGIME_ARTIFACT_KIND\b/);
+  });
+
+  test("the real tree: both scanners end clean on every walked file, with every literal, comment and ${...} closed, every brace matched and every line kept", () => {
+    const unclean: string[] = [];
+    for (const [file, text] of files) {
+      const c = codeOnly(text);
+      const k = kindCode(c.text);
+      for (const p of [...c.problems, ...k.problems]) unclean.push(`${file}: ${p}`);
+      const n = text.split("\n").length;
+      if (c.text.split("\n").length !== n || k.text.split("\n").length !== n) unclean.push(`${file}: a scanner lost a line`);
+    }
+    expect(unclean).toEqual([]);
+  });
+
+  test("the real tree: a loose comparison appended to any walked file is a site at its last line, so no file hides its tail from the scanner", () => {
+    // `==`, not `===`: the per-line backstop takes only === and !==, so this proves the whole-file scanner reaches the end.
+    const missed: string[] = [];
+    for (const [file, text] of files) {
+      const planted = `${text}${text.endsWith("\n") ? "" : "\n"}if (o.artifact_kind == "regime_snapshots") planted();\n`;
+      const last = planted.split("\n").length - 1;
+      if (!sitesOf(new Map([[file, planted]])).kinds.some((s) => s.line === last)) missed.push(file);
+    }
+    expect(missed).toEqual([]);
   });
 
   describe("red control: planted maps", () => {
@@ -524,6 +639,50 @@ describe("one row builder, no literal artifact kind outside the SDK, one COMPARE
       // The same file with a real comparison in a template's ${...} code is named at that line.
       const inCode = plant(["backend/src/analytics/cutover/sql.ts", "const a = await sql`SELECT 1`;\nconst label = `${o.artifact_kind === \"regime_snapshots\" ? \"main\" : \"beside\"}`;\n"]);
       expect(at(scan(inCode))).toEqual(["backend/src/analytics/cutover/sql.ts:2"]);
+    });
+
+    test("a regex literal or a nested template inside a template's ${...} does not hide the lines after it", () => {
+      // scripts/ops/analytics-storage-baseline.ts line 202: a regex holding a quote, inside ${...}.
+      const quote = "const quote = (name: string) => `\"${name.replace(/\"/g, '\"\"')}\"`;\n";
+      // A template nested in ${...}, holding a URL's `//`.
+      const url = 'const u = `${base ? `https://x/${p}` : ""}/y`;\n';
+      // Line 2 is a strict comparison; line 3 is a shape only the whole-file scanner names.
+      const after = 'if (o.artifact_kind === "regime_snapshots") a();\nif (["regime_snapshots"].includes(o.artifactKind)) b();\n';
+      const v = scan(plant(["scripts/ops/q.ts", quote + after], ["backend/src/u.ts", url + after]));
+      expect(at(v)).toEqual(["backend/src/u.ts:2", "backend/src/u.ts:3", "scripts/ops/q.ts:2", "scripts/ops/q.ts:3"]);
+      // Both end clean, and the regex and the nested template's `//` are blanked inside ${...}, not read as a quote or a comment.
+      for (const text of [quote + after, url + after]) {
+        const c = codeOnly(text);
+        expect(c.problems).toEqual([]);
+        expect(kindCode(c.text).problems).toEqual([]);
+      }
+      expect(codeOnly(quote).text).toBe("const quote = (name: string) => `\"${name.replace(/_/, '\"\"')}\"`;\n");
+      expect(codeOnly(url).text).toBe(url);
+    });
+
+    test("a non-null assertion before a `/` divides: a[i]! / b neither opens a regex nor drops a line", () => {
+      const text = 'const g = w.map((wi, i) => Sw[i]! - b[i]! / wi);\nif (["regime_snapshots"].includes(o.artifact_kind)) a();\n';
+      expect(codeOnly(text)).toEqual({ text, problems: [] });
+      expect(at(scan(plant(["backend/src/analytics/div.ts", text])))).toEqual(["backend/src/analytics/div.ts:2"]);
+    });
+
+    test("the scanners report a text they cannot end clean on, and a stray `}` does not end the scan", () => {
+      expect(codeOnly("const a = `open\n").problems).toEqual(["line 1: a template literal is not closed"]);
+      expect(codeOnly("const t = `${a\n").problems).toEqual(["line 1: a template's ${...} is not closed", "line 1: a template literal is not closed"]);
+      expect(codeOnly('const b = "open\nconst c = 1;\n')).toEqual({ text: 'const b = "open\nconst c = 1;\n', problems: ["line 1: a string literal is not closed on its line"] });
+      expect(codeOnly("\n/* open\n").problems).toEqual(["line 2: a block comment is not closed"]);
+      expect(kindCode("}\nconst d = 1;\n")).toEqual({ text: "}\nconst d = 1;\n", problems: ["line 1: a `}` with no `{`"] });
+      expect(kindCode("function f() {\n").problems).toEqual(["line 2: 1 `{` not closed at the end of the text"]);
+      // The loose comparison after the stray `}` is still named (the per-line backstop takes only === and !==).
+      expect(at(scan(plant(["scripts/release/stray.ts", '}\nif (o.artifact_kind == "regime_snapshots") a();\n'])))).toEqual(["scripts/release/stray.ts:2"]);
+    });
+
+    test("the per-line backstop names a strict comparison after a line the whole-file scanner loses its place on", () => {
+      // A regex after `)` reads as division, so its backtick opens a template that never closes and blanks the rest of the file.
+      const text = 'if (ok) /`/.test(s);\nif (o.artifact_kind === "regime_snapshots") a();\nif (o.artifact_kind == "regime_snapshots") b();\n';
+      expect(codeOnly(text).problems).toEqual(["line 1: a template literal is not closed"]);
+      // Line 2 (===) is named by the backstop alone. Line 3 (==) is out of the backstop's reach: the clean-state check on the real tree keeps a real file from ever getting here.
+      expect(at(scan(plant(["scripts/release/lost.ts", text])))).toEqual(["scripts/release/lost.ts:2"]);
     });
 
     test("the same shapes inside packages/analyst-sdk/src are the SDK's own line lookup, not a violation", () => {
