@@ -12,19 +12,32 @@
 //       exactly once, in a file under packages/analyst-sdk/src. Other toFixed(6)
 //       uses (a goldens CSV's fixed text, a log line, a test's expression in
 //       parentheses) do not have this shape and are not matched.
-//   (2) a TypeScript comparison (=== !== == !=) of an artifact kind
-//       (artifact_kind, artifactKind) with the literal "regime_snapshots", in
-//       either operand order, in any file outside packages/analyst-sdk/src. A
-//       caller compares with REGIME_ARTIFACT_KIND or regimeArtifactKindOf, the
-//       SDK's line lookup in src/analyze/regime-versions.ts.
+//   (2) a TypeScript check of an artifact kind (artifact_kind, artifactKind)
+//       against the literal "regime_snapshots", in any file outside
+//       packages/analyst-sdk/src. A caller compares with REGIME_ARTIFACT_KIND or
+//       regimeArtifactKindOf, the SDK's line lookup in
+//       src/analyze/regime-versions.ts. The shapes:
+//         - a comparison (=== !== == !=) in either operand order;
+//         - the literal written in quotes or as a template literal with no
+//           substitution (`regime_snapshots`);
+//         - the kind operand wrapped in a cast or a call:
+//           (o.artifact_kind as string), String(o.artifact_kind), <string>o.artifact_kind;
+//         - `case "regime_snapshots":` in a switch whose discriminant names
+//           an artifact kind (a switch on a table name is not one);
+//         - a literal list holding the literal tested with .includes, .has
+//           or .indexOf on an artifact kind: ["regime_snapshots"].includes(o.artifact_kind).
 //   (3) a declaration of COMPARED_FIELDS anywhere but exactly once, under
 //       packages/analyst-sdk/src/replay. An import, a re-export or a use is not one.
 //
-// Scope: TypeScript comparisons only. SQL text that filters on
+// Scope: TypeScript checks only. SQL text that filters on
 // artifact_kind = 'regime_snapshots' (backend/src/swarm/domain.ts, the cutover
 // parity queries in backend/src/analytics/cutover/parity.ts, and tests) is a
 // query over the table, not a replay tool's kind check, and is out of scope:
-// check (2) matches only the TypeScript comparison operators. This implements
+// check (2) runs over the code with every string and template literal's text
+// blanked, so SQL inside a literal (even `artifact_kind != 'regime_snapshots'`
+// or `CASE artifact_kind WHEN ...`) cannot match. Only a literal whose whole
+// text is the kind, or an artifact kind property name (o["artifact_kind"]), is
+// kept, and a template's ${...} code is kept. This implements
 // the success test of the issue's proposal, .agents/ultracode-1765/proposal.md
 // lines 506-507 (section 10): `rg "Number\(s.toFixed\(6\)\)"` finds one site,
 // and `rg 'artifact_kind === "regime_snapshots"'` finds none outside the SDK's
@@ -52,8 +65,27 @@ const MIN_FILES = 1000;
 
 // (1) The published row's percentile rounding, the shape every copy had.
 const ROW_BUILDER = /Number\(\s*[\w.\[\]!]+\.toFixed\(6\)\s*\)/;
-// (2) An artifact kind compared with the literal, in either operand order.
-const KIND_LITERAL = /artifact_?[kK]ind[!"'\]]*\s*[!=]==?\s*["']regime_snapshots["']|["']regime_snapshots["']\s*[!=]==?\s*[\w$.?!\[\]"']*artifact_?[kK]ind\b/;
+// (2) An artifact kind checked against the literal. These run over kindCode()
+// text, where the literal is always written "regime_snapshots" (its quotes or
+// backticks normalized) and every other literal's text is blank.
+const KIND = String.raw`artifact_?[kK]ind\b`;
+const LIT = String.raw`"regime_snapshots"`;
+// After the kind on the left of a comparison: a closing quote, bracket or paren, a non-null `!`, a template's `}` and backtick, or a cast.
+const KIND_TAIL = String.raw`(?:["'\]!)}\x60]|\s+(?:as|satisfies)\s+[\w$.<>\[\]|"']+)*`;
+// Before the kind on the right: open parens, a <T> cast, a call such as String(, or a template's backtick and ${; then a member chain.
+const KIND_HEAD = String.raw`(?:\(\s*|<[\w$.\[\]|\s]+>\s*|[\w$]+\s*\(\s*|\x60\$\{\s*)*[\w$.?!\[\]"']*`;
+const KIND_CHECKS: RegExp[] = [
+  // o.artifact_kind === "regime_snapshots", (o.artifact_kind as string) !== ..., String(o.artifactKind) == ...
+  new RegExp(String.raw`${KIND}${KIND_TAIL}\s*[!=]==?\s*\(*\s*${LIT}`, "g"),
+  // "regime_snapshots" === o.artifact_kind, ... !== String(o.artifact_kind), ... === (o.artifactKind as K)
+  new RegExp(String.raw`${LIT}\s*[!=]==?\s*${KIND_HEAD}${KIND}`, "g"),
+  // ["regime_snapshots", ...].includes(o.artifact_kind), (... as const).includes, new Set([...]).has, [...].indexOf(...)
+  new RegExp(String.raw`\[[^\[\]]*${LIT}[^\[\]]*\](?:\s+as\s+const)?\s*\)?\s*\??\.\s*(?:includes|has|indexOf)\s*\(\s*${KIND_HEAD}${KIND}`, "g"),
+];
+// A `case "regime_snapshots":` label; it is a site only inside a switch on an artifact kind.
+const KIND_CASE = new RegExp(String.raw`\bcase\s*\(?\s*${LIT}\s*\)?\s*:`, "g");
+// A literal whose whole text is one of these is kept in kindCode(); every other literal's text is blanked.
+const KEPT_LITERAL = /^(?:regime_snapshots|artifact_?[kK]ind)$/;
 // (3) A declaration (`COMPARED_FIELDS =`, `COMPARED_FIELDS: T =`), not a comparison or a `typeof COMPARED_FIELDS` annotation.
 const COMPARED_FIELDS_DECL = /(?<!\btypeof\s+)\bCOMPARED_FIELDS\s*(:[^=]+)?=(?!=)/;
 // A file without one of these cannot hold a site, so it is not tokenized.
@@ -112,6 +144,102 @@ function codeOnly(text: string): string {
   return out;
 }
 
+/**
+ * codeOnly() output with every string and template literal's text blanked, so
+ * SQL or prose inside a literal cannot match a kind check. A literal whose whole
+ * text is the kind or an artifact kind property name is kept, written in double
+ * quotes, so `regime_snapshots` (a template with no substitution) reads like
+ * "regime_snapshots". A template's ${...} code is kept and scanned. Every
+ * newline is kept, so an offset still names its line.
+ */
+export function kindCode(code: string): string {
+  let i = 0;
+  const blank = (t: string) => t.replace(/[^\n]/g, "");
+  const literal = (body: string, raw: string) => (KEPT_LITERAL.test(body) ? `"${body}"` : `""${blank(raw)}`);
+  // Code up to an unmatched `}` (the end of a template's ${...}) or the end of the text.
+  const codeRun = (): string => {
+    let out = "";
+    let depth = 0;
+    while (i < code.length) {
+      const c = code[i]!;
+      if (c === '"' || c === "'") {
+        const start = i++;
+        while (i < code.length && code[i] !== c) i += code[i] === "\\" ? 2 : 1;
+        i++;
+        const raw = code.slice(start, i);
+        out += literal(raw.slice(1, -1), raw);
+      } else if (c === "`") {
+        out += template();
+      } else if (c === "}" && depth === 0) {
+        return out;
+      } else {
+        if (c === "{") depth++;
+        if (c === "}") depth--;
+        out += c;
+        i++;
+      }
+    }
+    return out;
+  };
+  // A template literal from its opening backtick.
+  const template = (): string => {
+    i++;
+    let text = "";
+    let out = "";
+    let substitutions = 0;
+    while (i < code.length && code[i] !== "`") {
+      if (code[i] === "\\") {
+        text += code.slice(i, i + 2);
+        i += 2;
+      } else if (code[i] === "$" && code[i + 1] === "{") {
+        i += 2;
+        out += `${blank(text)}\${${codeRun()}}`;
+        i++;
+        text = "";
+        substitutions++;
+      } else {
+        text += code[i++];
+      }
+    }
+    i++;
+    return substitutions === 0 ? literal(text, `\`${text}\``) : `\`${out}${blank(text)}\``;
+  };
+  return codeRun();
+}
+
+/** The offset just past the bracket that closes the one at `open` (`(` or `{`) in kindCode() text, or the text's length. */
+function closeOf(text: string, open: number): number {
+  const [o, c] = text[open] === "(" ? ["(", ")"] : ["{", "}"];
+  let depth = 0;
+  for (let j = open; j < text.length; j++) {
+    if (text[j] === o) depth++;
+    else if (text[j] === c && --depth === 0) return j + 1;
+  }
+  return text.length;
+}
+
+/** The 1-based lines of `code` (kindCode() text) that check an artifact kind against the literal, each once, in order. */
+export function kindCheckLines(code: string): number[] {
+  const lineAt = (offset: number) => code.slice(0, offset).split("\n").length;
+  const lines = new Set<number>();
+  for (const re of KIND_CHECKS) for (const m of code.matchAll(re)) lines.add(lineAt(m.index!));
+  // Each switch's body, and whether its discriminant names an artifact kind.
+  const switches: Array<{ start: number; end: number; onKind: boolean }> = [];
+  for (const m of code.matchAll(/\bswitch\s*\(/g)) {
+    const open = m.index! + m[0].length - 1;
+    const close = closeOf(code, open);
+    const brace = code.indexOf("{", close);
+    if (brace < 0 || code.slice(close, brace).trim() !== "") continue;
+    switches.push({ start: brace, end: closeOf(code, brace), onKind: new RegExp(KIND).test(code.slice(open, close)) });
+  }
+  // A case label belongs to the innermost switch whose body holds it.
+  for (const m of code.matchAll(KIND_CASE)) {
+    const owner = switches.filter((s) => s.start < m.index! && m.index! < s.end).sort((a, b) => b.start - a.start)[0];
+    if (owner?.onKind) lines.add(lineAt(m.index!));
+  }
+  return [...lines].sort((a, b) => a - b);
+}
+
 export interface Violation {
   file: string;
   /** 1-based; 0 when the violation is a missing site. */
@@ -139,14 +267,14 @@ export function sitesOf(files: ReadonlyMap<string, string>): { rows: Site[]; kin
   const decls: Site[] = [];
   for (const [file, text] of files) {
     if (!NEEDLES.some((n) => text.includes(n))) continue;
-    codeOnly(text)
-      .split("\n")
-      .forEach((code, i) => {
-        const site = { file, line: i + 1, text: code.trim() };
-        if (ROW_BUILDER.test(code)) rows.push(site);
-        if (KIND_LITERAL.test(code)) kinds.push(site);
-        if (COMPARED_FIELDS_DECL.test(code)) decls.push(site);
-      });
+    const code = codeOnly(text);
+    const lines = code.split("\n");
+    lines.forEach((line, i) => {
+      const site = { file, line: i + 1, text: line.trim() };
+      if (ROW_BUILDER.test(line)) rows.push(site);
+      if (COMPARED_FIELDS_DECL.test(line)) decls.push(site);
+    });
+    if (text.includes("regime_snapshots")) for (const n of kindCheckLines(kindCode(code))) kinds.push({ file, line: n, text: lines[n - 1]?.trim() ?? "" });
   }
   return { rows, kinds, decls };
 }
@@ -275,6 +403,132 @@ describe("one row builder, no literal artifact kind outside the SDK, one COMPARE
       );
       expect(at(v)).toEqual(["backend/tests/support/qux.ts:1", "packages/csvb/src/audit/baz.ts:1", "scripts/release/bar.ts:2"]);
       expect(v.every((x) => x.rule.includes("REGIME_ARTIFACT_KIND"))).toBe(true);
+    });
+
+    test("a `case \"regime_snapshots\":` in a switch on an artifact kind is named by file and line; a switch on a table name is not", () => {
+      const v = scan(
+        plant(
+          [
+            "scripts/release/switch.ts",
+            [
+              "export function kindOf(o: { artifact_kind: string }) {",
+              "  switch (o.artifact_kind) {",
+              '    case "regime_beside_snapshots":',
+              "      return 1;",
+              '    case "regime_snapshots":',
+              "      return 0;",
+              "  }",
+              "}",
+              "",
+            ].join("\n"),
+          ],
+          ["backend/src/analytics/switch-cast.ts", "switch (String(row.artifactKind)) {\n  case 'regime_snapshots': break;\n}\n"],
+          // A switch on a table name, with a nested switch on the kind inside one of its cases: only the inner label is a site.
+          [
+            "backend/src/analytics/cutover/domain.ts",
+            [
+              "switch (domain) {",
+              '  case "regime_snapshots":',
+              "    switch (o.artifact_kind) {",
+              "      case `regime_snapshots`: return 0;",
+              "    }",
+              "    break;",
+              '  case "research_signals": {',
+              "    switch (o.artifact_kind) { default: break; }",
+              "  }",
+              '  case "swarm_briefs": break;',
+              "}",
+              "",
+            ].join("\n"),
+          ],
+          // The inverse nesting: a switch on the table name inside a switch on the kind owns its own labels.
+          ["backend/tests/support/inner.ts", 'switch (o.artifact_kind) {\n  default:\n    switch (table) {\n      case "regime_snapshots": break;\n    }\n}\n'],
+        ),
+      );
+      expect(at(v)).toEqual(["backend/src/analytics/cutover/domain.ts:4", "backend/src/analytics/switch-cast.ts:2", "scripts/release/switch.ts:5"]);
+      expect(v.every((x) => x.rule.includes("REGIME_ARTIFACT_KIND"))).toBe(true);
+    });
+
+    test("a template-literal operand is named, on either side and in either form", () => {
+      const v = scan(
+        plant(
+          ["scripts/release/tpl.ts", "if (o.artifact_kind === `regime_snapshots`) console.log(o.id);\n"],
+          ["packages/csvb/src/audit/tpl.ts", "\nconst own = rows.filter((r) => `regime_snapshots` !== `${r.artifactKind}`);\n"],
+          ["backend/scripts/tpl.ts", 'const isMain = `${o.artifact_kind}` == "regime_snapshots";\n'],
+        ),
+      );
+      expect(at(v)).toEqual(["backend/scripts/tpl.ts:1", "packages/csvb/src/audit/tpl.ts:2", "scripts/release/tpl.ts:1"]);
+    });
+
+    test("a cast or String() wrapped kind operand is named, on either side", () => {
+      const v = scan(
+        plant(
+          [
+            "scripts/release/cast.ts",
+            [
+              'if ((o.artifact_kind as string) === "regime_snapshots") a();',
+              "if (String(o.artifact_kind) !== 'regime_snapshots') b();",
+              'if ("regime_snapshots" == String(r.artifactKind)) c();',
+              'if ("regime_snapshots" === (o.artifact_kind as unknown as ArtifactKind)) d();',
+              'if ((<string>o["artifact_kind"]) != "regime_snapshots") e();',
+              'if (o.artifact_kind! === ("regime_snapshots")) f();',
+              "",
+            ].join("\n"),
+          ],
+        ),
+      );
+      expect(at(v)).toEqual([1, 2, 3, 4, 5, 6].map((n) => `scripts/release/cast.ts:${n}`));
+    });
+
+    test("a literal list holding the kind, tested with .includes, .has or .indexOf on an artifact kind, is named", () => {
+      const v = scan(
+        plant(
+          [
+            "backend/src/analytics/lists.ts",
+            [
+              'if (["regime_snapshots", "regime_beside_snapshots"].includes(o.artifact_kind)) a();',
+              "const own = rows.filter((r) => (['regime_snapshots'] as const).includes(String(r.artifactKind) as never));",
+              'if (new Set(["regime_snapshots"]).has(o.artifact_kind)) b();',
+              'if (["x", `regime_snapshots`].indexOf(o["artifact_kind"]) >= 0) c();',
+              "const multi = [",
+              '  "regime_beside_snapshots",',
+              '  "regime_snapshots",',
+              "].includes(o.artifact_kind);",
+              "",
+            ].join("\n"),
+          ],
+        ),
+      );
+      expect(at(v)).toEqual([1, 2, 3, 4, 5].map((n) => `backend/src/analytics/lists.ts:${n}`));
+    });
+
+    test("SQL text stays out of scope: a kind filter inside a string or template literal is not a site, whatever its operator", () => {
+      const sqlOnly = plant([
+        "backend/src/analytics/cutover/sql.ts",
+        [
+          "const a = await sql`SELECT id FROM analytics_output_snapshots WHERE artifact_kind != 'regime_snapshots'`;",
+          'const b = "SELECT CASE artifact_kind WHEN \'regime_snapshots\' THEN 1 END FROM t WHERE artifact_kind <> \'x\'";',
+          "const c = await sql`SELECT id FROM t WHERE artifact_kind = ${\"regime_snapshots\"} AND kind IN ('regime_snapshots', 'x')`;",
+          "const d = await sql`",
+          "  SELECT id FROM t",
+          "   WHERE artifact_kind == 'regime_snapshots' -- not TypeScript",
+          "     AND ${sql.unsafe(\"1 = 1\")}`;",
+          "const e = await db`SELECT 1 WHERE ['regime_snapshots'].includes(o.artifact_kind)`;",
+          // Prose in a literal that spells a TypeScript check is still text, not a check.
+          "const f = 'never write o.artifact_kind === \"regime_snapshots\" here';",
+          'const g = `compare with REGIME_ARTIFACT_KIND, never String(o.artifactKind) !== "regime_snapshots"`;',
+          "",
+        ].join("\n"),
+      ]);
+      expect(scan(sqlOnly)).toEqual([]);
+      // The same file with a real comparison in a template's ${...} code is named at that line.
+      const inCode = plant(["backend/src/analytics/cutover/sql.ts", "const a = await sql`SELECT 1`;\nconst label = `${o.artifact_kind === \"regime_snapshots\" ? \"main\" : \"beside\"}`;\n"]);
+      expect(at(scan(inCode))).toEqual(["backend/src/analytics/cutover/sql.ts:2"]);
+    });
+
+    test("the same shapes inside packages/analyst-sdk/src are the SDK's own line lookup, not a violation", () => {
+      const v = scan(plant(["packages/analyst-sdk/src/analyze/kinds.ts", 'switch (o.artifact_kind) { case "regime_snapshots": break; }\nexport const k = ["regime_snapshots"].includes(String(o.artifact_kind));\n']));
+      expect(v).toEqual([]);
     });
 
     test("a second COMPARED_FIELDS declaration is named by file and line, outside the replay folder or inside it", () => {

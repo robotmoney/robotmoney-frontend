@@ -417,9 +417,13 @@ const DIRECT_HTTP: Array<[RegExp, string]> = [
   [/\bnavigator\s*\.\s*sendBeacon\b/, "uses navigator.sendBeacon"],
 ];
 
-/** codeOnly() with string and template literal contents blanked, for checks on code alone. Newlines are kept, so a line number still names its line. */
-function codeWithoutStrings(text: string): string {
-  return codeOnly(text).replace(/"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|`(?:[^`\\]|\\.)*`/g, (m) => '""' + m.replace(/[^\n]/g, ""));
+/**
+ * codeOnly() with string and template literal contents blanked, for checks on code alone. Newlines are kept, so a line
+ * number still names its line. A literal whose whole text is `keep` is kept, written "keep", so a bracket access such as
+ * globalThis["fetch"] stays visible while any other string stays blank.
+ */
+function codeWithoutStrings(text: string, keep?: string): string {
+  return codeOnly(text).replace(/"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'|`(?:[^`\\]|\\.)*`/g, (m) => (keep !== undefined && m.slice(1, -1) === keep ? `"${keep}"` : '""' + m.replace(/[^\n]/g, "")));
 }
 
 function resolveRelative(from: string, spec: string): string | null {
@@ -576,9 +580,20 @@ describe("issue 1421: no downstream acquisition", () => {
 // filled), a third-party HTTP client or node's http modules, or call fetch:
 // the SDK's one provider HTTP path is src/extract/http.ts, reached through the
 // injected fetch. The issue 1421 scan above covers src/ only; this covers node/.
+// DIRECT_HTTP skips `.fetch(` (a method of an injected client), so node/ also
+// flags the runtime's own fetch reached through a member: Bun.fetch,
+// globalThis.fetch or globalThis?.fetch, and the bracket forms globalThis["fetch"]
+// and Bun['fetch'] (a string that is not a property access stays blank).
 // The red control plants each violation in a real temporary node/ tree and
 // expects it named with its file and line.
 const NODE_HTTP_MODULES = new Set(["node:http", "http", "node:https", "https", "node:http2", "http2"]);
+// Run over codeWithoutStrings(text, "fetch"), where a literal whose whole text is fetch is kept as "fetch".
+const NODE_RUNTIME_FETCH: Array<[RegExp, string]> = [
+  [/\bBun\s*(?:\?\.|\.)\s*fetch\b/, "uses Bun.fetch"],
+  [/\bBun\s*(?:\?\.)?\[\s*"fetch"\s*\]/, 'uses Bun["fetch"]'],
+  [/\bglobalThis\s*\?\.\s*fetch\b/, "uses globalThis.fetch"],
+  [/\bglobalThis\s*(?:\?\.)?\[\s*"fetch"\s*\]/, 'uses globalThis["fetch"]'],
+];
 
 /** Violations of the node/ edge rule in one file, each with its 1-based line. */
 export function nodeEdgeViolations(file: string, text: string): string[] {
@@ -589,6 +604,9 @@ export function nodeEdgeViolations(file: string, text: string): string[] {
   }
   codeWithoutStrings(text).split("\n").forEach((code, i) => {
     for (const [re, what] of DIRECT_HTTP) if (re.test(code)) found.push(`${file}:${i + 1}: ${what} (node/ reads and writes local files only)`);
+  });
+  codeWithoutStrings(text, "fetch").split("\n").forEach((code, i) => {
+    for (const [re, what] of NODE_RUNTIME_FETCH) if (re.test(code)) found.push(`${file}:${i + 1}: ${what} (node/ reads and writes local files only)`);
   });
   return found;
 }
@@ -630,6 +648,43 @@ describe("issue 1765: node/ imports no csvb and no HTTP client, and never calls 
         `${SDK_PKG}/node/planted-global-fetch.ts:1: uses globalThis.fetch (node/ reads and writes local files only)`,
         `${SDK_PKG}/node/planted-https.ts:1: imports the HTTP client node:https`,
       ]);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  test("red control: planted node/ files reaching the runtime's fetch through Bun or globalThis are flagged with file and line; an injected client's .fetch and a string are not", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "analyst-sdk-node-edge-fetch-"));
+    try {
+      const node = join(tmp, SDK_PKG, "node");
+      mkdirSync(node, { recursive: true });
+      writeFileSync(join(node, "planted-bun-fetch.ts"), "// Bun's own client\nexport const get = (u: string) => Bun.fetch(u);\n");
+      writeFileSync(join(node, "planted-bun-bracket.ts"), "export const get = (u: string) => Bun['fetch'](u);\n");
+      writeFileSync(join(node, "planted-global-bracket.ts"), 'import { readFileSync } from "node:fs";\n\nexport const get = (u: string) => (globalThis["fetch"] as typeof fetch)(u) ?? readFileSync(u);\n');
+      writeFileSync(join(node, "planted-global-template.ts"), "export const f = globalThis[`fetch`];\n");
+      writeFileSync(join(node, "planted-global-optional.ts"), "\nexport const f = globalThis?.fetch;\n");
+      writeFileSync(
+        join(node, "clean-fetch.ts"),
+        [
+          "// never Bun.fetch( or globalThis[\"fetch\"] here",
+          "export const viaClient = (client: { fetch: (u: string) => unknown }, u: string) => client.fetch(u);",
+          'export const label = "fetch";',
+          "export const msg = `Bun.fetch and globalThis[\"fetch\"] are the extractors' job`;",
+          'export const other = globalThis["process"];',
+          "export const bunFile = Bun.file;",
+          "",
+        ].join("\n"),
+      );
+      expect(scanNodeEdge(tmp).sort()).toEqual([
+        `${SDK_PKG}/node/planted-bun-bracket.ts:1: uses Bun["fetch"] (node/ reads and writes local files only)`,
+        `${SDK_PKG}/node/planted-bun-fetch.ts:2: uses Bun.fetch (node/ reads and writes local files only)`,
+        `${SDK_PKG}/node/planted-global-bracket.ts:3: uses globalThis["fetch"] (node/ reads and writes local files only)`,
+        `${SDK_PKG}/node/planted-global-optional.ts:2: uses globalThis.fetch (node/ reads and writes local files only)`,
+        `${SDK_PKG}/node/planted-global-template.ts:1: uses globalThis["fetch"] (node/ reads and writes local files only)`,
+      ]);
+      // The issue 1421 pattern alone misses each of these planted calls, which is why node/ adds its own.
+      const directOnly = (text: string) => codeWithoutStrings(text).split("\n").some((code) => DIRECT_HTTP.some(([re]) => re.test(code)));
+      expect(["Bun.fetch(u);", "Bun['fetch'](u);", 'globalThis["fetch"](u);', "globalThis?.fetch;"].filter(directOnly)).toEqual([]);
     } finally {
       rmSync(tmp, { recursive: true, force: true });
     }
