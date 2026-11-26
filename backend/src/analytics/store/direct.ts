@@ -12,7 +12,7 @@ import { applyRawFloorSeed } from "./floor-seed.ts";
 import { loadRecentResearchSignalDates } from "./research-store.ts";
 import { detectGaps } from "../../ops/gap-detector.ts";
 import { getSeriesDef } from "../../ops/series-registry.ts";
-import { beginRun, appendRunEvent, freezeVintage, loadCommittedInputs, regimeStorageKeysFor } from "./run-ledger-store.ts";
+import { beginRun, appendRunEvent, freezeVintage, loadCommittedInputs, regimeStorageKeysForAll } from "./run-ledger-store.ts";
 import { ledgerKeptRegimeDays } from "../cutover/ledger-current.ts";
 import { submitTerminalRunPackage } from "./output-snapshot-store.ts";
 
@@ -22,8 +22,10 @@ export const directAnalyticsPersistence: AnalyticsPersistence = {
   freezeVintage,
   submitTerminalRunPackage,
   saveSourceAcquisition,
-  // Issue 1753: the storage keys of the methodology named (the main-line keys when none is).
-  loadCommittedInputs: (marketTimeCutoff, knownBy, methodology) => loadCommittedInputs(regimeStorageKeysFor(methodology), marketTimeCutoff, undefined, knownBy),
+  // Issue 1753: the storage keys of the methodology named (the main-line keys
+  // when none is). Issue 1765: a list reads the union of its models' keys.
+  loadCommittedInputs: (marketTimeCutoff, knownBy, methodology) =>
+    loadCommittedInputs(regimeStorageKeysForAll(methodology === undefined ? [] : typeof methodology === "string" ? [methodology] : methodology), marketTimeCutoff, undefined, knownBy),
   loadKeptRegimeDays: (methodology, before) => ledgerKeptRegimeDays(methodology, before),
   loadRawHistory: () => loadRawIndicatorHistory(),
   saveRawHistory: (byIndicator, source) => saveRawIndicatorHistory(byIndicator, undefined, source),

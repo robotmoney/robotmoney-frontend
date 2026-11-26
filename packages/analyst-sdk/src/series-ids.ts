@@ -241,6 +241,19 @@ export const RATIO_LEG_KEYS: ReadonlySet<string> = new Set(RATIO_LEG_MAPPING.map
  */
 export const STORED_RATIO_IDS: ReadonlySet<string> = new Set(INDICATORS.filter((i) => RATIO_IDS.has(i.id)).map((i) => i.id));
 
+/**
+ * Every storage key a regime run under `mapping` reads, sorted and distinct:
+ * the registry indicators, the ratio legs (both closes, issue 1644), the
+ * correlations and the backtest (D74 mapping). A ratio's stored key is read
+ * while the ratio is declared ratioInput "stored" (STORED_RATIO_IDS). The
+ * committed read and the vintage of a run read exactly these keys (issue
+ * 1765: moved here from the backend run ledger store, so the producer, which
+ * imports no store, filters each model's read with the same function).
+ */
+export function readKeysOf(mapping: readonly SeriesMapping[]): readonly string[] {
+  return Object.freeze([...new Set(mapping.filter((m) => m.kind === "source" || STORED_RATIO_IDS.has(m.inputId)).map((m) => m.storageKey))].sort());
+}
+
 // OLDER LEG NAMES (issue 1514). An input may still carry an adjusted leg under
 // the name it used before issue 1644: the source id `yahoo:<SYMBOL>`, or the
 // key the collector that holds it records it under. An input that carries the

@@ -41,7 +41,7 @@ import {
   freezeVintage,
   findVintageByRunAndTool,
   loadCommittedInputs,
-  regimeStorageKeysFor,
+  regimeStorageKeysForAll,
   loadFrozenVintage,
   VintageConflictError,
   VintageMembersInvalidError,
@@ -840,11 +840,13 @@ async function handleAnalyticsUnbounded(req: Request, url: URL): Promise<{ statu
     const knownBy = url.searchParams.get("knownBy");
     if (knownBy !== null && !isIsoDate(knownBy)) return { status: 400, body: { error: "knownBy must be a valid YYYY-MM-DD date" } };
     // Issue 1753: the keys of the methodology named; absent, the main-line keys, as before.
-    const methodology = url.searchParams.get("methodology");
-    if (methodology !== null && !isRegimeVersion(methodology)) {
+    // Issue 1765: a producer tick names every live model (one `methodology`
+    // parameter each) and reads the union of their keys at one database clock.
+    const methodologies = url.searchParams.getAll("methodology");
+    if (methodologies.some((m) => !isRegimeVersion(m))) {
       return { status: 400, body: { error: `methodology must be one of ${REGIME_VERSIONS.join(", ")}` } };
     }
-    return { status: 200, body: await loadCommittedInputs(regimeStorageKeysFor(methodology), asof, undefined, knownBy ?? undefined) };
+    return { status: 200, body: await loadCommittedInputs(regimeStorageKeysForAll(methodologies), asof, undefined, knownBy ?? undefined) };
   }
 
   // Issue 1753: the kept days of a methodology published beside the main

@@ -116,8 +116,11 @@ export interface AnalyticsPersistence {
   // known by the end of that day (store/run-ledger-store.ts).
   // Issue 1753: `methodology` names the version whose storage keys are read.
   // Absent, the main-line regime keys, as before; "v5" adds the five collected
-  // keys its derived indicators read.
-  loadCommittedInputs?(marketTimeCutoff: string, knownBy?: string, methodology?: string): Promise<CommittedInputs>;
+  // keys its derived indicators read. Issue 1765: a list names every live
+  // model of a producer tick, and the one read covers the union of their keys
+  // at one database clock; each model's share is the values under its own
+  // read keys (readKeysOf of its series mapping).
+  loadCommittedInputs?(marketTimeCutoff: string, knownBy?: string, methodology?: string | readonly string[]): Promise<CommittedInputs>;
   // Issue 1753: the kept days of a methodology published beside the main line,
   // dated before `before`. A run of such a methodology cannot start without
   // it: a missing read is an error, never an empty record.

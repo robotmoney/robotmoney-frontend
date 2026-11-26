@@ -12,7 +12,7 @@ import {
   type RunLifecycleEvent,
   type VintageManifest,
 } from "../run-ledger.ts";
-import { STORED_RATIO_IDS, SERIES_MAPPING, seriesMappingFor, type SeriesMapping } from "../extras.ts";
+import { SERIES_MAPPING, readKeysOf, seriesMappingFor, type SeriesMapping } from "../extras.ts";
 import { isRegimeVersion } from "../analyze/regime-versions.ts";
 
 /** The only entry module that reaches this store: the analytics ingestion route. */
@@ -591,15 +591,9 @@ export async function loadHistoricalSourceValues(
 // members (issue 1534). It never re-selects them by the cutoff:
 // knowledge_time is the INSERT clock, so a row inserted before the cutoff and
 // committed after this read is invisible here but would match the cutoff.
-/**
- * Every storage key the regime run reads: the registry indicators, the ratio
- * legs (both closes, issue 1644), the correlations and the backtest (D74
- * mapping). A ratio's stored key is read while the ratio is declared
- * ratioInput "stored".
- */
-const readKeysOf = (mapping: readonly SeriesMapping[]): readonly string[] => Object.freeze([...new Set(mapping
-  .filter((m) => m.kind === "source" || STORED_RATIO_IDS.has(m.inputId))
-  .map((m) => m.storageKey))].sort());
+// Every storage key the regime run reads is readKeysOf of its mapping (the
+// SDK's series-ids.ts, issue 1765): the producer filters each model's share of
+// a tick's one committed read with the same function.
 const mappedKeysOf = (mapping: readonly SeriesMapping[]): readonly string[] => Object.freeze([...new Set(mapping.map((m) => m.storageKey))].sort());
 
 export const REGIME_STORAGE_KEYS: readonly string[] = readKeysOf(SERIES_MAPPING);
@@ -625,6 +619,16 @@ function keysOfVersion(version: string | null | undefined): { read: readonly str
 /** Every storage key a regime run of `version` reads (REGIME_STORAGE_KEYS for a main-line version or an unknown label). */
 export function regimeStorageKeysFor(version: string | null | undefined): readonly string[] {
   return keysOfVersion(version).read;
+}
+
+/**
+ * Every storage key a regime run of any of `versions` reads, sorted (issue
+ * 1765): the one committed read of a producer tick covers every live model.
+ * None named, the main-line keys; one named, regimeStorageKeysFor of it.
+ */
+export function regimeStorageKeysForAll(versions: readonly (string | null | undefined)[]): readonly string[] {
+  if (versions.length <= 1) return regimeStorageKeysFor(versions[0]);
+  return Object.freeze([...new Set(versions.flatMap((v) => regimeStorageKeysFor(v)))].sort());
 }
 
 export interface CommittedInputs {
