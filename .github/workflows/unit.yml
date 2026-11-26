@@ -195,9 +195,9 @@ jobs:
         run: >-
           bun scripts/checks/assert-junit-suites.ts /tmp/test-unit.junit.xml
           scripts/tests/unit/analyst-sdk-one-row-builder.test.ts:22
-          scripts/tests/unit/regime-seam-guard.test.ts:11
+          scripts/tests/unit/regime-seam-guard.test.ts:14
           scripts/tests/unit/analyst-sdk-purity.test.ts:71
-          scripts/tests/unit/analyst-sdk-readme-commands.test.ts:6
+          scripts/tests/unit/analyst-sdk-readme-commands.test.ts:22
           scripts/tests/unit/sdk-checks.test.ts:32
           scripts/tests/unit/check-docs-analytics.test.ts:12
       - name: Empty test selection is red

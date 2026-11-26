@@ -65,6 +65,20 @@ export interface TsBlock {
 
 const TS_MARKER = /^<!-- readme-test: ts prelude=([a-z0-9-]+) -->$/;
 
+/**
+ * The 1-based line of every fence that opens a TypeScript block in any spelling
+ * other than a bare ```ts line: ```typescript, ```tsx, an indented fence or
+ * trailing text. readmeTsBlocks reads only bare ```ts fences, so each of these
+ * would never run.
+ */
+export function strayTsFences(text: string): number[] {
+  const out: number[] = [];
+  text.split("\n").forEach((l, i) => {
+    if (/^\s*```\s*(ts|tsx|typescript)\b/i.test(l) && l !== "```ts") out.push(i + 1);
+  });
+  return out;
+}
+
 /** Every ```ts fence of `text`, in order, with the marker on the line directly above it. */
 export function readmeTsBlocks(text: string): TsBlock[] {
   const lines = text.split("\n");
@@ -376,6 +390,8 @@ describe("README TypeScript blocks, executed against the package (issue 1765, AC
 
   test("every ```ts fence carries a marker naming a known prelude, and the extractor finds them all", () => {
     expect(blocks.length).toBe((README.match(/^```ts$/gm) ?? []).length);
+    // No TypeScript block hides under another fence spelling the extractor skips.
+    expect(strayTsFences(README)).toEqual([]);
     expect(blocks.length).toBeGreaterThanOrEqual(12);
     expect(blocks.filter((b) => b.prelude === null).map((b) => b.line)).toEqual([]);
     expect(blocks.filter((b) => !(b.prelude! in PRELUDES)).map((b) => `${b.line}: ${b.prelude}`)).toEqual([]);
@@ -443,6 +459,11 @@ describe("README TypeScript blocks, executed against the package (issue 1765, AC
     expect(failures[3]).toStartWith(`README.planted.md:${fences[3]}: the marker names prelude "no-such-prelude"`);
     expect(failures.join("\n")).not.toContain(`README.planted.md:${fences[4]}:`);
   }, 300_000);
+
+  test("red control: a TypeScript block under any other fence spelling is named by line", () => {
+    const planted = ["```ts", "ok", "```", "```typescript", "x", "```", "```tsx", "x", "```", "  ```ts", "x", "  ```", "```ts ", "x", "```", "```TS", "x", "```", "```sh", "x", "```"].join("\n");
+    expect(strayTsFences(planted)).toEqual([4, 7, 10, 13, 16]);
+  });
 
   test("no block made an HTTP request", () => {
     expect(existsSync(ATTEMPTS)).toBe(false);

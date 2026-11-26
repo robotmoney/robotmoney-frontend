@@ -286,7 +286,7 @@ function readmeTypeImports(markdown: string): Map<string, string[]> {
 }
 
 const TSC = join(PKG, "node_modules", "typescript", "bin", "tsc");
-const REFUSED = /^check\.ts\(\d+,\d+\): error TS(?:2305|2724): Module '"([^"]+)"' has no exported member(?: named)? '([^']+)'/;
+const REFUSED = /^check\.ts\(\d+,\d+\): error TS(?:2305|2724): (?:Module )?'"([^"]+)"' has no exported member(?: named)? '([^']+)'/;
 
 /**
  * Compile one `import type { ... } from "<spec>"` line per entry in a
@@ -363,7 +363,7 @@ describe("every name the README imports from a package entry is exported by it (
     expect(entrySource).toMatch(/\bworkbench\b/);
     const planted = [
       "```ts",
-      `import type { RunOptions, workbench } from "${NAME}";`,
+      `import type { RunOptions, workbench, RuleVarient } from "${NAME}";`,
       'import { runRegime, type NotAType } from "./src/index.ts";',
       `import type { ReplayResult, NoSuchReplayType } from "${NAME}/replay";`,
       'import type { Archive } from "./bin/backups-dir.ts";',
@@ -372,11 +372,12 @@ describe("every name the README imports from a package entry is exported by it (
     ].join("\n");
     const types = readmeTypeImports(planted);
     expect([...types]).toEqual([
-      [NAME, ["RunOptions", "workbench", "NotAType"]],
+      [NAME, ["RunOptions", "workbench", "RuleVarient", "NotAType"]],
       [`${NAME}/replay`, ["ReplayResult", "NoSuchReplayType"]],
     ]);
     expect(await typesTscRefuses(types)).toEqual({
-      refused: [`${NAME}: NotAType`, `${NAME}: workbench`, `${NAME}/replay: NoSuchReplayType`].sort(),
+      // RuleVarient is a near miss of RuleVariant: tsc names it with TS2724 ("Did you mean"), not TS2305.
+      refused: [`${NAME}: NotAType`, `${NAME}: RuleVarient`, `${NAME}: workbench`, `${NAME}/replay: NoSuchReplayType`].sort(),
       errors: [],
     });
   });

@@ -88,6 +88,8 @@ export interface DerivedUpVolumeShare {
  * delete, a sort) is a TypeError, and the points are frozen, so fn cannot
  * change them either. A view is a Proxy, which Bun's console.log prints as its
  * empty target (`[]`): log `[...view]` to see the points.
+ * structuredClone(view) and Object.freeze(view) throw, and
+ * Object.isFrozen(view) is false: copy a view with `[...view]` before either.
  *
  * The value is dated `day` itself: the lag is the publication rule, so a custom
  * op takes no `publication`. The days run from the first day any input point is
