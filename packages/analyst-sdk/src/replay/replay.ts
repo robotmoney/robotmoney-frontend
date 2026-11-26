@@ -402,18 +402,39 @@ const byIdDesc = (a: { runId: string }, b: { runId: string }): number => {
  * frozen vintage and a report or a non-failed artifact. `line` keeps the runs of
  * one line, `methodology` the runs with one label. The run events table is
  * never read: the public archive does not serve it.
+ *
+ * The report and artifact tables are streamed one file at a time
+ * (Archive.scanRows), and only each run's report id and artifact kinds are
+ * kept, never a row or a payload: a whole archive's payloads do not fit in
+ * memory (the release post-seal check runs this over a full filled copy).
  */
 export function publicationCandidates(archive: Archive, toolId: string, opts: { line?: RegimeLine; methodology?: string } = {}): PublishedRunCandidate[] {
   const labels = new Map(archive.table(METHODOLOGIES).map((m) => [m.id!, m.version_label ?? null]));
   const vintages = new Map<string, string>();
   for (const v of archive.table(VINTAGES)) if (v.tool_id === toolId || v.tool_id == null) vintages.set(v.run_id!, v.id!);
+  // Each kept cell is copied out of its row, one copy per distinct value: the
+  // reader's unquoted cells are slices of their file's decoded text, and in Bun
+  // a kept slice keeps that whole text alive, payloads included.
+  const copies = new Map<string, string>();
+  const encoder = new TextEncoder();
+  const decoder = new TextDecoder();
+  const kept = <T extends string | null | undefined>(cell: T): T => {
+    if (cell == null) return cell;
+    let c = copies.get(cell);
+    if (c === undefined) copies.set((c = decoder.decode(encoder.encode(cell))), c);
+    return c as T;
+  };
   const reports = new Map<string, string>();
-  for (const x of scan(archive, REPORTS, () => true)) reports.set(x.run_id!, x.id!);
+  for (const f of archive.files(REPORTS)) for (const x of archive.scanRows(f)) reports.set(kept(x.run_id)!, kept(x.id)!);
   const kinds = new Map<string, Set<string>>();
-  for (const x of scan(archive, OUTPUTS, (o) => !FAILED_ARTIFACT_KINDS.has(o.artifact_kind ?? ""))) {
-    let s = kinds.get(x.run_id!);
-    if (!s) kinds.set(x.run_id!, (s = new Set()));
-    s.add(x.artifact_kind!);
+  for (const f of archive.files(OUTPUTS)) {
+    for (const o of archive.scanRows(f)) {
+      if (FAILED_ARTIFACT_KINDS.has(o.artifact_kind ?? "")) continue;
+      const runId = kept(o.run_id)!;
+      let s = kinds.get(runId);
+      if (!s) kinds.set(runId, (s = new Set()));
+      s.add(kept(o.artifact_kind)!);
+    }
   }
   const out: PublishedRunCandidate[] = [];
   for (const r of archive.table(RUNS)) {

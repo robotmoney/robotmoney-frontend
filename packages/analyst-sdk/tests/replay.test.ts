@@ -15,6 +15,7 @@ import { CURRENT_REGIME_VERSION, REGIME_ARTIFACT_KIND, REGIME_PUBLISHED_PANELS, 
 import { V5_DERIVED_SERIES } from "../src/transform/derived.ts";
 import { PANELS } from "../src/analyze/indicators.ts";
 import { canonicalStringify } from "../src/report/canonical.ts";
+import type { FileRecord, Row } from "../src/archive/format1.ts";
 import type { Archive } from "../src/archive/reader.ts";
 import { COMPARED_FIELDS, LABEL_FIELDS, publicationCandidates, replayRun, UnknownRunError, type ReplayResult } from "../src/replay/index.ts";
 import { ArchiveCopy, sha256, tamperArtifact } from "./support/archive-tamper.ts";
@@ -292,5 +293,123 @@ describe("publicationCandidates (issue 1765, D-c)", () => {
     const keys = publicationCandidates(c.open(), "regime").map((x) => x.runKey);
     expect(keys).not.toContain(FACTS.v4.runKey);
     expect(keys.length).toBe(3);
+  }, 120_000);
+});
+
+// ── publicationCandidates streams the report and artifact tables (issue 1765) ──
+// The release post-seal check runs publicationCandidates over a full filled
+// copy, whose artifact payloads do not fit in memory. It must read the report
+// and artifact tables one file at a time and keep no row past its file.
+
+/** The table a data file belongs to. */
+const tableOfFile = (f: FileRecord): string => f.path.split("/").pop()!.split(".")[0]!;
+
+/** Rows valid only while their file is iterated: each is a revocable proxy, revoked when the iteration ends. `fields` records every field read. */
+function* liveRows(rows: Row[], fields: Set<string>): Generator<Row> {
+  const revokes: Array<() => void> = [];
+  try {
+    for (const r of rows) {
+      const p = Proxy.revocable(r, { get: (o, k, receiver) => (typeof k === "string" && fields.add(k), Reflect.get(o, k, receiver)) });
+      revokes.push(p.revoke);
+      yield p.proxy;
+    }
+  } finally {
+    for (const revoke of revokes) revoke();
+  }
+}
+
+/**
+ * The archive with `tables` readable only as a stream: table() and readRows(),
+ * which keep a table's rows, throw for them, and scanRows gives rows that die
+ * when their file's iteration ends, so a caller that keeps a row and reads it
+ * later throws. `read` records the fields read from those rows, by table.
+ */
+function streamOnly(a: Archive, tables: ReadonlySet<string>, read: Map<string, Set<string>>): Archive {
+  return {
+    ...a,
+    table: (name) => {
+      if (tables.has(name)) throw new Error(`table(${name}) holds the whole table in memory`);
+      return a.table(name);
+    },
+    readRows: (f) => {
+      if (tables.has(tableOfFile(f))) throw new Error(`readRows(${f.path}) keeps the file's rows`);
+      return a.readRows(f);
+    },
+    scanRows: (f) => {
+      const t = tableOfFile(f);
+      if (!tables.has(t)) return a.scanRows(f);
+      const rows = a.scanRows(f);
+      let fields = read.get(t);
+      if (!fields) read.set(t, (fields = new Set()));
+      const seen = fields;
+      return { [Symbol.iterator]: () => liveRows(rows, seen) } as unknown as Row[];
+    },
+  };
+}
+
+/** The shape publicationCandidates had before it streamed: every kept row collected, then read. */
+function collectedShape(a: Archive): { reports: Map<string, string>; kinds: Map<string, string[]> } {
+  const collect = (table: string, keep: (r: Row) => boolean): Row[] => {
+    const out: Row[] = [];
+    for (const f of a.files(table)) for (const r of a.scanRows(f)) if (keep(r)) out.push(r);
+    return out;
+  };
+  const reports = new Map<string, string>();
+  for (const x of collect(REPORTS, () => true)) reports.set(x.run_id!, x.id!);
+  const kinds = new Map<string, Set<string>>();
+  for (const x of collect(OUTPUTS, (o) => !["warnings", "logs", "exceptions"].includes(o.artifact_kind ?? ""))) {
+    let s = kinds.get(x.run_id!);
+    if (!s) kinds.set(x.run_id!, (s = new Set()));
+    s.add(x.artifact_kind!);
+  }
+  return { reports, kinds: new Map([...kinds].map(([k, v]) => [k, [...v].sort()])) };
+}
+
+describe("publicationCandidates streams the report and artifact tables (issue 1765)", () => {
+  const STREAMED = new Set([REPORTS, OUTPUTS]);
+
+  test("the same candidates through a stream-only archive: no whole-table read, no row kept past its file, only ids and kinds read", () => {
+    const plain = openBackupsDir(MODEL_RUNS);
+    for (const t of STREAMED) expect(plain.files(t).length, t).toBeGreaterThan(0);
+    const read = new Map<string, Set<string>>();
+    const streamed = publicationCandidates(streamOnly(openBackupsDir(MODEL_RUNS), STREAMED, read), "regime");
+    const expected = publicationCandidates(plain, "regime");
+    expect(streamed).toEqual(expected);
+    expect(streamed.map((c) => c.runKey)).toEqual([V5_THIRD.runKey, V5_SECOND.runKey, V5_FIRST.runKey, FACTS.v4.runKey]);
+    // The report ids and artifact kinds are the ones the collected shape gave.
+    const old = collectedShape(openBackupsDir(MODEL_RUNS));
+    expect(streamed.map((c) => [c.runId, c.reportId, c.artifactKinds])).toEqual(streamed.map((c) => [c.runId, old.reports.get(c.runId) ?? null, old.kinds.get(c.runId) ?? []]));
+    expect(streamed.every((c) => c.artifactKinds.length > 0)).toBe(true);
+    // Neither payload is ever read: only the ids and the kind.
+    expect([...read.get(REPORTS)!].sort()).toEqual(["id", "run_id"]);
+    expect([...read.get(OUTPUTS)!].sort()).toEqual(["artifact_kind", "run_id"]);
+    for (const opts of [{ line: "main" as const }, { line: "beside" as const }, { methodology: "v5" }]) {
+      expect(publicationCandidates(streamOnly(openBackupsDir(MODEL_RUNS), STREAMED, new Map()), "regime", opts), JSON.stringify(opts)).toEqual(publicationCandidates(plain, "regime", opts));
+    }
+  }, 120_000);
+
+  test("a failed run's artifacts are skipped while streaming, as before", () => {
+    const c = BASE.clone();
+    const v4 = replayed(FACTS.v4).run.id;
+    c.editTable(OUTPUTS, (o) => (o.run_id === v4 ? { ...o, artifact_kind: "warnings" } : o));
+    const streamed = publicationCandidates(streamOnly(c.open(), STREAMED, new Map()), "regime");
+    expect(streamed).toEqual(publicationCandidates(c.open(), "regime"));
+    const v4Candidate = streamed.find((x) => x.runKey === FACTS.v4.runKey)!;
+    expect(v4Candidate.reportId).not.toBeNull();
+    expect(v4Candidate.artifactKinds).toEqual([]);
+  }, 120_000);
+
+  test("red control: the collected shape, and a whole-table read, trip the stream-only archive", () => {
+    const wrapped = () => streamOnly(openBackupsDir(MODEL_RUNS), STREAMED, new Map());
+    // The collected shape reads its rows after their file's iteration ended.
+    expect(() => collectedShape(wrapped())).toThrow(/revoked/);
+    // The same shape over the plain archive works, so the wrapper is what it trips.
+    expect(() => collectedShape(openBackupsDir(MODEL_RUNS))).not.toThrow();
+    const w = wrapped();
+    expect(() => w.table(REPORTS)).toThrow(/holds the whole table/);
+    expect(() => w.table(OUTPUTS)).toThrow(/holds the whole table/);
+    expect(() => w.readRows(w.files(OUTPUTS)[0]!)).toThrow(/keeps the file's rows/);
+    // A table outside the streamed set still reads whole.
+    expect(w.table("analytics_ledger_runs").length).toBeGreaterThan(0);
   }, 120_000);
 });
