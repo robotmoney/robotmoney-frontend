@@ -118,6 +118,7 @@ The download client is a polite, resumable reader. It fetches archives under the
 - **Paths.** A relative path resolves from the folder the analyst ran the command in.
 - **Bad arguments.** The command exits non-zero with a message on any of these: a second input file, a repeated option, an unknown option, a `--start` after every input row, or an input with no series the run reads.
 - **Pinning.** An explicit provenance output envelope carries the report and its `manifest`. With no manifest the envelope carries `pinned: false`. The existing report-only output retains its shape.
+- **Replay in one command.** `bun run replay --archive <copy> --run <run_key>` replays one published run of a local copy under its methodology label and compares the as-of row the SDK computes with the published one over the compared fields. `--print-row` prints the computed row, `--json` prints the result as one object, and `--version <tag>` replays under another version. It exits 0 when the rows are equal, 1 when they differ or the copy is corrupt, and 2 for a usage error or a run key that is not in the copy.
 - **Calculation identity.** Replay records the original methodology and code revision for audit. Backend and SDK use the same shared calculation; no methodology-selection option is introduced by this refactor. With identical pinned inputs and options, replay through the refactored module preserves a serialized report computed with the D78 arithmetic byte for byte, and a payload published before D78 replays up to rounding with the same labels, nulls and fields.
 
 ## 8. Success criteria and tests
@@ -164,6 +165,12 @@ Package paths are relative to `packages/analyst-sdk/`. csvb paths are relative t
 | `runRegime` and `bun run regime --methodology v5` compute `v5`, and equal `computeRegime` under `REGIME_RULES.v5` day for day (D96). | `tests/regime-v5.test.ts` |
 | Methodology `v5` reproduces the downstream golden byte for byte from the committed fixture: 3,124 days, 30 indicator series, the backtest block under `REGIME_BACKTEST_RULES.v5`, with negative controls (D96). | `tests/regime-v5-golden.test.ts` |
 | The five raw series of the `v5` derived indicators are collected series; `SPX_VOLUME` reads the volume field; no main-line reader includes them (D96). | `tests/collected-series.test.ts` |
+| `replayRun` over a committed v4 run and a committed v5 run gives an empty diff; the v5 run's published rows come from its line's artifact kind; a tampered derived-indicator percentile and each tampered compared field are reported by field name. | `tests/replay.test.ts` |
+| `bun run replay --archive <copy> --run <run_key> --json`, run as a process, exits 0 with an empty diff for the v4 and v5 runs, exits 1 naming the field for a tampered copy, and exits 2 for a missing `--run` or a run key that is not in the copy. | `tests/replay-cli.test.ts` |
+| A methodology is one model value: `runModel` over `MODELS.v3`, `MODELS.v4` and `MODELS.v5` equals `computeRegime` under `REGIME_RULES.v3` and `.v4` and `computeKeptRegime` under `.v5` day for day; the v4 report equals `tests/golden/regime-report.json` byte for byte; each per-version table is the matching `MODELS` field; `modelOf('v4')` is `MODELS.v4`. | `tests/model-equivalence.test.ts` |
+| `screen` runs a rule grid through `runModel` with one shared stage cache, scores the registry once for a grid that changes only later stages, ranks the variants by the metric, and each variant equals `runModel` on its merged rules; a custom derived series reads no value dated after its lag. | `tests/research-driver.test.ts` |
+| The package entries `.`, `./replay`, `./archive` and `./node` resolve by package name from a consumer; `.` never carries the node:fs edge; every value the README imports from `.` is exported, and every type name it imports compiles. | `tests/exports.test.ts` |
+| Every TypeScript block in the package README runs against an export of the package, from committed fixtures, with HTTP disabled, and fails on any thrown error. | `scripts/tests/unit/analyst-sdk-readme-commands.test.ts` |
 
 ## 9. Open decisions
 
