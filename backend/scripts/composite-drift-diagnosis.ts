@@ -8,15 +8,20 @@
 // is written except backend/tests/fixtures/composite-drift-diagnosis.json.
 //
 // For each run it
-//   1. replays the run's frozen vintage (what the ledger stored) and takes the
-//      composite of the as-of day;
-//   2. reads the indicator cards of the run's published as-of row. Each card
-//      names the last observation the run computed from (raw_date, raw_value);
+//   1. replays the run's frozen vintage (what the ledger stored) with the SDK's
+//      replayRun (issue 1765): under the run's own methodology label, over the
+//      panels that version's published runs average (REGIME_PUBLISHED_PANELS:
+//      macro and onchain for these v3 runs, the version and panels the
+//      committed file was made under), and takes the composite of the as-of day;
+//   2. reads the indicator cards of the run's published as-of row (replayRun
+//      reads it under the run's line's artifact kind, its payload checked
+//      against the stored SHA-256). Each card names the last observation the
+//      run computed from (raw_date, raw_value);
 //   3. lists every series whose replayed last observation differs from the one
 //      the run computed from (input_series, with both values);
 //   4. puts the computed observation into the replayed inputs, one series at a
 //      time (solo_composite_effect) and all at once (composite_effect), and
-//      replays again with the same compute code.
+//      replays again with the same compute code, version and panels.
 // If the all-at-once replay gives back the published composite exactly, the
 // inputs account for the whole gap and the compute code accounts for none of it.
 //
@@ -28,11 +33,13 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { collectRunInputs, openBackupsDir, type Archive } from "../../packages/analyst-sdk/bin/backups-dir.ts";
-import { seriesForStorageKey, serializeInputs } from "../../packages/analyst-sdk/src/archive/format1.ts";
-import { parseInput } from "../../packages/analyst-sdk/src/input/load.ts";
+import { openBackupsDir, type Archive } from "../../packages/analyst-sdk/bin/backups-dir.ts";
+import { seriesForStorageKey } from "../../packages/analyst-sdk/src/archive/format1.ts";
+import { replayRun } from "../../packages/analyst-sdk/src/replay/index.ts";
 import { resolveInputHistory } from "../../packages/analyst-sdk/src/series-ids.ts";
 import { requireComplete, runRegime } from "../../packages/analyst-sdk/src/run.ts";
+import type { RegimeVersion } from "../../packages/analyst-sdk/src/analyze/regime-versions.ts";
+import type { Panel } from "../../packages/analyst-sdk/src/analyze/indicators.ts";
 import type { Point, RawIndicatorHistory } from "../../packages/analyst-sdk/src/types.ts";
 import { poisonNetwork } from "../tests/support/network-poison.ts";
 
@@ -83,8 +90,9 @@ function withComputed(history: RawIndicatorHistory, id: string, c: SeriesObserva
   return { ...history, [id]: rows };
 }
 
-function compositeOf(history: RawIndicatorHistory, asof: string): number {
-  const run = requireComplete(runRegime(history, { asof }));
+// The as-of composite of one replay: the run's version, over its panels.
+function compositeOf(history: RawIndicatorHistory, asof: string, o: { version: RegimeVersion; panels: readonly Panel[] }): number {
+  const run = requireComplete(runRegime(history, { asof, version: o.version, panels: o.panels }));
   return run.result.composite[run.dateAxis.length - 1]!;
 }
 
@@ -93,20 +101,17 @@ export function diagnoseRun(copy: Archive, runId: string): Diagnosis {
   if (!run || run.tool_id !== "regime") throw new Error(`run ${runId} is not a regime run in the copy`);
   const asof = run.asof!;
 
-  // The published as-of row, checked against its stored SHA-256.
-  let published: { composite: number; indicators: Card[] } | null = null;
-  for (const f of copy.files("analytics_output_snapshots")) {
-    for (const o of copy.readRows(f)) {
-      if (o.run_id !== runId || o.artifact_kind !== "regime_snapshots") continue;
-      if (new Bun.CryptoHasher("sha256").update(o.payload_json!).digest("hex") !== o.payload_sha256) throw new Error(`run ${runId}: published payload does not match its SHA-256`);
-      published = (JSON.parse(o.payload_json!) as { date: string; composite: number; indicators: Card[] }[]).find((r) => r.date === asof) ?? null;
-    }
-  }
+  // The SDK's replay of the run: its version and panels, its frozen inputs, and
+  // its published as-of row (read under its line's artifact kind, its payload
+  // checked against the stored SHA-256).
+  const replay = replayRun(copy, run.run_key!);
+  if (replay.problems.length > 0 || replay.version === null || replay.inputs === null) throw new Error(`run ${runId}: ${replay.problems.join("; ") || "the SDK did not replay it"}`);
+  const published = replay.published.asof as unknown as { composite: number; indicators: Card[] } | null;
   if (!published) throw new Error(`run ${runId} published no as-of row in the copy`);
+  const how = { version: replay.version, panels: replay.panels };
 
-  const inputs = collectRunInputs(copy, run.run_key!);
-  const history = resolveInputHistory(parseInput(serializeInputs(inputs.rows, "csv"), { replay: true }).history);
-  const replayed = compositeOf(history, asof);
+  const history = resolveInputHistory(replay.inputs.history);
+  const replayed = compositeOf(history, asof, how);
 
   // Series whose replayed last observation is not the one the run computed from.
   const differing: { id: string; replay: Point; computed: SeriesObservation }[] = [];
@@ -150,12 +155,12 @@ export function diagnoseRun(copy: Archive, runId: string): Diagnosis {
       series: d.id,
       replayed: { date: d.replay.date, value: d.replay.value, version_id: rv.id, committed_at: rv.kt, committed_after_run_start: rv.kt > run.created_at! },
       computed: { ...d.computed, version_id: cv?.id ?? null, committed_at: cv?.kt ?? null },
-      solo_composite_effect: replayed - compositeOf(withComputed(history, d.id, d.computed), asof),
+      solo_composite_effect: replayed - compositeOf(withComputed(history, d.id, d.computed), asof, how),
     };
   });
 
   const delta = replayed - published.composite;
-  const effect = replayed - compositeOf(all, asof);
+  const effect = replayed - compositeOf(all, asof, how);
   const handoff = run.created_at! < POST_1421 && Math.abs(delta - effect) <= EXACT && input_series.length > 0 && input_series.every((s) => s.replayed.committed_after_run_start);
   return { input_series, replayed_vs_computed_delta: delta, composite_effect: effect, cause: handoff ? "pre-1421-handoff" : "other", linked_issue: null };
 }
