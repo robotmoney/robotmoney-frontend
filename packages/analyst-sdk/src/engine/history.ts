@@ -72,7 +72,13 @@ const direct: StageMemo = (_stage, _params, compute) => compute();
 // of the value (engine/cache.ts). They are built only when a cache asks, so a
 // run without one reads nothing a stage does not (a calendar is read as
 // declared, never checked here).
-const scoreParams = (indicators: readonly Indicator[], rules: RegimeRules, ages: boolean, cap: number) => ({
+//
+// The score stage's params name its driver: the recompute driver stores
+// StageScores and the kept driver DayScores (the scores with their axis). A
+// recompute run without ages and a kept run over one input and one registry
+// would otherwise share a key, and one driver would read the other's value.
+const scoreParams = (driver: "recompute" | "kept", indicators: readonly Indicator[], rules: RegimeRules, ages: boolean, cap: number) => ({
+  driver,
   registry: indicators.map((i) => ({ id: i.id, sign: i.sign, calendar: i.calendar ?? null })),
   rank: rules.lookback.rank,
   observationWindows: rules.observationWindows,
@@ -127,7 +133,7 @@ export function recomputeHistory(inputs: RecomputeInputs, opts: RecomputeOptions
   const { dateAxis, transformed, ages, carried } = inputs;
   engineWindows(rules);
   const cap = opts.maxForwardFillDays ?? MAX_FORWARD_FILL_DAYS;
-  const sp = () => scoreParams(indicators, rules, ages !== undefined, cap);
+  const sp = () => scoreParams("recompute", indicators, rules, ages !== undefined, cap);
   const scores = memo("score", sp, () => scoreIndicators(transformed, indicators, { rules, ages, maxForwardFillDays: cap, carried }));
   // Every panel of every set, each once, in first-seen order.
   const fitted = [...new Set(opts.panelSets.flat())];
@@ -321,7 +327,7 @@ export function keptHistory(prepared: PreparedRegimeInputs, s: KeptSettings & { 
   const memo = s.memo ?? direct;
   const { dateAxis } = prepared;
   const last = dateAxis.length - 1;
-  const sp = () => scoreParams(s.indicators, s.rules, false, MAX_FORWARD_FILL_DAYS);
+  const sp = () => scoreParams("kept", s.indicators, s.rules, false, MAX_FORWARD_FILL_DAYS);
   const scores = memo("score", sp, () => keptScores(prepared.transformed, dateAxis, s));
   const first = s.kept.length === 0;
   // A first run walks every day before the as-of day, then the as-of day.

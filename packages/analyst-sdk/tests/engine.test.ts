@@ -8,7 +8,10 @@
 // Issue 1765 (AC 10): the regime engine's stage cache. One runModel call for v4
 // scores the registry once, counted by the cache's score-stage misses; an
 // identical second call scores nothing; a variant whose rank window differs
-// scores once more.
+// scores once more. Every stage-cache test builds its own cache, so each one
+// passes alone. A kept run and a recompute run without ages over one cache
+// score under two keys (the score key names the driver), with a red control
+// that drops the driver from the key.
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { labelAt } from "../src/allocate/labels.ts";
@@ -17,7 +20,7 @@ import { join } from "node:path";
 import {
   checkHoldings, EngineInputError, engineWeights, equalWeight, fillYieldBook, loadUniverse, parseRawHistory,
   parseRuleFile, tiltWeight, toHistory, type EngineRuleFile, type EngineSignals, type Holdings, type Universe, type Yields,
-  MODELS, modelOf, ratiosFromLegs, resolveInputHistory, runModel, stageCache, STAGES, type RegimeModel,
+  MODELS, modelOf, ratiosFromLegs, resolveInputHistory, runModel, stageCache, STAGES, type RegimeModel, type StageCache,
 } from "../src/index.ts";
 import { ratioDeclarationsFor } from "../src/transform/ratios.ts";
 
@@ -273,23 +276,25 @@ describe("the regime engine's stage cache (issue 1765)", () => {
   let asof = "2018-01-01";
   for (const id in raw) for (const r of raw[id]!) if (r.date > asof) asof = r.date;
   const withRank = (days: number): RegimeModel => modelOf({ ...v4, id: `v4-rank-${days}`, rules: { ...v4.rules, lookback: { ...v4.rules.lookback, rank: { kind: "trailing", days } } } });
-  const cache = stageCache();
-  const counts = () => ({ hits: { ...cache.hits }, misses: { ...cache.misses } });
+  // Every test builds its own cache, so each one passes alone (bun test -t '<name>').
+  const counts = (cache: StageCache) => ({ hits: { ...cache.hits }, misses: { ...cache.misses } });
 
   test("one runModel call for v4 scores the registry once: one score-stage miss, and the run equals an uncached run", () => {
+    const cache = stageCache();
     const run = runModel(v4, input, { asof, cache });
     expect(cache.misses.score).toBe(1);
-    expect(counts()).toEqual({ hits: { prepare: 0, score: 0, fit: 0, combine: 0 }, misses: { prepare: 1, score: 1, fit: 1, combine: 1 } });
+    expect(counts(cache)).toEqual({ hits: { prepare: 0, score: 0, fit: 0, combine: 0 }, misses: { prepare: 1, score: 1, fit: 1, combine: 1 } });
     expect(cache.entries.size).toBe(STAGES.length);
     expect(run.result).toEqual(runModel(v4, input, { asof }).result);
     expect(run.result.regime.filter((l) => l != null).length).toBeGreaterThan(1000);
   }, 120_000);
 
   test("a second identical call adds no score-stage miss: every stage is read from the cache", () => {
+    const cache = stageCache();
     const first = runModel(v4, input, { asof, cache });
     expect(cache.misses.score).toBe(1);
-    expect(cache.hits.score).toBeGreaterThanOrEqual(1);
-    const before = counts();
+    expect(cache.hits.score).toBe(0);
+    const before = counts(cache);
     const again = runModel(v4, input, { asof, cache });
     expect(cache.misses).toEqual(before.misses);
     expect(cache.hits.combine).toBe(before.hits.combine + 1);
@@ -298,8 +303,9 @@ describe("the regime engine's stage cache (issue 1765)", () => {
   }, 120_000);
 
   test("a variant whose lookback.rank differs adds exactly one score-stage miss, and reads the prepared inputs from the cache", () => {
+    const cache = stageCache();
     runModel(v4, input, { asof, cache });
-    const before = counts();
+    const before = counts(cache);
     const variant = runModel(withRank(400), input, { asof, cache });
     expect(cache.misses.score).toBe(before.misses.score + 1);
     expect(cache.hits.prepare).toBe(before.hits.prepare + 1);
@@ -309,8 +315,9 @@ describe("the regime engine's stage cache (issue 1765)", () => {
   }, 120_000);
 
   test("control: a variant that changes only the label cut scores nothing and fits nothing again; only the combine stage runs", () => {
+    const cache = stageCache();
     runModel(v4, input, { asof, cache });
-    const before = counts();
+    const before = counts(cache);
     const cut = modelOf({ ...v4, id: "v4-percentile-cut", rules: { ...v4.rules, labelCut: "percentile" } });
     const run = runModel(cut, input, { asof, cache });
     expect(cache.misses.score).toBe(before.misses.score);
@@ -320,4 +327,68 @@ describe("the regime engine's stage cache (issue 1765)", () => {
     // A key names its stage; a key of another shape is refused.
     expect(() => cache.get("no-digest")).toThrow(RangeError);
   }, 120_000);
+
+  // The wave 4 review: the kept driver stores DayScores (the scores with their
+  // axis) under the score stage and the recompute driver StageScores. Over one
+  // input, one registry and one rank window, a recompute run without ages and a
+  // kept run named the same score params, so a shared cache handed one
+  // driver's value to the other. The score key now names the driver.
+  describe("a kept run and a recompute run without ages share one cache", () => {
+    // The kept record's rules on v4's registry (calendar-day windows, the series label cut, a daily refit), and its recomputing twin.
+    const keptRules = { ...v4.rules, keptHistory: true, observationWindows: false, labelCut: "series" as const, weightRefresh: { ...v4.rules.weightRefresh, intervalDays: 1 } };
+    const kept = modelOf({ ...v4, id: "v4-kept", history: "kept", rules: keptRules });
+    const recompute = modelOf({ ...v4, id: "v4-daily", history: "recompute", rules: { ...keptRules, keptHistory: false } });
+    const opts = { asof, start: "2025-06-01", extras: false } as const;
+    const runKept = (cache?: StageCache) => runModel(kept, input, { ...opts, ...(cache ? { cache } : {}) });
+    const runRecompute = (cache?: StageCache) => runModel(recompute, input, { ...opts, ages: false, ...(cache ? { cache } : {}) });
+    // A cache whose keys drop the driver: the key the score stage had before the fix.
+    const withoutDriver = (inner: StageCache): StageCache & { rewritten: () => number } => {
+      let rewritten = 0;
+      const strip = (key: string): string => {
+        const out = key.replace(/"driver":"(?:kept|recompute)",/g, "");
+        if (out !== key) rewritten++;
+        return out;
+      };
+      return { entries: inner.entries, hits: inner.hits, misses: inner.misses, get: (key) => inner.get(strip(key)), set: (key, value) => inner.set(strip(key), value), rewritten: () => rewritten };
+    };
+    // Whether a cached kept run fails: it throws, or it differs from the uncached run.
+    const keptFails = (cache: StageCache, want: unknown): boolean => {
+      try {
+        return !Bun.deepEquals(runKept(cache).result, want);
+      } catch {
+        return true;
+      }
+    };
+
+    test("in either order both equal their uncached runs, and the two drivers score under two keys", () => {
+      const wantKept = runKept().result;
+      const wantRecompute = runRecompute().result;
+      for (const order of [["recompute", "kept"], ["kept", "recompute"]] as const) {
+        const cache = stageCache();
+        const got: Record<string, unknown> = {};
+        for (const driver of order) got[driver] = (driver === "kept" ? runKept(cache) : runRecompute(cache)).result;
+        expect(got.kept, order.join(" then ")).toEqual(wantKept);
+        expect(got.recompute, order.join(" then ")).toEqual(wantRecompute);
+        // The prepared inputs are one value; the scores are two.
+        expect(cache.misses.prepare).toBe(1);
+        expect(cache.misses.score).toBe(2);
+        expect(cache.hits.score).toBe(0);
+      }
+    }, 120_000);
+
+    test("red control: with the driver dropped from the key, the kept run reads the recompute run's scores and fails", () => {
+      const wantKept = runKept().result;
+      const cache = withoutDriver(stageCache());
+      runRecompute(cache);
+      expect(keptFails(cache, wantKept)).toBe(true);
+      // The two runs met on one score entry: one miss, then a hit.
+      expect(cache.misses.score).toBe(1);
+      expect(cache.hits.score).toBe(1);
+      expect(cache.rewritten()).toBeGreaterThan(0);
+      // The same sequence on a real cache passes.
+      const real = stageCache();
+      runRecompute(real);
+      expect(keptFails(real, wantKept)).toBe(false);
+    }, 120_000);
+  });
 });
