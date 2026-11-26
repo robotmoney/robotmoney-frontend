@@ -67,12 +67,6 @@ export interface ReplayOutcome {
   fields: Record<string, string>;
 }
 
-/** The as-of row the published artifact holds, from its payload text. Null when the run published no row for its as-of day. */
-export function publishedAsofRow(payloadText: string, asof: string): PublishedAsofRow | null {
-  const rows = JSON.parse(payloadText) as PublishedAsofRow[];
-  return rows.find((r) => r.date === asof) ?? null;
-}
-
 /**
  * Replay a run's input file (replay contract text) as of `asof` and compare
  * with its published as-of row. `version` is the methodology version the run
