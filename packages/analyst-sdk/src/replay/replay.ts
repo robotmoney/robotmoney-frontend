@@ -16,7 +16,7 @@
 //
 // publicationCandidates lists the runs that published, newest first, for the
 // release check to pick from (D-c).
-import { createHash } from "node:crypto";
+import { sha256 } from "../hash.ts";
 import { collectRunInputs, type Archive } from "../archive/reader.ts";
 import { ArchiveError, type GeneratedRow, type Row, type RunIdentity } from "../archive/format1.ts";
 import { inputHistory, parsePlainDecimal } from "../input/load.ts";
@@ -113,8 +113,6 @@ export interface ReplayResult {
   /** Why the replay is not a clean comparison: a missing or unverified artifact or report, an unknown label. Empty when none. */
   problems: string[];
 }
-
-const sha256 = (text: string): string => createHash("sha256").update(text).digest("hex");
 
 /** Every row of an append-only table that `keep` selects, one file at a time (the artifact tables are too large to hold whole). */
 function scan(archive: Archive, table: string, keep: (r: Row) => boolean): Row[] {

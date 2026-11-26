@@ -18,7 +18,7 @@
 //
 // Cached values are shared: every run that hits an entry reads the same arrays
 // and objects, so no caller may write to a run's result.
-import { createHash } from "node:crypto";
+import { sha256 } from "../hash.ts";
 import { canonicalStringify } from "../report/canonical.ts";
 import type { RawIndicatorHistory } from "../types.ts";
 import type { StageMemo, StageName } from "./history.ts";
@@ -96,7 +96,7 @@ export function inputDigest(raw: RawIndicatorHistory): string {
   const seen = digests.get(raw);
   if (seen !== undefined) return seen;
   // canonicalStringify orders the series by id (their order changes no figure); rows keep their order.
-  const digest = createHash("sha256").update(canonicalStringify(tagged(raw))).digest("hex");
+  const digest = sha256(canonicalStringify(tagged(raw)));
   digests.set(raw, digest);
   return digest;
 }

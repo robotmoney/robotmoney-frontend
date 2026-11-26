@@ -2,7 +2,9 @@
 // network. Every hash the SDK checks or records goes through it: the archive
 // reader's file digests (src/archive/reader.ts), the supplementary manifest
 // check (src/input/supplementary.ts), the replay comparison's row digests
-// (src/replay/compare.ts), and the manifests the node edge writes
+// (src/replay/compare.ts), the replay's payload and report checks
+// (src/replay/replay.ts), the stage cache's input digest (src/engine/cache.ts),
+// and the manifests the node edge writes
 // (node/hash.ts re-exports it). A string is hashed as its UTF-8 bytes, so
 // sha256(text) equals sha256(new TextEncoder().encode(text)).
 import { createHash } from "node:crypto";
