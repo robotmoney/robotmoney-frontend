@@ -4,6 +4,7 @@
 // The served shapes are declared here because the SDK installs alone; a backend
 // test asserts they and the contract package's shapes are assignable both ways.
 import type { CorrelationsPayload } from "../analyze/correlations.ts";
+import { SNAPSHOT_COLUMNS, type SnapshotColumn } from "./snapshot-columns.ts";
 
 export type AnalyticsProvenance = "live" | "hermetic" | "fixture" | "seed";
 
@@ -83,35 +84,24 @@ export type RegimeHistoryPoint = Omit<RegimeSnapshot, "backtest" | "correlations
 // stay null so the DTO's nullable panel fields are honest.
 export const num = (v: unknown): number | null => (v == null ? null : Number(v));
 
+// A stored row (snake_case columns, as Postgres returns them) to the served
+// snapshot: one key per SNAPSHOT_COLUMNS entry, in its order (issue 1765). A
+// number cell goes through num(), a date to its YYYY-MM-DD day, a label as read,
+// and any other empty cell to the column's empty value (null, {} or [], fresh
+// for each row). The dashboard-level blobs carry data only on the as-of row.
 export function rowToSnapshot(r: any): RegimeSnapshot {
-  return {
-    date: typeof r.date === "string" ? r.date : new Date(r.date).toISOString().slice(0, 10),
-    composite: num(r.composite),
-    compositePercentile: num(r.composite_percentile),
-    regime: r.regime,
-    macroRegime: r.macro_regime,
-    onchainRegime: r.onchain_regime,
-    factorRegime: r.factor_regime,
-    // v2 enrichment: panel indices/percentiles, point-in-time panel weights, version.
-    macroIndex: num(r.macro_index),
-    onchainIndex: num(r.onchain_index),
-    factorIndex: num(r.factor_index),
-    macroPercentile: num(r.macro_percentile),
-    onchainPercentile: num(r.onchain_percentile),
-    factorPercentile: num(r.factor_percentile),
-    panelWeights: r.panel_weights ?? null,
-    version: r.version ?? null,
-    source: r.source ?? null,
-    percentiles: r.percentiles ?? {},
-    indicators: r.indicators ?? [],
-    // Dashboard-level blobs — present only on the asof/latest row (NULL on history).
-    panels: r.panels ?? null,
-    bucketThresholds: r.bucket_thresholds ?? null,
-    backtest: r.backtest ?? null,
-    correlations: r.correlations ?? null,
-    extras: r.extras ?? null,
-  };
+  const out: Record<string, unknown> = {};
+  for (const c of SNAPSHOT_COLUMNS) {
+    const v = r[c.column];
+    if (c.kind === "date") out[c.key] = typeof v === "string" ? v : new Date(v).toISOString().slice(0, 10);
+    else if (c.kind === "number") out[c.key] = num(v);
+    else if (c.kind === "label") out[c.key] = v;
+    else out[c.key] = v ?? freshEmpty(c.empty);
+  }
+  return out as unknown as RegimeSnapshot;
 }
+
+const freshEmpty = (empty: SnapshotColumn["empty"]): null | Record<string, never> | never[] => (empty === null ? null : Array.isArray(empty) ? [] : {});
 
 // A history row does not need the fields that only ever carry data on the
 // asof/latest row (`backtest`, `correlations`, `indicators` — the DB columns
