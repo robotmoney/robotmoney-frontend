@@ -5,7 +5,7 @@
 // declarations and their publication lags, and that a day never reads a value
 // dated after it. The byte-for-byte reproduction is tests/regime-v5-golden.test.ts.
 import { describe, expect, setDefaultTimeout, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   ALL_PANELS,
@@ -505,35 +505,127 @@ describe("bun run regime --methodology v5 (issue 1753)", () => {
 });
 
 // ── No private copy of an SDK function on the v5 path ───────────────────────
+//
+// Since issue 1765 the kept record is a driver of the staged regime engine
+// (src/engine/history.ts) over the stages the daily recompute runs, so the unit
+// checked is every file of src/engine plus analyze/kept-regime.ts, as one. Each
+// step the kept path runs is one SDK function: defined once in src, in its own
+// module, and read by import by every other file of the unit that calls it.
+// The unit holds no ranking, correlation, sort or square root of its own; the
+// compensated sums (D78) live only in the combine stage, and the correlation
+// weights are read only by the fit stage.
 
-describe("the kept-record module is built from the SDK's own functions (issue 1753)", () => {
-  const source = readFileSync(join(import.meta.dir, "../src/analyze/kept-regime.ts"), "utf8");
-  const imported = (name: string, from: string) => new RegExp(`import \\{[^}]*\\b${name}\\b[^}]*\\} from "${from.replace(/[.]/g, "\\.")}"`).test(source);
+const SRC = join(import.meta.dir, "../src");
+// Every .ts file under src/<dir> (all of src for ""), as a path relative to src.
+const tsUnder = (dir: string): string[] =>
+  readdirSync(join(SRC, dir), { withFileTypes: true }).flatMap((e) => {
+    const rel = dir === "" ? e.name : `${dir}/${e.name}`;
+    return e.isDirectory() ? tsUnder(rel) : e.name.endsWith(".ts") ? [rel] : [];
+  });
+const ENGINE_FILES = tsUnder("engine");
+const UNIT_FILES = [...ENGINE_FILES, "analyze/kept-regime.ts"];
+// Each step and the one src module that defines it.
+const STEPS: readonly (readonly [name: string, home: string])[] = [
+  ["rollingPercentileRank", "transform/math.ts"],
+  ["inverseCorrelationWeights", "transform/math.ts"],
+  ["deriveSeries", "transform/derived.ts"],
+  ["prepareRegimeInputs", "prepare.ts"],
+  ["fitPanelWeights", "engine/fit.ts"],
+  ["weightedMeanOnDay", "engine/combine.ts"],
+  ["panelMean", "engine/combine.ts"],
+  ["smoothRegimes", "engine/combine.ts"],
+];
+const FORBIDDEN = ["pearson", "correlation(", "capWeights", "Math.sqrt", ".sort("];
+// The compensated sums of the panel index, the composite mean and the fast-track sigma.
+const COMPENSATED = ["ddDiv", "dotDD", "sumDD", "meanAndSampleSd"];
+const ONLY_IN: readonly (readonly [text: string, home: string])[] = [
+  ...COMPENSATED.map((t) => [t, "engine/combine.ts"] as const),
+  ["inverseCorrelationWeights", "engine/fit.ts"],
+];
 
-  test("fitPanelWeights, weightedMeanOnDay, deriveSeries, smoothRegimes and rollingPercentileRank are read by import and called", () => {
-    for (const [name, from] of [
-      ["fitPanelWeights", "./compute.ts"],
-      ["weightedMeanOnDay", "./compute.ts"],
-      ["smoothRegimes", "./compute.ts"],
-      ["panelMean", "./compute.ts"],
-      ["deriveSeries", "../transform/derived.ts"],
-      ["rollingPercentileRank", "../transform/math.ts"],
-      ["prepareRegimeInputs", "../prepare.ts"],
-    ] as const) {
-      expect(imported(name, from), `${name} from ${from}`).toBe(true);
-      expect(source.includes(`${name}(`), `${name} is called`).toBe(true);
-      // No local definition under the same name.
-      expect(new RegExp(`(function|const|let)\\s+${name}\\b`).test(source), `${name} defined locally`).toBe(false);
+const defines = (src: string, name: string) => new RegExp(`(function|const|let|class)\\s+${name}\\b`).test(src);
+const calls = (src: string, name: string) => new RegExp(`\\b${name}\\(`).test(src);
+// The src-relative module each named import of `src` (a file at `file`) comes from.
+function importsOf(file: string, src: string): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const m of src.matchAll(/import\s*\{([^}]*)\}\s*from\s*"(\.[^"]+)"/g)) {
+    const parts = [...file.split("/").slice(0, -1), ...m[2]!.split("/")];
+    const path: string[] = [];
+    for (const p of parts) if (p === "..") path.pop(); else if (p !== ".") path.push(p);
+    for (const n of m[1]!.split(",")) {
+      const name = n.trim().replace(/^type\s+/, "").split(/\s+as\s+/)[0]!;
+      if (name) out.set(name, path.join("/"));
     }
+  }
+  return out;
+}
+
+/** Every way the unit (src-relative path to source) repeats an SDK step; `all` is every src file. */
+function unitProblems(unit: Record<string, string>, all: Record<string, string>): string[] {
+  const out: string[] = [];
+  for (const [name, home] of STEPS) {
+    const at = Object.keys(all).filter((f) => defines(all[f]!, name));
+    if (at.length !== 1 || at[0] !== home) out.push(`${name} is defined in ${at.join(", ") || "no file"}, not once in ${home}`);
+    if (!Object.values(unit).some((src) => calls(src, name))) out.push(`${name} is called nowhere in the unit`);
+    for (const [file, src] of Object.entries(unit)) {
+      if (file === home || !calls(src, name)) continue;
+      if (importsOf(file, src).get(name) !== home) out.push(`${file} calls ${name} without importing it from ${home}`);
+    }
+  }
+  for (const [file, src] of Object.entries(unit)) {
+    for (const f of FORBIDDEN) if (src.includes(f)) out.push(`${file} contains ${f}`);
+    for (const [text, home] of ONLY_IN) if (file !== home && src.includes(text)) out.push(`${file} reads ${text}, which only ${home} may`);
+  }
+  return out;
+}
+
+const read = (f: string) => readFileSync(join(SRC, f), "utf8");
+const ALL_SRC = Object.fromEntries(tsUnder("").map((f) => [f, read(f)]));
+const UNIT = Object.fromEntries(UNIT_FILES.map((f) => [f, read(f)]));
+
+describe("the kept record is built from the engine's stages and the SDK's own functions (issues 1753, 1765)", () => {
+  test("the unit is every engine file plus kept-regime.ts, each read, and the definition scan reads all of src", () => {
+    expect(Object.keys(ALL_SRC).length).toBeGreaterThan(60);
+    expect(ALL_SRC["transform/math.ts"]).toBeDefined();
+    expect(ENGINE_FILES).toEqual(expect.arrayContaining(["engine/prepare.ts", "engine/score.ts", "engine/fit.ts", "engine/combine.ts", "engine/history.ts", "engine/cache.ts", "engine/run-model.ts"]));
+    for (const f of UNIT_FILES) expect(UNIT[f]!.length, f).toBeGreaterThan(200);
   });
 
-  test("it defines no weighting, ranking, correlation or smoothing of its own", () => {
-    for (const forbidden of ["inverseCorrelationWeights", "pearson", "correlation(", "capWeights", "ddDiv", "dotDD", "sumDD", "Math.sqrt", ".sort("]) {
-      expect(source.includes(forbidden), forbidden).toBe(false);
-    }
-    // run.ts routes v5 to it rather than repeating it.
-    const run = readFileSync(join(import.meta.dir, "../src/run.ts"), "utf8");
-    expect(run.includes('import { computeKeptRegime, withDerivedSeries, type KeptRegimeRun } from "./analyze/kept-regime.ts"')).toBe(true);
+  test("each step is defined once in its own module and read by import wherever the unit calls it", () => {
+    expect(unitProblems(UNIT, ALL_SRC)).toEqual([]);
+    // The kept driver and its record run the stages: kept-regime.ts reads the engine.
+    const kept = importsOf("analyze/kept-regime.ts", UNIT["analyze/kept-regime.ts"]!);
+    for (const name of ["keptHistory", "keptScores", "keptFits", "keptRecord", "keptDay"]) expect(kept.get(name), name).toBe("engine/history.ts");
+  });
+
+  test("it defines no weighting, ranking, correlation or smoothing of its own, and neither do run.ts and compute.ts", () => {
+    // run.ts routes every model through runModel rather than repeating a stage.
+    const run = read("run.ts");
+    expect(importsOf("run.ts", run).get("runModel")).toBe("engine/run-model.ts");
+    expect(calls(run, "runModel")).toBe(true);
+    for (const name of ["rollingPercentileRank", "fitPanelWeights", "weightedMeanOnDay", "computeRegime", "computeKeptRegime", "prepareRegimeInputs"]) expect(calls(run, name), `run.ts calls ${name}`).toBe(false);
     expect(run.includes("rollingPercentileRank")).toBe(false);
+    // computeRegime is the recompute driver behind its two argument forms.
+    const compute = read("analyze/compute.ts");
+    expect(importsOf("analyze/compute.ts", compute).get("recomputeHistory")).toBe("engine/history.ts");
+    for (const [name] of STEPS) expect(defines(compute, name) || calls(compute, name), `compute.ts repeats ${name}`).toBe(false);
+    for (const f of [...FORBIDDEN, ...COMPENSATED]) expect(compute.includes(f), f).toBe(false);
+  });
+
+  test("red control: a planted private copy, a call without its import, a sort and a compensated sum outside the combine stage are each flagged", () => {
+    const planted = {
+      ...UNIT,
+      "engine/planted-rank.ts": "export function rollingPercentileRank(xs: number[]) { return [...xs].sort(); }\n",
+      "engine/planted-call.ts": "export const w = (s: never) => fitPanelWeights(s, [], 0);\n",
+      "analyze/kept-regime.ts": `${UNIT["analyze/kept-regime.ts"]}\nconst m = (ws: number[]) => ddValue(sumDD(ws));\n`,
+    };
+    const all = { ...ALL_SRC, "engine/planted-rank.ts": planted["engine/planted-rank.ts"] };
+    expect(unitProblems(planted, all)).toEqual([
+      "rollingPercentileRank is defined in transform/math.ts, engine/planted-rank.ts, not once in transform/math.ts",
+      "engine/planted-rank.ts calls rollingPercentileRank without importing it from transform/math.ts",
+      "engine/planted-call.ts calls fitPanelWeights without importing it from engine/fit.ts",
+      "analyze/kept-regime.ts reads sumDD, which only engine/combine.ts may",
+      "engine/planted-rank.ts contains .sort(",
+    ]);
   });
 });

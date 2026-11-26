@@ -12,7 +12,18 @@ export {
   deriveSeries, derivedInputIds, DerivedSeriesError, V5_DERIVED_SERIES,
   type DerivedSeries, type DerivedLevel, type DerivedRatio, type DerivedRollingSumOverKnownLevel, type DerivedUpVolumeShare,
 } from "./transform/derived.ts";
-export { computeRegime, regimeLabels, fitPanelWeights, weightedMeanOnDay, panelMean, smoothRegimes, bucketFn, WeightAnchorOutOfRangeError, type RegimeComputeResult } from "./analyze/compute.ts";
+export {
+  computeRegime, regimeLabels, fitPanelWeights, weightedMeanOnDay, panelMean, smoothRegimes, bucketFn, WeightAnchorOutOfRangeError,
+  type RegimeComputeResult, type ComputeRegimeOptions,
+} from "./analyze/compute.ts";
+// The staged regime engine (issue 1765, phase 2): runModel, the caller-owned
+// stage cache, and the stages and drivers every regime figure comes from.
+export {
+  runModel, stageCache, stageKey, inputDigest, STAGES, prepareModel, scoreIndicators, fitPanels, refitDays, combinePanels, panelIndexSeries,
+  recomputeHistory, keptHistory,
+  type RunModelOptions, type ModelRun, type PanelSetRun, type StageCache, type StageName, type StageScores, type PanelFit, type Combined,
+  type CombineOptions, type RecomputeInputs, type RecomputeOptions, type KeptSettings,
+} from "./engine/index.ts";
 // The kept record of a methodology that keeps its history (v5, issue 1753).
 export {
   computeKeptRegime, keptRegimeRows, withDerivedSeries, scoreDays, fitDay, keptDayOf, walkForward, deriveKeptRecord,
@@ -47,6 +58,12 @@ export {
   type TradeEvidence, type PeriodStatsOptions, type SampleBlock, type ReferenceBacktestOptions, type MarketCalendar, type CostBps, type DriftOptions, type RebalanceFrequency,
   type CashBasis, type SharpeBasis,
 } from "./analyze/backtest.ts";
+// A fixed-target portfolio backtest's inputs (issue 1765, moved out of bin/backtest.ts).
+// Its plain calendar axis is exported as portfolioDateAxis: it is not the regime axis (D59).
+export {
+  PortfolioError, CASH_RATE_NAMES, BACKTEST_FILL, isDay, dateAxis as portfolioDateAxis, checkPortfolio, checkBacktestOptions, portfolioSeries,
+  backtestAxis, portfolioFill, type Portfolio, type BacktestOptionText, type PortfolioSeries,
+} from "./analyze/backtest-portfolio.ts";
 export * from "./input/manifest.ts";
 export {
   parseCopyCsv, toObjects, selectBackups, listedFiles, verifyFile, seriesForStorageKey, serializeInputs, RunInputCollector,

@@ -21,8 +21,17 @@
 //
 // RED CONTROL: the scanner is also run against planted violations and must flag
 // every one, so a scanner that matches nothing cannot pass for a clean tree.
+//
+// Issue 1765 (AC 11): a methodology is one model value, and the version tag
+// names its preset (packages/analyst-sdk/src/model/presets.ts). No other file
+// under packages/analyst-sdk/src, and no file under backend/src/analytics,
+// compares with or switches on the literals 'v3', 'v4' or 'v5': the engine
+// reads the model, never the tag. The prepare stage of the SDK's regime engine
+// (src/engine/prepare.ts) is the seam's caller for runRegime, runModel and the
+// kept record; run.ts reaches it through runModel.
 import { describe, expect, test } from "bun:test";
-import { readdirSync, readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 
 const root = join(import.meta.dir, "../../..");
@@ -37,7 +46,7 @@ const ALLOWED = new Set([
 // Every caller D59 and regime-engine.md section 8.1 name. Each must import the seam.
 const REQUIRED_CALLERS = [
   "backend/src/analytics/index.ts",
-  "packages/analyst-sdk/src/run.ts",
+  "packages/analyst-sdk/src/engine/prepare.ts",
   "packages/analyst-sdk/src/research/legacy/regime-eq-comparison.ts",
   "packages/analyst-sdk/src/research/legacy/weighting-comparison.ts",
   "backend/scripts/regime-goldens-regenerate.ts",
@@ -73,10 +82,27 @@ export function scan(files: Record<string, string>): Violation[] {
   return out;
 }
 
-function tree(): Record<string, string> {
+function tree(base: string = root, roots: readonly string[] = SCAN_ROOTS): Record<string, string> {
   const files: Record<string, string> = {};
-  for (const r of SCAN_ROOTS) for (const f of tsFiles(join(root, r))) files[relative(root, f)] = readFileSync(f, "utf8");
+  for (const r of roots) for (const f of tsFiles(join(base, r))) files[relative(base, f)] = readFileSync(f, "utf8");
   return files;
+}
+
+// ── AC 11: no version-literal branch outside the presets ─────────────────────
+const VERSION_ROOTS = ["packages/analyst-sdk/src", "backend/src/analytics"];
+// The MODELS preset module: the one place a tag is written as the id of its preset.
+const PRESET_MODULE = "packages/analyst-sdk/src/model/presets.ts";
+const VERSION_BRANCH = [/[!=]==?\s*['"]v[345]['"]/, /['"]v[345]['"]\s*[!=]==?/, /case\s+['"]v[345]['"]/];
+
+export function versionBranches(files: Record<string, string>): Violation[] {
+  const out: Violation[] = [];
+  for (const [file, src] of Object.entries(files)) {
+    if (file === PRESET_MODULE) continue;
+    code(src).split("\n").forEach((text, i) => {
+      if (VERSION_BRANCH.some((re) => re.test(text))) out.push({ file, line: i + 1, text: text.trim() });
+    });
+  }
+  return out;
 }
 
 describe("D59 seam guard: regime inputs are built only by prepareRegimeInputs", () => {
@@ -120,5 +146,44 @@ describe("D59 seam guard: regime inputs are built only by prepareRegimeInputs", 
       "backend/src/analytics/z.ts:1",
       "packages/analyst-sdk/src/analyze/x.ts:2",
     ]);
+  });
+});
+
+describe("no version-literal branch outside the model presets (issue 1765, AC 11)", () => {
+  test("no file under packages/analyst-sdk/src (but the preset module) or backend/src/analytics compares with or switches on 'v3', 'v4' or 'v5'", () => {
+    const files = tree(root, VERSION_ROOTS);
+    // The walk read each root, and the preset module is in it (and exempt).
+    for (const r of VERSION_ROOTS) expect(Object.keys(files).filter((f) => f.startsWith(`${r}/`)).length, r).toBeGreaterThan(10);
+    expect(files[PRESET_MODULE]).toMatch(/id: "v4"/);
+    expect(versionBranches(files).map((x) => `${x.file}:${x.line}: ${x.text}`)).toEqual([]);
+  });
+
+  test("red control: planted branches are flagged with file and line in either order, as a case and with no spaces; prose and the preset module are not", () => {
+    const planted: Record<string, string> = {
+      "packages/analyst-sdk/src/engine/x.ts": 'const a = 1;\nif (version==="v5") return kept;\n',
+      "packages/analyst-sdk/src/run.ts": "// version === \"v5\" in prose is fine\nif ('v4' !== v) throw e;\n",
+      "backend/src/analytics/y.ts": 'switch (v) {\n  case "v3":\n    break;\n}\n',
+      "backend/src/analytics/z.ts": "const keep = REGIME_LINE[v] === \"beside\";\nconst w = v === 'v6';\n",
+      [PRESET_MODULE]: 'export const CURRENT: RegimeVersion = "v4";\nif (x === "v4") y();\n',
+    };
+    expect(versionBranches(planted).map((x) => `${x.file}:${x.line}`).sort()).toEqual([
+      "backend/src/analytics/y.ts:2",
+      "packages/analyst-sdk/src/engine/x.ts:2",
+      "packages/analyst-sdk/src/run.ts:2",
+    ]);
+  });
+
+  test("red control on disk: a planted file in a real tree is found by the same walk", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "regime-version-branch-"));
+    try {
+      for (const r of VERSION_ROOTS) mkdirSync(join(tmp, r, "analyze"), { recursive: true });
+      writeFileSync(join(tmp, VERSION_ROOTS[0]!, "analyze", "planted.ts"), 'export const pick = (v: string) => (v === "v5" ? 1 : 0);\n');
+      writeFileSync(join(tmp, VERSION_ROOTS[1]!, "analyze", "clean.ts"), "export const pick = (v: string) => v;\n");
+      const files = tree(tmp, VERSION_ROOTS);
+      expect(Object.keys(files).length).toBe(2);
+      expect(versionBranches(files).map((x) => `${x.file}:${x.line}`)).toEqual([`${VERSION_ROOTS[0]}/analyze/planted.ts:1`]);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
   });
 });

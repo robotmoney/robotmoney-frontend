@@ -7,10 +7,12 @@
 // methodology label, reads the run's frozen inputs (its vintage, through its
 // own methodology's storage mapping), reads the kept days its report names
 // (a version that keeps its history), reads the rows it published under its
-// line's artifact kind (D-b), computes the rows again through the SDK and
-// compares the as-of rows field by field (compareRows, over the run's own
-// registry, D-d). The panel set and the kept days are platform facts read from
-// the archive and REGIME_PUBLISHED_PANELS, never from a model.
+// line's artifact kind (D-b), computes the rows again through the SDK (runModel
+// under the run's own model, modelOf(version), with the kept days for a
+// version that keeps its history; issue 1765) and compares the as-of rows
+// field by field (compareRows, over the run's own registry, D-d). The panel set
+// and the kept days are platform facts read from the archive and
+// REGIME_PUBLISHED_PANELS, never from a model.
 //
 // publicationCandidates lists the runs that published, newest first, for the
 // release check to pick from (D-c).
@@ -18,27 +20,26 @@ import { createHash } from "node:crypto";
 import { collectRunInputs, type Archive } from "../archive/reader.ts";
 import { ArchiveError, type GeneratedRow, type Row, type RunIdentity } from "../archive/format1.ts";
 import { inputHistory, parsePlainDecimal } from "../input/load.ts";
-import { BACKFILL_START, EXTRA_IDS, requireComplete, runRegime } from "../run.ts";
-import { computeKeptRegime, type KeptDay, type KeptRegimeRun } from "../analyze/kept-regime.ts";
-import { ALL_PANELS, type Panel } from "../analyze/indicators.ts";
+import { requireComplete, runRegime } from "../run.ts";
+import { BACKFILL_START, EXTRA_IDS, runModel } from "../engine/run-model.ts";
+import type { KeptDay, KeptRegimeRun } from "../engine/history.ts";
+import type { Panel } from "../analyze/indicators.ts";
 import {
   CURRENT_REGIME_VERSION,
   REGIME_LINE,
   REGIME_PUBLISHED_PANELS,
-  REGIME_REGISTRY,
   REGIME_VERSIONS,
   isRegimeVersion,
   regimeArtifactKindOf,
-  regimeRulesOf,
   type RegimeArtifactKind,
   type RegimeLine,
   type RegimeVersion,
 } from "../analyze/regime-versions.ts";
-import { computeBacktest, stripDailyFromSnapshot, REGIME_BACKTEST_RULES } from "../analyze/backtest.ts";
+import { computeBacktest, stripDailyFromSnapshot } from "../analyze/backtest.ts";
 import { computeCorrelations } from "../analyze/correlations.ts";
 import { cutAtAsof } from "../prepare.ts";
 import { resolveInputHistory } from "../series-ids.ts";
-import { seriesMappingFor, storedUnderFor } from "../model/presets.ts";
+import { modelOf, type RegimeModel } from "../model/models.ts";
 import { ratioDeclarationsFor, ratiosFromLegs } from "../transform/ratios.ts";
 import { assertRequiredCoverage } from "../coverage.ts";
 import { canonicalStringify, type RegimeSnapshotRow } from "../report/canonical.ts";
@@ -227,15 +228,16 @@ function keptOfReport(
 
 // The rows of a kept run, with the correlations and the backtest computed from
 // its kept record the way the producer does (backend/src/analytics/index.ts):
-// over the composite panels, with the price extras cut at the as-of day.
-function keptRunRows(run: KeptRegimeRun, input: RawIndicatorHistory, o: { asof: string; included: readonly Panel[]; source: string | null }, notes: string[]): RegimeSnapshotRow[] {
+// over the composite panels, with the price extras cut at the as-of day, under
+// the model's backtest rules.
+function keptRunRows(run: KeptRegimeRun, model: RegimeModel, input: RawIndicatorHistory, o: { asof: string; included: readonly Panel[]; source: string | null }, notes: string[]): RegimeSnapshotRow[] {
   const { record, dateAxis } = run;
   const extras = { spx: cutAtAsof(input[EXTRA_IDS.spx] ?? [], o.asof), eth: cutAtAsof(input[EXTRA_IDS.eth] ?? [], o.asof), tbill3m: cutAtAsof(input[EXTRA_IDS.tbill3m] ?? [], o.asof) };
   let backtest: unknown = null;
   let correlations: unknown = null;
   try {
     correlations = computeCorrelations(dateAxis, { composite: record.composite, panelIndices: record.panelIndices, panels: [...o.included] }, extras);
-    backtest = stripDailyFromSnapshot(computeBacktest(dateAxis, { regime: record.regime, panelRegimes: record.panelRegimes, panels: [...o.included] }, extras, REGIME_BACKTEST_RULES[run.version]));
+    backtest = stripDailyFromSnapshot(computeBacktest(dateAxis, { regime: record.regime, panelRegimes: record.panelRegimes, panels: [...o.included] }, extras, model.backtest));
   } catch (e) {
     notes.push(`backtest/correlations failed: ${(e as Error).message}`);
   }
@@ -271,11 +273,12 @@ export function replayRun(archive: Archive, runKey: string, opts: ReplayOptions 
     return none();
   }
   const version = picked.version;
+  // The run's own model (issue 1765): the version names its preset.
+  const model = modelOf(version);
   const line = REGIME_LINE[version];
   const kind = regimeArtifactKindOf(version);
   const panels = opts.included ?? REGIME_PUBLISHED_PANELS[version];
-  const rules = regimeRulesOf(version);
-  const keptHistory = rules.keptHistory === true;
+  const keptHistory = model.history === "kept";
 
   // The run's report (a kept version reads its kept days from it), then one pass
   // over the artifacts for the run's own and the kept ones its report names.
@@ -327,19 +330,20 @@ export function replayRun(archive: Archive, runKey: string, opts: ReplayOptions 
     history = historyOfInputs(collected.rows);
   }
 
-  // Compute: every day the run publishes.
+  // Compute: every day the run publishes, through runModel under the run's model.
   const droppedRatios: string[] = [];
   let computedRows: RegimeSnapshotRow[] = [];
   let computedDays = 0;
   try {
     if (keptHistory) {
-      const input = ratiosFromLegs(history, resolveInputHistory(history, seriesMappingFor(version), storedUnderFor(version)), ratioDeclarationsFor(rules), (id) => void droppedRatios.push(id));
-      assertRequiredCoverage(input, run.asof, undefined, REGIME_REGISTRY[version]);
-      const keptRun = computeKeptRegime(input, { asof: run.asof, start: BACKFILL_START, version, panels: ALL_PANELS, included: panels, kept: kept!.days });
+      const input = ratiosFromLegs(history, resolveInputHistory(history, model.seriesMapping, model.storedUnder), ratioDeclarationsFor(model.rules), (id) => void droppedRatios.push(id));
+      assertRequiredCoverage(input, run.asof, undefined, model.registry);
+      // The kept days the run's report names, and only the as-of day computed (a first run walks every day).
+      const keptRun = runModel(model, input, { asof: run.asof, start: BACKFILL_START, panels: model.panels.all, included: panels, kept: kept!.days, extras: false }).keptRun!;
       computedDays = keptRun.computed.length;
-      computedRows = keptRunRows(keptRun, input, { asof: run.asof, included: panels, source: run.source }, notes);
+      computedRows = keptRunRows(keptRun, model, input, { asof: run.asof, included: panels, source: run.source }, notes);
     } else {
-      const result = requireComplete(runRegime(history, { asof: run.asof, version, factor: true, panels }));
+      const result = requireComplete(runRegime(history, { asof: run.asof, model, factor: true, panels }));
       droppedRatios.push(...result.droppedRatios);
       computedDays = result.dateAxis.length;
       computedRows = publishedRows(result, { source: run.source });
