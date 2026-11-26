@@ -1,21 +1,27 @@
-// Analytics orchestrator — the PRODUCTION pipeline. Mirrors agentjuno/robotmoney
+// Analytics orchestrator — the PRODUCTION pipeline of one run (issue 1765,
+// phase 3: a thin wrapper over the stage modules). Mirrors agentjuno/robotmoney
 // scripts/regime/update.js main() over Postgres:
 //
-//   1. load the persisted raw floor (raw_indicator_history)
-//   2. fetch every registry indicator via the real keyless fetchers
-//   3. mergeSeries(persisted, fetched) per id — keys are never deleted; the fetched
-//      value wins on overlap, so a value is revised in place when it differs beyond
-//      the D56 tolerance (recorded in analytics_overwrite_events). Persist the merge back.
-//   4. build the 2018-01-01..asof date axis, align (fwd/zero-fill) + applyTransform
-//      (prepareRegimeInputs, shared with the analyst SDK's runRegime)
-//   5. computeRegime once over the included panels (PANELS, every panel since
-//      D89), which also gives every panel's card; a run that passes another
-//      panel set computes ALL_PANELS a second time for the cards. Build the
-//      rich snapshot rows (the SDK's publishedRows) and persist them
-//   6. compute + persist the two research signals from REAL inputs.
+//   extract.ts  load the persisted raw floor once, fetch every series via the
+//               source in one acquisition pass, merge, and write back only
+//               the points that change the floor;
+//   inputs.ts   the day rule, the committed ledger read (AN-16), the model's
+//               slice of it (or the committed floor), the ratio step and the
+//               input evidence;
+//   compute.ts  one runModel call and one publishedRows call for the regime
+//               model (the SDK's engine and row builder), and the two research
+//               signals from REAL inputs;
+//   publish.ts  begin the ledger run before any source call, freeze the
+//               vintage, submit telemetry and the one terminal package.
+//
+// A producer regime tick runs every live model over ONE extract and ONE
+// committed read (producer/index.ts runRegimeTick); runAnalytics runs one model
+// (and the research signals) for one run, as every worker, script and test
+// caller does.
 //
 // Run semantics (as-of, forward-fill, replay): docs/technical/regime-engine.md
-// section 8.1. Step 4 is the one shared seam, D59 in docs/decisions.md.
+// section 8.1. The preparation seam is D59 in docs/decisions.md: the SDK's
+// runModel reaches prepareRegimeInputs through its prepare stage.
 //
 // HONESTY MODEL: the production default source is `liveDataSource` (real fetchers,
 // NO synthetic data). A failed/empty fetch degrades to the persisted-real floor via
@@ -23,75 +29,21 @@
 // by inverseCorrelationWeights' minValidObs) and logged loudly. The seededProvider
 // is retained ONLY for the hermetic unit-test tools (analyze/regime.ts etc.) and is
 // never referenced on this path. Tests inject a fixture-backed AnalyticsDataSource.
-import { ALL_PANELS, DAY_RULE, INDICATORS, PANELS, V5_INPUT_IDS, type DayRule, type Panel } from "./analyze/indicators.ts";
-import { LEDGER_EXTRA_KEYS, RATIO_IDS, STORED_RATIO_IDS, STORED_UNDER, inputHistoryFromStorage, seriesMappingFor, storedIndicatorId } from "./extras.ts";
-// The kept record of a methodology published beside the main line (v5, issue 1753).
-import { computeKeptRegime, type KeptDay } from "../../../packages/analyst-sdk/src/analyze/kept-regime.ts";
-import { derivedInputIds } from "../../../packages/analyst-sdk/src/transform/derived.ts";
-import { ratioDeclarationsFor, ratiosFromLegs } from "../../../packages/analyst-sdk/src/transform/ratios.ts";
-import { computeRegime } from "./analyze/compute.ts";
-import { cutAtAsof, latestCompleteDay, missingOnDay, prepareRegimeInputs } from "./prepare.ts";
-import { IncompleteDayError } from "../../../packages/analyst-sdk/src/run.ts";
-// The one row builder of every methodology version lives in the SDK (issue 1765).
-import { publishedRows } from "./report/published-rows.ts";
-import {
-  mergeSeries,
-} from "./transform/math.ts";
-import { loadRawFloorSeed } from "./extract/floor-seed.ts";
-import { COLLECTED_SERIES, collectionRegistry } from "./extract/collected-series.ts";
-import type { RegimeSnapshotRow } from "./report/regime-projection.ts";
+import { DAY_RULE, type DayRule, type Panel } from "./analyze/indicators.ts";
+import { CURRENT_REGIME_VERSION, REGIME_LINE, type RegimeVersion } from "./analyze/regime-versions.ts";
+import { modelOf } from "../../../packages/analyst-sdk/src/model/models.ts";
+import { liveDataSource, type AnalyticsDataSource, type Logger } from "./access/data-source.ts";
+import { hermeticDataSource } from "./access/hermetic-source.ts";
 import type { AnalyticsPersistence } from "./persistence.ts";
 import { analyticsApiClient } from "./api-client.ts";
-import { computeChannelDivergence, computeLateCycle } from "./analyze/research-signals.ts";
-import { computeCorrelations, type CorrelationsPayload } from "./analyze/correlations.ts";
-import {
-  computeBacktest,
-  stripDailyFromSnapshot,
-  REGIME_BACKTEST_RULES,
-  type BacktestPayload,
-} from "./analyze/backtest.ts";
-import { CURRENT_REGIME_VERSION, REGIME_DERIVED_SERIES, REGIME_LINE, REGIME_REGISTRY, REGIME_RULES, type RegimeVersion } from "./analyze/regime-versions.ts";
-import {
-  liveDataSource,
-  type AnalyticsDataSource,
-  type BacktestExtras,
-  type Logger,
-  type ResearchInputs,
-} from "./access/data-source.ts";
-import type { AcquisitionSink, SaveSourceAcquisitionResult, SourceAcquisitionEvidence } from "./source-ledger.ts";
-import { assertRequiredCoverage } from "./coverage.ts";
-import { sha256Hex } from "./run-ledger.ts";
-import { hermeticDataSource } from "./access/hermetic-source.ts";
-import { selectEdgarRefreshTier, defaultEdgarRefreshDeadlineMs } from "./edgar-incremental-refresh.ts";
-import {
-  TelemetryCollector,
-  submitTelemetrySafely,
-  boundedPreview,
-  type TelemetrySink,
-  type TelemetryRunStatus,
-} from "./telemetry.ts";
 import { telemetryHttpSink } from "./telemetry-client.ts";
-import { randomUUID } from "node:crypto";
-import { resolveBuildIdentity } from "./build-identity.ts";
-import type { MethodologyIdentity } from "./run-ledger.ts";
-import { canonicalStringify } from "./output-snapshots.ts";
-import type {
-  TerminalRunPackageInput,
-  ResearchSignalArtifact,
-  WarningArtifact,
-  LogArtifact,
-  ExceptionArtifact,
-} from "./output-snapshots.ts";
+import type { TelemetrySink } from "./telemetry.ts";
+import { extract, sourceLabelOf, type Extraction } from "./extract.ts";
+import { dayRuleInput, modelInputs, readCommitted, reportInputEvidence, scoredDay, type ModelInputs } from "./inputs.ts";
+import { computeModel, computeResearch } from "./compute.ts";
+import { RESEARCH_SIGNAL_TELEMETRY_KEYS, beginLedgerRun, finishLedgerRun, freezeRunVintage } from "./publish.ts";
 
-const BACKFILL_START = "2018-01-01"; // crypto on-chain coverage starts ~2018 cleanly
-// R6 follow-up (two-tier EDGAR refresh, see edgar-incremental-refresh.ts):
-// the hard-deadline budget the orchestrator grants the live source's EDGAR
-// sweep now depends on which tier THIS asof selects — a cheap daily
-// incremental sweep needs a fraction of what the periodic full
-// reconciliation sweep needs. `selectEdgarRefreshTier`/
-// `defaultEdgarRefreshDeadlineMs` are the single source of truth for that
-// choice; this orchestrator and refreshEdgarIncremental itself both derive
-// the SAME tier from the SAME `asof`, so they can never disagree.
+export { RESEARCH_SIGNAL_TELEMETRY_KEYS };
 
 // ─── The ONE analytics source knob ──────────────────────────────────────────
 // `ANALYTICS_SOURCE` is the single, authoritative selector the orchestrator (and
@@ -118,22 +70,6 @@ export function resolveAnalyticsSource(): AnalyticsDataSource {
   );
 }
 
-const nn = (v: number | undefined): number | null =>
-  typeof v === "number" && Number.isFinite(v) ? v : null;
-
-// Issue #180: research-signal payloads (channel-divergence/late-cycle-signals)
-// carry a full multi-year daily series (research-signals.ts::seriesOf), unlike
-// results.regime above which is already small scalars. Migration 0018 documents
-// research_pipeline_runs.summary as "small result summary ... never a full
-// series" — the same bound the artifact previews already get via
-// boundedPreview() (telemetry.ts). Apply that same truncation to ONLY the
-// research-signal entries of the telemetry summary, leaving regime (and any
-// other) entries untouched so regime telemetry behavior is unperturbed.
-// Exported (issue #614 AC4) so producer/index.ts's catch-up mechanism checks
-// EXACTLY these two signal_keys rather than duplicating the literal list and
-// risking drift.
-export const RESEARCH_SIGNAL_TELEMETRY_KEYS = ["channel-divergence", "late-cycle-signals"] as const;
-
 // `toolId` alias meaning "both research signals in ONE run" (issue #509).
 // Not a tool in its own right — it produces no output of its own; it selects
 // the same two tools the per-tool ids select, but inside a single
@@ -142,16 +78,6 @@ export const RESEARCH_SIGNAL_TELEMETRY_KEYS = ["channel-divergence", "late-cycle
 // run: research_pipeline_runs.kind is free text, so 'research' is a new,
 // distinct value rather than an overload of an existing one.
 export const RESEARCH_TOOL_GROUP = "research";
-function boundedTelemetrySummary(raw: Record<string, unknown>): Record<string, unknown> {
-  let out = raw;
-  for (const key of RESEARCH_SIGNAL_TELEMETRY_KEYS) {
-    if (key in raw) {
-      if (out === raw) out = { ...raw };
-      out[key] = boundedPreview(raw[key]);
-    }
-  }
-  return out;
-}
 
 // Run the analytics suite (or one tool) for `asof`, persisting each output.
 // `source` defaults to the real live fetchers; tests inject a fixture source.
@@ -168,31 +94,29 @@ function boundedTelemetrySummary(raw: Record<string, unknown>): Record<string, u
 // boundary this call actually executes is recorded into a TelemetryCollector
 // and submitted ONCE at the end through the injected TelemetrySink — same
 // port/default-HTTP/direct-SQL-for-API-and-tests split as AnalyticsPersistence
-// above. Submission is STRICTLY best-effort (submitTelemetrySafely never
-// throws): a telemetry outage can never affect the canonical analytics rows
-// already written above, nor this function's return value. The outcome is
-// attached to the returned object as a non-enumerable `__telemetry` property
-// (invisible to `Object.keys`/JSON shape assertions) so callers that care —
-// the worker handlers, which fold it into job_runs.output — can still see it.
+// above. Submission is STRICTLY best-effort (publish.ts finishLedgerRun). The
+// outcome is attached to the returned object as a non-enumerable `__telemetry`
+// property (invisible to `Object.keys`/JSON shape assertions) so callers that
+// care — the worker handlers, which fold it into job_runs.output — can still
+// see it.
 //
 // METHODOLOGY (issue 1652): `regimeVersion` is the regime methodology the run
 // computes and stamps (methodology label, every row's `version`). The main-line
 // run never passes it, so it is CURRENT_REGIME_VERSION (v4). A replay of a run
 // stamped with an earlier version passes that version (v3) and computes it
-// exactly as published.
+// exactly as published. The version names its model (the SDK's MODELS): the
+// model's history picks the engine (compute.ts).
 //
 // BESIDE THE MAIN LINE (issue 1753, decision D96): a run of a methodology
 // REGIME_LINE declares `beside` (v5) is a normal run: it begins a ledger run
 // stamped with that version, reads its committed inputs (the main-line regime
 // keys plus the five collected keys its derived indicators read), freezes its
-// vintage and submits one terminal package. It keeps its history (its rules'
-// keptHistory, REGIME_RULES): the first such run finds no kept day and computes
-// every day from the axis start one by one from its own vintage; every later
-// run reads the kept days before its as-of day (persistence.loadKeptRegimeDays),
-// computes only its own day and publishes that one row. The API freezes its
-// rows under `regime_beside_snapshots` and writes none to regime_snapshots.
-// `opts.runSource` hands the run a source another run of the same producer
-// tick already took, so the tick makes one provider request per series.
+// vintage and submits one terminal package. A model that keeps its history
+// reads the kept days before its as-of day and computes only that day (the
+// first run walks every day). The API freezes its rows under
+// `regime_beside_snapshots` and writes none to regime_snapshots.
+// `opts.runSource` hands the run a source another run already took, so the
+// two make one provider request per series.
 export async function runAnalytics(
   asof: string,
   toolId?: string,
@@ -220,809 +144,79 @@ export async function runAnalytics(
   // persists it (issue #509).
   const wanted = toolId === RESEARCH_TOOL_GROUP ? new Set<string>(RESEARCH_SIGNAL_TELEMETRY_KEYS) : null;
   const want = (id: string) => (wanted ? wanted.has(id) : !toolId || toolId === id);
-  const results: Record<string, unknown> = {};
-  const sourceLabel = source === hermeticDataSource ? "hermetic" : source === liveDataSource ? "live" : "fixture";
+  const regime = want("regime");
+  const research = { channelDivergence: want("channel-divergence"), lateCycle: want("late-cycle-signals") };
+  const wantsResearch = research.channelDivergence || research.lateCycle;
+  const sourceLabel = sourceLabelOf(source);
   // Issue 1514: one provider request per symbol for the whole run. The live
   // source shares one fetch memo across the collectors this run calls.
-  const runSource = opts.runSource ?? source.forRun?.({ regime: want("regime"), research: want("channel-divergence") || want("late-cycle-signals") }) ?? source;
-  // Issue 1753: the scoring registry of the version computed (INDICATORS for
-  // v3 and v4), whether its history is kept, and the raw input ids its derived
-  // series read beyond the registry and the price extras.
-  const scoringRegistry = REGIME_REGISTRY[regimeVersion];
-  // Issue 1765 (D-g): the version's rules pick the engine. keptHistory is
-  // set on the rules of exactly the versions REGIME_KEPT_HISTORY marks (v5).
-  const keptHistory = REGIME_RULES[regimeVersion].keptHistory === true;
-  const besideLine = REGIME_LINE[regimeVersion] === "beside";
-  const derivedInputs = [...new Set(REGIME_DERIVED_SERIES[regimeVersion].flatMap(derivedInputIds))];
-  if (keptHistory && !persistence.loadKeptRegimeDays) {
+  const runSource = opts.runSource ?? source.forRun?.({ regime, research: wantsResearch }) ?? source;
+  const model = modelOf(regimeVersion);
+  if (model.history === "kept" && !persistence.loadKeptRegimeDays) {
     throw new Error(`regime methodology ${regimeVersion} keeps its history: the persistence must read its kept days (loadKeptRegimeDays)`);
   }
-  // Issue 1421: every acquisition's collected values are compared with the
-  // committed values the ledger hands back, and the run's input evidence
-  // records the difference and the consumed versions.
-  const inputEvidence: InputEvidence = { registry: null, acquisitions: {}, acquiredKeys: 0, acquiredValues: 0, consumed: [] };
-  const saveAcquisition = persistence.saveSourceAcquisition?.bind(persistence);
-  const acquisitionSink: AcquisitionSink | undefined = saveAcquisition
-    ? {
-        async saveSourceAcquisition(evidence) {
-          const saved = await saveAcquisition(evidence);
-          recordAcquisitionEvidence(inputEvidence, evidence, saved);
-          return saved;
-        },
-      }
-    : undefined;
-  const collector = new TelemetryCollector();
-  let runFailed: unknown = null;
 
   // ── ISSUE #977: the immutable run ledger ────────────────────────────────
-  // beginRun MUST succeed BEFORE `source` (the injected AnalyticsDataSource)
-  // is ever called — its failure is fatal and prevents both acquisition and
-  // every canonical output write below (AC1/AC10). Deliberately outside the
-  // try/catch: a begin-run failure is not "this run degraded", it is "this
-  // run never started", and it propagates to the caller unchanged.
-  const runToolId = toolId ?? "suite";
-  const buildIdentity = resolveBuildIdentity();
-  const methodology: MethodologyIdentity = {
-    toolId: runToolId,
-    versionLabel: regimeVersion,
-    config: { toolId: runToolId, regimeVersion },
-  };
-  const { runId, methodologyVersionId } = await persistence.beginRun({
-    runKey: randomUUID(),
-    asof,
-    toolId: runToolId,
-    sourceLabel,
-    methodology,
-    buildIdentity,
-    jobId: jobId ?? null,
-  });
-  await persistence.appendRunEvent(runId, "started", null);
-
-  let persisted: Awaited<ReturnType<AnalyticsPersistence["loadRawHistory"]>> | null = null;
-  const getPersisted = async () => (persisted ??= await persistence.loadRawHistory());
-  let mergedRaw: Record<string, { date: string; value: number }[]> | null = null;
-  let vintage: Awaited<ReturnType<AnalyticsPersistence["freezeVintage"]>> | null = null;
-  // Issue #978: the complete regime-snapshot rows and research-signal
-  // payloads THIS run computed — captured here (not recomputed) and published
-  // NOWHERE ELSE. The terminal run package submitted at the end below is the
-  // only writer of both the immutable artifact and the current-view
-  // projection, so the two can never disagree and a failed run publishes
-  // neither (AC2).
-  let regimeSnapshotRows: RegimeSnapshotRow[] | null = null;
-  const researchSignalArtifacts: ResearchSignalArtifact[] = [];
-  // Issue 1765 (D-h): the ratios the regime's ratio step dropped as stored-only,
-  // as the SDK's runRegime records droppedRatios. Set by the step whose output
-  // the regime computes from: the committed floor's, or the ledger read's.
-  let droppedRatios: string[] = [];
+  // beginRun MUST succeed BEFORE `source` is ever called; deliberately outside
+  // the try/catch below (publish.ts beginLedgerRun).
+  const run = await beginLedgerRun(persistence, { asof, toolId: toolId ?? "suite", sourceLabel, version: regimeVersion, jobId: jobId ?? null });
+  const now = opts.now ?? new Date();
 
   try {
-  // ══ EXTRACT ══════════════════════════════════════════════════════════════
-  // Issue 1421: extract is the ONLY stage that calls `source`, and it runs to
-  // completion before any computation. Everything after the DOWNSTREAM marker
-  // below consumes the committed dataset this stage hands over (the stored
-  // floor and the ledger heads after the D56 tolerance decision), never the
-  // values the provider just served, and never calls `source` again: a
-  // missing input there is a coverage error or a documented missing result,
-  // never a fetch. Pinned by tests/analytics-offline-replay.test.ts and
-  // tests/analytics-source-tolerance.test.ts.
-  // The day the regime scores: `asof`, or with opts.latestComplete the latest
-  // complete day on or before it (issue 1655).
-  let regimeAsof = asof;
-  let registry: Record<string, { date: string; value: number }[]> | null = null;
-  let extras: BacktestExtras | null = null;
-  // What the registry fetch collected, before the D56 tolerance decision.
-  let collectedRegistry: Record<string, { date: string; value: number }[]> | null = null;
-  // Whether the registry fetch recorded its values in the source ledger (AN-16).
-  let registryInLedger = false;
-  let researchFloor: Awaited<ReturnType<AnalyticsPersistence["loadRawHistory"]>> | null = null;
-  let inputs: ResearchInputs | null = null;
-  if (want("regime")) {
-    // Opt-in cold-DB floor seed (issue #13): on the real-live smoke path a fresh DB
-    // would re-fetch years of history (esp. ~200 EDGAR requests) before the first
-    // classify. ANALYTICS_FLOOR_SEED=1 parses the vendored real floor and submits
-    // it through the seed-ingestion port (server-side gap-fill: existing rows win,
-    // idempotent, no-op once warm) so getPersisted() below sees it. Off by
-    // default → CI/hermetic runs never touch it.
-    if (process.env.ANALYTICS_FLOOR_SEED === "1") {
-      // The vendored floor still carries the *_GROWTH ids; they are no longer written (D74 amendment).
-      // Issue 1644: a ratio declared ratioInput "legs" is not written; the ratio
-      // legs go to the source ledger only (store/floor-seed.ts).
-      const seed = Object.fromEntries(Object.entries(await loadRawFloorSeed()).filter(([id]) => !Object.hasOwn(STORED_UNDER, id) && !(RATIO_IDS.has(id) && !STORED_RATIO_IDS.has(id))));
-      const res = await persistence.seedRawHistory(seed);
-      if (res.seededPoints > 0) {
-        logger.log?.(`[analytics] floor seed: wrote ${res.seededPoints} real rows across ${res.indicators} indicator(s) (cold-DB gap fill); ${res.existingPoints} already present`);
-      } else {
-        logger.log?.(`[analytics] floor seed: no-op — floor already warm (${res.existingPoints} rows present)`);
-      }
-    }
-    let t0 = new Date();
-    const floor = await getPersisted();
-    const acquiredBefore = inputEvidence.acquiredKeys;
-    // Issue 1653: the registry and the collected series (BAA10Y) are fetched alike.
-    const fetched = await runSource.fetchIndicators(collectionRegistry(), logger, acquisitionSink, jobId ?? null);
-    registryInLedger = inputEvidence.acquiredKeys > acquiredBefore;
-    collector.stage("access", "ok", `fetched ${INDICATORS.length} registry indicator(s) from the ${sourceLabel} source`, t0);
-
-    t0 = new Date();
-    const merged: Record<string, { date: string; value: number }[]> = {};
-    let emptyFetches = 0;
-    let excluded = 0;
-    for (const ind of INDICATORS) {
-      // D74 amendment (issue 1514): DEFI_GROWTH and STABLES_GROWTH are read
-      // from the DEFI_TVL and STABLES series below; nothing is written for them.
-      if (Object.hasOwn(STORED_UNDER, ind.id)) continue;
-      // Issue 1644: a ratio declared ratioInput "legs" is never stored.
-      if (RATIO_IDS.has(ind.id) && !STORED_RATIO_IDS.has(ind.id)) continue;
-      const prior = floor[ind.id] ?? [];
-      const f = fetched[ind.id] ?? [];
-      const m = mergeSeries(prior, f);
-      merged[ind.id] = m;
-      if (f.length === 0 && prior.length > 0) {
-        emptyFetches++;
-        logger.warn?.(`[analytics] ${ind.id}: fetch returned 0 rows — using persisted ${prior.length} rows (real floor, no synthetic fallback)`);
-        collector.warn("extract", `${ind.id}: fetch returned 0 rows — using persisted ${prior.length} rows (real floor, no synthetic fallback)`);
-      }
-      if (m.length === 0) {
-        excluded++;
-        logger.warn?.(`[analytics] ${ind.id}: NO history at all — excluded from composite (all-NaN → weight 0)`);
-        collector.warn("extract", `${ind.id}: no history at all — excluded from composite`);
-      }
-    }
-    // Issue 1653: a collected series is merged and stored like a registry
-    // indicator, through the same D56 tolerance writer, but nothing scores it.
-    // A failed or empty fetch is a warning on its own key only: it counts in no
-    // fallback or exclusion, and changes no outcome, report or figure.
-    const collectedOnly: Record<string, { date: string; value: number }[]> = {};
-    for (const s of COLLECTED_SERIES) {
-      const prior = floor[s.id] ?? [];
-      const f = fetched[s.id] ?? [];
-      collectedOnly[s.id] = mergeSeries(prior, f);
-      if (f.length === 0) logger.warn?.(`[analytics] ${s.id}: collected series fetch returned 0 rows — keeping persisted ${prior.length} rows (not scored)`);
-    }
-    if (emptyFetches > 0) logger.warn?.(`[analytics] ${emptyFetches} indicator(s) fell back to the persisted real floor`);
-    if (excluded > 0) logger.warn?.(`[analytics] ${excluded} indicator(s) excluded entirely (no data)`);
-    collector.stage(
-      "extract",
-      excluded > 0 ? "warn" : emptyFetches > 0 ? "warn" : "ok",
-      `merged persisted floor with fetched data: ${emptyFetches} fallback, ${excluded} excluded (of ${INDICATORS.length})`,
-      t0,
-    );
-
-    // Issue 1655: under the require-complete day rule the day the regime scores
-    // must be complete. It is checked on the inputs this run read, before the
-    // merged floor is written, so an incomplete day persists no indicator row,
-    // calculation, snapshot or report: the run fails as a whole, naming each
-    // missing indicator. Under score-newest (declared) nothing changes.
-    const byInput: Record<string, { date: string; value: number }[]> = {};
-    for (const ind of INDICATORS) byInput[ind.id] = merged[storedIndicatorId(ind.id)] ?? [];
-    const dayRule = opts.dayRule ?? DAY_RULE;
-    const runDate = (opts.now ?? new Date()).toISOString().slice(0, 10);
-    const scored = dayRule === "require-complete" && asof === runDate ? latestCompleteDay(byInput, { notAfter: asof, notBefore: BACKFILL_START, version: regimeVersion }) : null;
-    if (dayRule === "score-newest") {
-      // As before: the day given is scored; an indicator older than its policy is NaN that day.
-    } else if (scored !== null) {
-      regimeAsof = scored;
-      if (scored !== asof) logger.log?.(`[analytics] regime: ${asof} is not complete; scoring the latest complete day on or before it, ${scored}`);
-    } else {
-      const missing = missingOnDay(byInput, asof, undefined, regimeVersion);
-      if (missing.length > 0) {
-        const err = new IncompleteDayError({ kind: "incomplete", asof, missing });
-        logger.error?.(`[analytics] regime ${err.message}; the run fails and persists nothing`);
-        collector.stage("extract", "error", err.message, t0);
-        throw err;
-      }
-    }
-
-    // Persist the merged floor back. Tag every row with which
-    // AnalyticsDataSource actually produced it this run (issue #397
-    // provenance). The writer keeps the stored value for a point within its
-    // D56 tolerance, so `merged` is what was COLLECTED, not what is stored.
-    // Issue 1421 (review finding AN-15): the run computes from the committed
-    // floor read back after the write, so a discarded jitter value can never
-    // reach downstream; the collected-versus-committed difference is
-    // reported in the input evidence below.
-    t0 = new Date();
-    await persistence.saveRawHistory({ ...merged, ...collectedOnly }, sourceLabel);
-    // Collected and committed are compared under the same ratio declarations
-    // (issue 1733: a v4 equity ratio is its raw legs' ratio, not the stored one).
-    collectedRegistry = withRatios(fetched, merged, regimeVersion);
-    const committedFloor = await persistence.loadRawHistory();
-    registry = {};
-    for (const ind of INDICATORS) registry[ind.id] = committedFloor[storedIndicatorId(ind.id)] ?? [];
-    // Issue 1753: the raw inputs of the version's derived series, from the
-    // committed floor (the collected series, and VIX under the denominator's id).
-    for (const id of derivedInputs) {
-      if (id === V5_INPUT_IDS.close) continue; // the backtest's ^GSPC closes, added with the extras below
-      registry[id] = committedFloor[id === V5_INPUT_IDS.vix ? "VIX" : id] ?? [];
-    }
-    // Issue 1644: each ratio under its declared parameters, from the legs this
-    // source served when the ratio is not read as stored.
-    const floorDropped: string[] = [];
-    registry = withRatios(fetched, registry, regimeVersion, floorDropped);
-    droppedRatios = floorDropped;
-    inputEvidence.registry = registryEvidence(collectedRegistry, registry);
-    mergedRaw = registry;
-    collector.stage("store", "ok", "persisted merged raw indicator floor and read the committed floor back", t0);
-
-    // Predictive correlations + regime backtest overlays (SPX/ETH price
-    // levels + DTB3 yield; NOT registry indicators). A failed extras fetch
-    // degrades to []: correlations/backtest simply carry fewer/no pairs
-    // rather than throwing. Cut at asof like every other input (issue #1162
-    // Part 0): a run for a past as-of day must not read prices dated after
-    // it. Live runs have no such rows, so this changes nothing on the live
-    // path; regime-sdk-equivalence pins it. With an acquisition sink these are
-    // the ledger's committed values (captureSourceAcquisition, issue 1421).
-    t0 = new Date();
-    const fetchedExtras = await runSource.fetchBacktestExtras(logger, acquisitionSink, jobId ?? null);
-    extras = { spx: cutAtAsof(fetchedExtras.spx, asof), eth: cutAtAsof(fetchedExtras.eth, asof), tbill3m: cutAtAsof(fetchedExtras.tbill3m, asof) };
-    if (derivedInputs.includes(V5_INPUT_IDS.close)) registry[V5_INPUT_IDS.close] = extras.spx;
-    collector.stage("access", "ok", `fetched backtest extras from the ${sourceLabel} source`, t0);
-    // Issue 1398: the model portfolio inputs are collected into the source
-    // ledger in extract, on the same run. The regime reads none of them, so
-    // the outcome is only logged and no number downstream changes.
-    if (runSource.collectModelPortfolioInputs) {
-      const collected = await runSource.collectModelPortfolioInputs(logger, acquisitionSink, jobId ?? null);
-      logger.log?.(`[analytics] model portfolio inputs: ${collected.map((c) => `${c.id}=${c.error ? "FAILED" : c.rows}`).join(" ")}`);
-    }
-  }
-
-  if (want("channel-divergence") || want("late-cycle-signals")) {
-    // Two-tier EDGAR refresh (R6 follow-up, docs/v0-v1-quant-platform-parity-
-    // report.md finding 1.10): hand the live source its persisted MNA floor
-    // + one hard deadline, sized to whichever tier THIS asof selects — a
-    // cheap incremental sweep most days, a full [EDGAR_FLOOR_START, asof]
-    // reconciliation sweep periodically (see selectEdgarRefreshTier in
-    // edgar-incremental-refresh.ts) so an EDGAR back-revision to any
-    // historical month still lands, just not on every single run. Hermetic/
-    // fixture sources ignore this context entirely.
-    const t0 = new Date();
-    researchFloor = await getPersisted();
-    const edgarTier = selectEdgarRefreshTier(asof);
-    inputs = await runSource.fetchResearchInputs(asof, logger, {
-      persistedMna: researchFloor.MNA ?? [],
-      deadlineAt: Date.now() + defaultEdgarRefreshDeadlineMs(edgarTier),
-    }, acquisitionSink, jobId ?? null);
-    collector.stage("access", "ok", `fetched research inputs from the ${sourceLabel} source`, t0);
-
-    // Submit ONLY the freshly-fetched MNA rows (a small idempotent upsert
-    // batch on (date, indicator)) — never the whole merged series — BEFORE
-    // computing/publishing the dependent signal, so a signal is never
-    // published against data that was never durably persisted. A degraded
-    // refresh persists nothing (issue #109 AC5, handled downstream).
-    const refresh = inputs.mnaRefresh;
-    if (want("late-cycle-signals") && refresh && refresh.status !== "degraded" && refresh.newRows.length > 0) {
-      const s0 = new Date();
-      await persistence.saveRawHistory({ MNA: refresh.newRows }, sourceLabel);
-      collector.stage("store", "ok", `persisted ${refresh.newRows.length} freshly-fetched MNA row(s)`, s0);
-    }
-  }
-  // ── AN-16 (owner decision): compute from the values the vintage pins ─────
-  // The regime computes from the ledger heads, read at one database-clock
-  // cutoff after every acquisition of this run. The vintage records that
-  // cutoff and freezes the exact versionIds of this read as its regime-key
-  // members (issue 1534), so its members are exactly the values computed from.
-  // The raw floor written above is no longer an input: within the D56
-  // tolerance it can hold a different value for a date than the ledger head
-  // (a seed wrote S, the first provider observation F was within tolerance).
-  // A source whose registry fetch records no acquisition (the hermetic and
-  // fixture sources) has no ledger input, and the regime computes from the
-  // committed raw floor.
-  let knowledgeTimeCutoff: string | null = null;
-  let regimeVersionIds: string[] | undefined;
-  if (want("regime") && registry && collectedRegistry && persistence.loadCommittedInputs && registryInLedger) {
-    const t0 = new Date();
-    // Issue 1733: a run for a day before its own UTC date is a replay: it
-    // reads each value known by the end of that day, never a later revision.
-    const today = (opts.now ?? new Date()).toISOString().slice(0, 10);
-    // Issue 1753: a run beside the main line names its methodology, so the
-    // read (and the vintage) also covers the collected keys it reads. The
-    // main-line call is unchanged.
-    const committed = besideLine
-      ? await persistence.loadCommittedInputs(asof, asof < today ? asof : undefined, regimeVersion)
-      : await persistence.loadCommittedInputs(asof, asof < today ? asof : undefined);
-    knowledgeTimeCutoff = committed.knowledgeTimeCutoff;
-    regimeVersionIds = committed.values.map((v) => v.versionId);
-    // Issue 1644: each ratio under its declared parameters (transform/ratios.ts).
-    const ledgerInput = inputHistoryFromStorage(committed.values, seriesMappingFor(regimeVersion));
-    const ledgerDropped: string[] = [];
-    const fromLedger = withRatios(ledgerInput, ledgerInput, regimeVersion, ledgerDropped);
-    droppedRatios = ledgerDropped;
-    registry = {};
-    for (const ind of INDICATORS) registry[ind.id] = fromLedger[ind.id] ?? [];
-    for (const id of derivedInputs) registry[id] = fromLedger[id] ?? [];
-    const X = LEDGER_EXTRA_KEYS;
-    extras = { spx: fromLedger[X.spx.inputId] ?? [], eth: fromLedger[X.eth.inputId] ?? [], tbill3m: fromLedger[X.tbill3m.inputId] ?? [] };
-    inputEvidence.registry = registryEvidence(collectedRegistry, registry);
-    mergedRaw = registry;
-    collector.stage("store", "ok", `read ${committed.values.length} ledger head(s) at ${knowledgeTimeCutoff}, the cutoff the vintage freezes`, t0);
-  }
-  if (inputEvidence.registry || inputEvidence.acquiredKeys > 0) {
-    reportInputEvidence(inputEvidence, collector, logger);
-  }
-
-  // ══ DOWNSTREAM: committed data only, no `source` call below ══════════════
-
-  // ── REGIME, KEPT HISTORY (v5, issue 1753) ─────────────────────────────────
-  if (want("regime") && registry && extras && keptHistory) {
-    assertRequiredCoverage(registry, regimeAsof, undefined, scoringRegistry);
-    let t0 = new Date();
-    // ── A methodology that keeps its history (v5, issue 1753) ─────────────
-    // The kept days before the as-of day are the published line itself. With
-    // none this is the first run: it walks forward from its own inputs.
-    const keptRead = await persistence.loadKeptRegimeDays!(regimeVersion, regimeAsof);
-    const kept: KeptDay[] = keptRead.days.map((d) => ({
-      date: d.date,
-      panelIndices: { macro: d.macroIndex ?? NaN, onchain: d.onchainIndex ?? NaN, factor: d.factorIndex ?? NaN },
-    }));
-    if (regimeAsof !== asof) extras = { spx: cutAtAsof(extras.spx, regimeAsof), eth: cutAtAsof(extras.eth, regimeAsof), tbill3m: cutAtAsof(extras.tbill3m, regimeAsof) };
-    const run = computeKeptRegime(registry, { asof: regimeAsof, start: BACKFILL_START, version: regimeVersion, panels: ALL_PANELS, included: opts.panels ?? PANELS, kept });
-    const { record, dateAxis } = run;
-    collector.stage("transform", "ok", `built ${dateAxis.length}-day date axis and aligned/transformed ${scoringRegistry.length} indicator(s)`, t0);
-
-    t0 = new Date();
-    // The correlations and the backtest read the kept record. The backtest
-    // runs under the rule row of the version (REGIME_BACKTEST_RULES).
-    let backtest: BacktestPayload | null = null;
-    let correlations: CorrelationsPayload | null = null;
-    let analyzeStatus: "ok" | "warn" = "ok";
-    const included = opts.panels ?? PANELS;
-    try {
-      correlations = computeCorrelations(dateAxis, { composite: record.composite, panelIndices: record.panelIndices, panels: included }, extras);
-      backtest = stripDailyFromSnapshot(computeBacktest(dateAxis, { regime: record.regime, panelRegimes: record.panelRegimes, panels: included }, extras, REGIME_BACKTEST_RULES[regimeVersion]));
-    } catch (e: any) {
-      logger.error?.(`[analytics] backtest/correlations failed: ${e?.message ?? e}`);
-      collector.warn("analyze", `backtest/correlations failed: ${e?.message ?? e}`);
-      analyzeStatus = "warn";
-    }
-    const last = dateAxis.length - 1;
-    collector.stage("analyze", analyzeStatus, `computed regime ${regimeVersion} composite=${nn(record.composite[last])} regime=${record.regime[last] ?? "insufficient_history"}`, t0);
-    collector.artifact("analyze", "regime-composite", { composite: nn(record.composite[last]), compositePercentile: null, regime: record.regime[last] ?? null });
-
-    t0 = new Date();
-    const rows = publishedRows(run, { source: sourceLabel, backtest, correlations });
-    collector.stage("report", "ok", `built ${rows.length} snapshot row(s) for persistence`, t0);
-    regimeSnapshotRows = rows;
-    results.regime = {
-      asof: regimeAsof,
-      rows: rows.length,
-      composite: nn(record.composite[last]),
-      compositePercentile: null,
-      regime: record.regime[last] ?? null,
-      methodology: regimeVersion,
-      // What the kept days were read from, so the run replays from its
-      // vintage plus these frozen artifacts: the kept days are their rows
-      // dated before the as-of day, a later artifact's row replacing an
-      // earlier one's for the same date.
-      kept: { days: kept.length, artifactIds: keptRead.artifactIds, sha256: sha256Hex(canonicalStringify(keptRead.days)) },
-    };
-    logger.log?.(`[analytics] regime ${regimeVersion} asof ${regimeAsof}: composite=${nn(record.composite[last])} regime=${record.regime[last] ?? "insufficient_history"} (${rows.length} rows, ${kept.length} kept days)`);
-  }
-
-  // ── REGIME ────────────────────────────────────────────────────────────────
-  if (want("regime") && registry && extras && !keptHistory) {
-    // With no composite panel holding any observation nothing can be classified: a
-    // named coverage error, never a fetch (issue 1421).
-    assertRequiredCoverage(registry, regimeAsof);
-
-    let t0 = new Date();
-    // `ages` is the days since the last REAL observation per indicator whose fill
-    // policy is not zero; a day older than its policy allows is already NaN in
-    // `transformed` (issue 1655), and computeRegime's global-cap mask over the
-    // same ages leaves it unchanged. Built by the shared SDK seam.
-    const { dateAxis, transformed, lastRaw, ages, carried } = prepareRegimeInputs(registry, { start: BACKFILL_START, asof: regimeAsof, version: regimeVersion });
-    if (regimeAsof !== asof) extras = { spx: cutAtAsof(extras.spx, regimeAsof), eth: cutAtAsof(extras.eth, regimeAsof), tbill3m: cutAtAsof(extras.tbill3m, regimeAsof) };
-    collector.stage("transform", "ok", `built ${dateAxis.length}-day date axis and aligned/transformed ${INDICATORS.length} indicator(s)`, t0);
-
-    t0 = new Date();
-    const included = opts.panels ?? PANELS;
-    const r2 = computeRegime(transformed, dateAxis, included, ages, undefined, regimeVersion, undefined, undefined, undefined, carried); // the included panels (the composite)
-    // Every panel, included or not. Issue 1765 (D-e): PANELS equals ALL_PANELS
-    // (D89), and computeRegime sums the panels in the order given (panelMean),
-    // so the same list in the same order is the same computation: the main
-    // line computes once. A run that passes another panel set (a replay of the
-    // two-panel composite) still computes every panel a second time.
-    const r3 = samePanelList(included, ALL_PANELS) ? r2 : computeRegime(transformed, dateAxis, ALL_PANELS, ages, undefined, regimeVersion, undefined, undefined, undefined, carried);
-
-    // Predictive correlations + regime backtest — computed from the composite
-    // (r2, the included panels), over the chart-overlay extras extracted
-    // above. Baked onto the latest snapshot row (asof view).
-    let backtest: BacktestPayload | null = null;
-    let correlations: CorrelationsPayload | null = null;
-    let analyzeStatus: "ok" | "warn" = "ok";
-    try {
-      correlations = computeCorrelations(dateAxis, r2, extras);
-      // The rule row of the version computed (REGIME_BACKTEST_RULES, issue
-      // 1753): the v3 and v4 rows are computeBacktest's own defaults.
-      backtest = stripDailyFromSnapshot(computeBacktest(dateAxis, r2, extras, REGIME_BACKTEST_RULES[regimeVersion]));
-    } catch (e: any) {
-      logger.error?.(`[analytics] backtest/correlations failed: ${e?.message ?? e}`);
-      collector.warn("analyze", `backtest/correlations failed: ${e?.message ?? e}`);
-      analyzeStatus = "warn";
-    }
-    const last = dateAxis.length - 1;
-    collector.stage(
-      "analyze",
-      analyzeStatus,
-      `computed regime composite=${nn(r2.composite[last])} regime=${r2.regime[last] ?? "insufficient_history"}`,
-      t0,
-    );
-    collector.artifact("analyze", "regime-composite", {
-      composite: nn(r2.composite[last]),
-      compositePercentile: nn(r2.compositePercentile[last]),
-      regime: r2.regime[last] ?? null,
+    // ══ EXTRACT ════════════════════════════════════════════════════════════
+    // The day the regime scores: `asof`, or under require-complete the latest
+    // complete day on or before it (issue 1655), checked before anything is written.
+    let day = asof;
+    const ex: Extraction = await extract({
+      asof,
+      source: runSource,
+      persistence,
+      sourceLabel,
+      jobId: jobId ?? null,
+      logger,
+      log: run.collector,
+      regime,
+      research: wantsResearch ? { lateCycle: research.lateCycle } : null,
+      checkDay: (merged, startedAt) => {
+        day = scoredDay(dayRuleInput(merged), regimeVersion, model, { asof, dayRule: opts.dayRule ?? DAY_RULE, now, log: run.collector, logger, startedAt });
+      },
     });
 
-    t0 = new Date();
-    // The SDK's row builder (issue 1765): `r2` is the composite run, `r3` the
-    // run over every panel, and the prepared inputs give the as-of row's
-    // indicator details.
-    const rows = publishedRows(
-      { kind: "complete", version: regimeVersion, dateAxis, result: r2, factor: r3, droppedRatios },
-      { source: sourceLabel, backtest, correlations, prepared: { transformed, lastRaw, ages, indicators: scoringRegistry } },
-    );
-    collector.stage("report", "ok", `built ${rows.length} snapshot row(s) for persistence`, t0);
+    // ══ DOWNSTREAM: committed data only, no `source` call below ════════════
+    // AN-16 (owner decision): the regime computes from the ledger heads, read at
+    // one database-clock cutoff after every acquisition of this run; the
+    // vintage freezes that cutoff and the exact versions read (issue 1534). A
+    // source whose registry fetch records no acquisition (the hermetic and
+    // fixture sources) has no ledger input: the regime computes from the
+    // committed floor.
+    let inputs: ModelInputs | null = null;
+    if (regime && ex.fetched && ex.merged && ex.committedFloor && ex.extras) {
+      const collected = { fetched: ex.fetched, merged: ex.merged, committedFloor: ex.committedFloor, extras: ex.extras };
+      const t0 = new Date();
+      // Issue 1753: a run beside the main line names its methodology, so the
+      // read (and the vintage) also covers the collected keys it reads.
+      const committed = persistence.loadCommittedInputs && ex.registryInLedger
+        ? await readCommitted(persistence, asof, now, REGIME_LINE[regimeVersion] === "beside" ? regimeVersion : undefined)
+        : null;
+      inputs = modelInputs(collected, committed, model, ex.inputEvidence);
+      run.droppedRatios = inputs.droppedRatios;
+      if (committed) run.collector.stage("store", "ok", `read ${committed.values.length} ledger head(s) at ${committed.knowledgeTimeCutoff}, the cutoff the vintage freezes`, t0);
+    }
+    const evidence = inputs?.evidence ?? ex.inputEvidence;
+    if (evidence.registry || evidence.acquiredKeys > 0) reportInputEvidence(evidence, run.collector, logger);
 
-    // ISSUE #978 AC2: the current projection is NOT published here. The rows
-    // are only CAPTURED for this run's terminal package; the single publisher
-    // of regime_snapshots is applyCurrentProjections, inside
-    // submitTerminalRunPackage's transaction, and it runs only for a run that
-    // reached a usable terminal outcome. Writing here as well meant a run that
-    // threw AFTER this point (e.g. in freezeVintage below) left its numbers in
-    // the current view while its terminal package froze only
-    // warnings/logs/exceptions — the ledger and the current view disagreeing
-    // with nothing red.
-    t0 = new Date();
-    regimeSnapshotRows = rows;
-    collector.stage("store", "ok", `captured ${rows.length} regime snapshot row(s) for the terminal run package`, t0);
+    // ── REGIME: one model, one runModel and one publishedRows ───────────────
+    if (inputs) await computeModel(run, { version: regimeVersion, model, day, inputs, panels: opts.panels, persistence, logger });
 
-    results.regime = {
-      asof: regimeAsof,
-      rows: rows.length,
-      composite: nn(r2.composite[last]),
-      compositePercentile: nn(r2.compositePercentile[last]),
-      regime: r2.regime[last] ?? null,
-    };
-    logger.log?.(`[analytics] regime asof ${regimeAsof}: composite=${nn(r2.composite[last])} regime=${r2.regime[last] ?? "insufficient_history"} (${rows.length} rows)`);
-  }
-
-  // ── RESEARCH SIGNALS ────────────────────────────────────────────────────────
-  if ((want("channel-divergence") || want("late-cycle-signals")) && inputs && researchFloor) {
-    let t0 = new Date();
-    if (want("channel-divergence")) {
-      t0 = new Date();
-      // STABLES is a registry indicator → source it from the committed raw
-      // floor (matching channel-divergence.js, which reads raw-indicator-history.csv).
-      const stables = mergedRaw?.STABLES ?? researchFloor.STABLES ?? [];
-      const bundle = { btc: inputs.btc, qqq: inputs.qqq, spy: inputs.spy, stables };
-      collector.stage(
-        "transform",
-        "ok",
-        `assembled channel-divergence input bundle (btc=${bundle.btc.length}, qqq=${bundle.qqq.length}, spy=${bundle.spy.length}, stables=${bundle.stables.length} points)`,
-        t0,
-      );
-
-      t0 = new Date();
-      const payload = computeChannelDivergence(bundle, asof);
-      collector.stage("analyze", "ok", "computed channel-divergence signal", t0);
-      collector.artifact("report", "channel-divergence-signal", payload);
-
-      // Captured, not published — see the regime branch above (issue #978 AC2).
-      t0 = new Date();
-      researchSignalArtifacts.push({ key: "channel-divergence", date: asof, payload });
-      collector.stage("store", "ok", "captured channel-divergence research signal for the terminal run package", t0);
-
-      results["channel-divergence"] = payload;
+    // ── RESEARCH SIGNALS ────────────────────────────────────────────────────
+    if (wantsResearch && ex.research && ex.floor) {
+      computeResearch(run, { inputs: ex.research, floor: ex.floor, regimeInput: inputs?.registry ?? null, wanted: research, logger });
     }
 
-    if (want("late-cycle-signals")) {
-      const refresh = inputs.mnaRefresh;
-      if (refresh) {
-        // `tier=` and `degrade=` are load-bearing, not decoration (issue
-        // #509): without them there is no way — from a log or from the
-        // persisted telemetry — to answer "did the weekly reconciliation
-        // sweep ever actually run, and if it degraded, why?". Producer
-        // downtime across the single full-sweep weekday, or a weekday-only
-        // PRODUCER_RESEARCH_CRON, otherwise disables reconciliation
-        // indefinitely, silently and with no catch-up.
-        logger.log?.(
-          `[analytics] EDGAR MNA refresh: status=${refresh.status} tier=${refresh.tier}` +
-            (refresh.fellBackFromFullSweep ? " (fell back from the full sweep)" : "") +
-            (refresh.degradeKind ? ` degrade=${refresh.degradeKind}` : "") +
-            ` planned=${refresh.plannedMonths} ` +
-            `new=${refresh.newMonths} revised=${refresh.revisedMonths} fetched=${refresh.fetchedMonths} ` +
-            `missing=${refresh.missingMonths} rejected=${refresh.rejectedMonths}`,
-        );
-        // Persisted checkpoint: research_pipeline_artifacts row, queryable
-        // per asof through the admin telemetry projection — the durable
-        // record of WHICH tier this asof actually executed.
-        collector.artifact("access", "edgar-refresh", {
-          asof,
-          tier: refresh.tier,
-          status: refresh.status,
-          degradeKind: refresh.degradeKind ?? null,
-          fellBackFromFullSweep: refresh.fellBackFromFullSweep ?? false,
-          plannedMonths: refresh.plannedMonths,
-          fetchedMonths: refresh.fetchedMonths,
-          missingMonths: refresh.missingMonths,
-          rejectedMonths: refresh.rejectedMonths,
-          reason: refresh.reason ?? null,
-        });
-      }
-      t0 = new Date();
-      const bundle = { spy: inputs.spy, rsp: inputs.rsp, top7: inputs.top7, mna: inputs.mna, margin: inputs.margin, conf: inputs.conf };
-      collector.stage("transform", "ok", `assembled late-cycle-signals input bundle (mna=${bundle.mna.length} points)`, t0);
-
-      if (refresh?.status === "degraded") {
-        // HONESTY (issue #109 AC5): an incomplete incremental refresh must
-        // NEVER turn into a recomputed/published late-cycle signal — no
-        // partial history, no partial signal. Retain the last-good
-        // persisted floor AND signal untouched this run.
-        logger.warn?.(
-          `[analytics] late-cycle-signals: EDGAR refresh degraded (${refresh.reason}) — ` +
-            "retaining last-good signal, NOT recomputing/publishing this run",
-        );
-        collector.warn("analyze", `EDGAR MNA refresh degraded (tier=${refresh.tier} degrade=${refresh.degradeKind}: ${refresh.reason}) — retaining last-good signal, not recomputing`);
-        collector.stage("analyze", "warn", `skipped recompute: EDGAR refresh degraded (${refresh.reason})`, t0);
-        collector.stage("store", "warn", "skipped — retained last-good persisted signal, nothing new written", new Date());
-        results["late-cycle-signals"] = { skipped: true, reason: refresh.reason };
-      } else {
-        // The fresh MNA rows were persisted in the extract stage above.
-        t0 = new Date();
-        const payload = computeLateCycle(bundle, asof);
-        collector.stage("analyze", "ok", "computed late-cycle-signals signal", t0);
-        collector.artifact("report", "late-cycle-signals-signal", payload);
-
-        // Captured, not published — see the regime branch above (issue #978 AC2).
-        t0 = new Date();
-        researchSignalArtifacts.push({ key: "late-cycle-signals", date: asof, payload });
-        collector.stage("store", "ok", "captured late-cycle-signals research signal for the terminal run package", t0);
-        results["late-cycle-signals"] = payload;
-      }
-    }
-  }
-
-  // ── ISSUE #977: freeze the data vintage ─────────────────────────────────
-  // Everything this run acquired (and everything already in the ledger) is
-  // frozen as of the knowledge-time cutoff and `asof` (market-time cutoff)
-  // — the complete, reproducible input universe this run's outputs above
-  // were computed against. The cutoff is the database clock the regime read
-  // its inputs at (AN-16); a run that read none uses NOW. The regime-key
-  // members are the exact versions that read returned, never re-selected by
-  // the cutoff (issue 1534); a run that read none sends no list. A freeze failure
-  // fails the WHOLE run: it is part of the mandatory ledger, not best-effort
-  // telemetry.
-  vintage = await persistence.freezeVintage({
-    runId,
-    toolId: runToolId,
-    knowledgeTimeCutoff: knowledgeTimeCutoff ?? new Date().toISOString(),
-    marketTimeCutoff: asof,
-    methodologyVersionId,
-    buildIdentity,
-    ...(regimeVersionIds ? { regimeVersionIds } : {}),
-  });
+    // ── ISSUE #977: freeze the data vintage (publish.ts) ────────────────────
+    await freezeRunVintage(persistence, run, { knowledgeTimeCutoff: inputs?.knowledgeTimeCutoff ?? null, ...(inputs?.regimeVersionIds ? { regimeVersionIds: inputs.regimeVersionIds } : {}) });
   } catch (e) {
-    runFailed = e;
+    run.failed = e;
   }
-
-  // ── TELEMETRY SUBMISSION (issue #151, best-effort, non-fatal) ──────────────
-  const overallStatus: TelemetryRunStatus = runFailed
-    ? "failed"
-    : collector.warnings.length > 0
-      ? "degraded"
-      : "succeeded";
-  const submission = collector.build({
-    kind: toolId ?? "suite",
-    asof,
-    source: sourceLabel,
-    status: overallStatus,
-    summary: runFailed ? { error: (runFailed as any)?.message ?? String(runFailed) } : boundedTelemetrySummary(results),
-    jobId: jobId ?? null,
-  });
-  const telemetryOutcome = await submitTelemetrySafely(telemetry, submission, logger);
-  // Non-enumerable so `Object.keys(results)`/JSON-shape assertions of the
-  // canonical tool outputs are never affected by telemetry outcome exposure.
-  Object.defineProperty(results, "__telemetry", { value: telemetryOutcome, enumerable: false, writable: true, configurable: true });
-
-  // Mandatory ledger event — NOT best-effort like telemetry above. Its own
-  // failure escalates the run to failed even when everything else succeeded:
-  // a run whose outcome the ledger could not record must not read as quiet
-  // success (issue #977 AC5/AC10).
-  // overallStatus is computed above as one of "failed" | "degraded" |
-  // "succeeded" only (never "running", the fourth TelemetryRunStatus value,
-  // which does not apply once this function is about to return) — narrow it
-  // to RunLifecycleEvent's smaller set for the ledger event below.
-  const eventStatus = overallStatus as "succeeded" | "degraded" | "failed";
-  try {
-    await persistence.appendRunEvent(runId, eventStatus, runFailed ? String((runFailed as any)?.message ?? runFailed) : null);
-  } catch (ledgerEventError) {
-    if (!runFailed) runFailed = ledgerEventError;
-  }
-
-  // ── ISSUE #978: freeze the terminal output/report snapshot ──────────────
-  // Mandatory, NOT best-effort like telemetry above — mirrors freezeVintage:
-  // every run that reaches a terminal outcome (succeeded, degraded, or
-  // failed) submits ONE complete package bound to this run's id, so a run that
-  // completes leaves a real artifact for swarm_briefs.report_snapshot_id to
-  // resolve to.
-  //
-  // NOT "never empty for a real run": this single submit is the run's only
-  // chance to record anything, and analyticsApiClient.call has no timeout and
-  // no retry, so a submit that fails (network, API down) leaves the run with
-  // no artifact at all — the succeeded-shape package failed and no
-  // failed-shape package is submitted in its place. That fails SAFE rather
-  // than silently: the error escalates into `runFailed` below, the run throws
-  // red, and the current-view projections keep their last good state because
-  // applyCurrentProjections rides inside the very transaction that did not
-  // commit. The gap is an absent record, never a wrong one.
-  //
-  // `overallStatus` (computed above, before the mandatory ledger event
-  // that may have since escalated `runFailed`) decides the shape: a
-  // "degraded" run still produced real regime/research outputs, so it
-  // freezes exactly like a "succeeded" one — only a run whose OWN stages
-  // never reached a usable output freezes its warnings/logs/exceptions
-  // instead.
-  const terminalPackage: TerminalRunPackageInput =
-    overallStatus === "failed"
-      ? {
-          runId,
-          asof,
-          status: "failed",
-          warnings: collector.warnings as WarningArtifact[],
-          logs: collector.stages.map(
-            (s): LogArtifact => ({
-              level: s.status === "error" ? "error" : s.status === "warn" ? "warn" : "info",
-              message: `[${s.stage}] ${s.summary}`,
-              at: s.finishedAt,
-            }),
-          ),
-          exceptions: [
-            {
-              message: String((runFailed as any)?.message ?? runFailed),
-              stack: (runFailed as any)?.stack ?? null,
-            } satisfies ExceptionArtifact,
-          ],
-        }
-      : {
-          runId,
-          asof,
-          status: "succeeded",
-          regimeSnapshots: regimeSnapshotRows ?? [],
-          researchSignals: researchSignalArtifacts,
-          // The report IS this run's own complete structured output — not a
-          // second, independently-generated document — so a byte-exact
-          // retrieval of it is exactly what runAnalytics computed and
-          // returned, canonicalized the same way the run/vintage ledger
-          // above canonicalizes its own evidence.
-          reportBytes: new TextEncoder().encode(canonicalStringify({ asof, toolId: runToolId, results })),
-        };
-  try {
-    await persistence.submitTerminalRunPackage(terminalPackage);
-  } catch (packageError) {
-    if (!runFailed) runFailed = packageError;
-  }
-
-  Object.defineProperty(results, "__runLedger", {
-    value: { runId, methodologyVersionId, buildIdentity, vintage },
-    enumerable: false,
-    writable: true,
-    configurable: true,
-  });
-  // Issue 1765 (D-h): non-enumerable like __runLedger, so the report bytes
-  // (canonicalStringify of `results` above) and every published figure are
-  // unchanged. Empty when no ratio was dropped or the run computed no regime.
-  Object.defineProperty(results, "__droppedRatios", {
-    value: droppedRatios,
-    enumerable: false,
-    writable: true,
-    configurable: true,
-  });
-
-  if (runFailed) throw runFailed;
-  return results;
-}
-
-// ─── committed-input evidence (issue 1421, review finding AN-15) ───────────
-// What the run COLLECTED from its source against what it COMPUTED from: the
-// committed floor and ledger heads. A within-tolerance re-observation keeps
-// the stored value, so a mismatch here is jitter the ingestion boundary
-// discarded (or a revision another writer committed first), never a value
-// downstream saw. With an acquisition sink the swap happens at the ledger
-// (captureSourceAcquisition), so the mismatch shows under `acquisitions`;
-// `registry` catches a floor that disagrees with what was fetched.
-// `versionsSha256` fingerprints the ledger versions consumed (source key and
-// version id, sorted); the run's frozen vintage holds those same versions.
-// Compact on purpose: telemetry previews are bounded (4 kB).
-interface AcquisitionMismatch {
-  mismatched: number;
-  first: { date: string | null; collected: number; committed: number };
-}
-
-interface InputEvidence {
-  registry: { mismatched: number; indicators: Record<string, number> } | null;
-  acquisitions: Record<string, AcquisitionMismatch>;
-  acquiredKeys: number;
-  acquiredValues: number;
-  consumed: string[];
-}
-
-function recordAcquisitionEvidence(
-  out: InputEvidence,
-  evidence: SourceAcquisitionEvidence,
-  saved: SaveSourceAcquisitionResult,
-): void {
-  const key = evidence.values[0]?.sourceKey;
-  if (!key) return;
-  const committed = saved.committed ?? [];
-  out.acquiredKeys++;
-  out.acquiredValues += evidence.values.length;
-  evidence.values.forEach((v, i) => {
-    const c = committed[i];
-    if (!c) return;
-    out.consumed.push(`${v.sourceKey}:${c.versionId}`);
-    if (c.value === v.value) return;
-    const m = (out.acquisitions[key] ??= { mismatched: 0, first: { date: v.marketDate ?? v.marketInstant, collected: v.value, committed: c.value } });
-    m.mismatched++;
-  });
-}
-
-// `resolved` with each ratio set by its declared ratioInput and ratioClose from
-// the legs `input` carries (analytics requirements 4.3, issue 1644). A ratio
-// with nothing to read is [] (missing, no weight).
-// `dropped` (issue 1765, D-h) collects each ratio declared ratioInput "legs"
-// that is dropped because the input carries its stored ratio and neither leg,
-// through the same onStoredOnly hook the SDK's runRegime records droppedRatios
-// with (run.ts, transform/ratios.ts).
-function withRatios(
-  input: Record<string, { date: string; value: number }[]>,
-  resolved: Record<string, { date: string; value: number }[]>,
-  version: RegimeVersion,
-  dropped?: string[],
-): Record<string, { date: string; value: number }[]> {
-  // A stored ratio the fetch left empty is no stored ratio: on the platform an
-  // empty stored ratio counts as absent, so it is never listed as dropped. A
-  // source cannot tell "stored but empty" from "missing" (the committed floor
-  // gives every indicator [] when it holds nothing).
-  const present = Object.fromEntries(Object.entries(resolved).filter(([id, pts]) => !RATIO_IDS.has(id) || pts.length > 0));
-  const out = { ...ratiosFromLegs(input, present, ratioDeclarationsFor(version), (id) => void dropped?.push(id)) };
-  for (const id of RATIO_IDS) out[id] ??= [];
-  return out;
-}
-
-function registryEvidence(
-  collected: Record<string, { date: string; value: number }[]>,
-  committed: Record<string, { date: string; value: number }[]>,
-): InputEvidence["registry"] {
-  const indicators: Record<string, number> = {};
-  let mismatched = 0;
-  for (const [id, pts] of Object.entries(collected)) {
-    const stored = new Map((committed[id] ?? []).map((p) => [p.date, p.value]));
-    let n = 0;
-    for (const p of pts) if (Number.isFinite(p.value) && stored.get(p.date) !== p.value) n++;
-    if (n > 0) indicators[id] = n;
-    mismatched += n;
-  }
-  return { mismatched, indicators };
-}
-
-function reportInputEvidence(evidence: InputEvidence, collector: TelemetryCollector, logger: Logger): void {
-  const acquiredMismatched = Object.values(evidence.acquisitions).reduce((n, a) => n + a.mismatched, 0);
-  const registryMismatched = evidence.registry?.mismatched ?? 0;
-  if (registryMismatched > 0 || acquiredMismatched > 0) {
-    logger.log?.(
-      `[analytics] committed inputs: ${registryMismatched} registry point(s) and ${acquiredMismatched} acquired value(s) ` +
-        `across ${Object.keys(evidence.acquisitions).length} source key(s) differ from what was collected; downstream uses the committed values`,
-    );
-  }
-  collector.artifact("extract", "committed-input-evidence", {
-    registry: evidence.registry,
-    acquisitions: evidence.acquisitions,
-    acquiredKeys: evidence.acquiredKeys,
-    acquiredValues: evidence.acquiredValues,
-    versionsSha256: evidence.consumed.length > 0 ? sha256Hex([...evidence.consumed].sort().join(",")) : null,
-  });
-}
-
-// The same panels in the same order (issue 1765, D-e).
-function samePanelList(a: readonly Panel[], b: readonly Panel[]): boolean {
-  return a.length === b.length && a.every((p, i) => p === b[i]);
+  return finishLedgerRun(persistence, telemetry, run, logger);
 }

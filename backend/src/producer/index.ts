@@ -4,7 +4,16 @@
 import parser from "cron-parser";
 import { ROUTES } from "@robotmoney/contract";
 import { runAnalytics, resolveAnalyticsSource, RESEARCH_TOOL_GROUP, RESEARCH_SIGNAL_TELEMETRY_KEYS } from "../analytics/index.ts";
-import { BESIDE_REGIME_VERSIONS, type RegimeVersion } from "../analytics/analyze/regime-versions.ts";
+import { BESIDE_REGIME_VERSIONS, CURRENT_REGIME_VERSION, type RegimeVersion } from "../analytics/analyze/regime-versions.ts";
+import { DAY_RULE, type DayRule } from "../analytics/analyze/indicators.ts";
+import { modelOf, type RegimeModel } from "../../../packages/analyst-sdk/src/model/models.ts";
+import { extract, fanOut, sourceLabelOf, type Extraction } from "../analytics/extract.ts";
+import { dayRuleInput, modelInputs, readCommitted, reportInputEvidence, scoredDay, type CollectedRegime } from "../analytics/inputs.ts";
+import { computeModel } from "../analytics/compute.ts";
+import { beginLedgerRun, finishLedgerRun, freezeRunVintage, type LedgerRun } from "../analytics/publish.ts";
+import type { CommittedInputs } from "../analytics/persistence.ts";
+import { telemetryHttpSink } from "../analytics/telemetry-client.ts";
+import type { TelemetrySink } from "../analytics/telemetry.ts";
 import { analyticsApiClient, resolveAnalyticsApiConfig, type AnalyticsApiConfig } from "../analytics/api-client.ts";
 import { bootstrapEdgarSeed } from "../analytics/edgar-seed-loader.ts";
 import type { AnalyticsPersistence } from "../analytics/persistence.ts";
@@ -16,9 +25,10 @@ import { writeHeartbeat } from "../ops/heartbeat.ts";
 
 export type ProducerKind = "regime" | "research";
 
-// `run` (issue 1753) names what one regime run of a tick computes: the
-// methodology version when it is not the main line's, and the source the
-// tick's runs share so the tick makes one provider request per series.
+// `run` (issue 1753) names what one regime run computes when an injected
+// runner drives the runs of a tick one by one: the methodology version when it
+// is not the main line's, and the source the runs share so the tick makes one
+// provider request per series.
 export interface RegimeTickRun {
   regimeVersion?: RegimeVersion;
   runSource?: AnalyticsDataSource;
@@ -37,38 +47,197 @@ export function requireProducerApiConfig(
   return cfg;
 }
 
+export interface ProducerOnceDeps {
+  /**
+   * Drive each run with this runner instead: the research run, and for a regime
+   * tick one call per model (main line first) with its own extract. Without it
+   * a regime tick is runRegimeTick: one extract and one committed read for
+   * every model.
+   */
+  runner?: Runner;
+  source?: AnalyticsDataSource;
+  persistence?: AnalyticsPersistence;
+  /** The regime tick's options (runRegimeTick); ignored with a runner. */
+  tick?: RegimeTickOptions;
+}
+
 export async function runProducerOnce(
   kind: ProducerKind,
   asof: string,
-  deps: { runner?: Runner; source?: AnalyticsDataSource; persistence?: AnalyticsPersistence } = {},
+  deps: ProducerOnceDeps = {},
 ): Promise<Record<string, unknown>> {
   const persistence = deps.persistence ?? analyticsApiClient();
   const source = deps.source ?? resolveAnalyticsSource();
-  const runner: Runner =
-    deps.runner ??
-    ((date, tool, src, store, run) =>
-      run === undefined
-        ? runAnalytics(date, tool, src, store)
-        : runAnalytics(date, tool, src, store, undefined, undefined, run.regimeVersion, run.runSource ? { runSource: run.runSource } : {}));
-  if (kind === "regime") return runRegimeTick(runner, asof, source, persistence);
+  if (kind === "regime") return deps.runner ? runnerTick(deps.runner, asof, source, persistence) : runRegimeTick(asof, source, persistence, deps.tick);
+  const runner: Runner = deps.runner ?? ((date, tool, src, store) => runAnalytics(date, tool, src, store));
   // ONE invocation for both research signals (issue #509). They share a
   // single fetchResearchInputs call — and therefore a single live EDGAR
   // sweep. Looping the research tool ids here ran that sweep once PER TOOL: two
   // full ~200-request reconciliation crawls every full-sweep day, the first
   // of which was discarded entirely (only the late-cycle-signals branch
   // persists the fetched rows), and whose degrade never reached the
-  // telemetry collector.
+  // telemetry collector. Research ticks keep this path: one run, its own extract.
   return runner(asof, RESEARCH_TOOL_GROUP, source, persistence);
 }
 
-// One regime tick (issue 1753, decision D96): the main-line run first, then
-// one run for each methodology published beside it (BESIDE_REGIME_VERSIONS:
-// v5). The runs share one fetch memo, so the tick makes one provider request
-// per series. Each run is its own ledger run with its own outcome: a beside
-// run that fails is logged and neither fails nor changes the main-line run,
-// and a failed main-line run does not stop the beside runs. The tick's result
-// and its error are the main-line run's.
-async function runRegimeTick(runner: Runner, asof: string, source: AnalyticsDataSource, persistence: AnalyticsPersistence): Promise<Record<string, unknown>> {
+/** "regime failed" is the phrase the standing soak check reads (scripts/lib/gate/standing.ts PRODUCER_FAILURE). */
+function logBesideFailure(version: RegimeVersion, asof: string, err: unknown): void {
+  console.error(`[analytics-producer] regime failed for methodology ${version} (beside the main line), ${asof}: ${err instanceof Error ? err.message : err}`);
+}
+
+export interface RegimeTickOptions {
+  /** Where each run's telemetry goes (default the HTTP sink). */
+  telemetry?: TelemetrySink;
+  /** The run time (default now). A tick for a day before its UTC date reads what was known by that day (issue 1733). */
+  now?: Date;
+  /** The tick's models, its own first (default the main line, then BESIDE_REGIME_VERSIONS). */
+  versions?: readonly RegimeVersion[];
+  /** The day rule (default DAY_RULE, issue 1655). */
+  dayRule?: DayRule;
+}
+
+interface TickRun {
+  version: RegimeVersion;
+  model: RegimeModel;
+  run: LedgerRun;
+  /** The day the model scores (the day rule's answer). */
+  day: string;
+}
+
+/**
+ * One regime tick (issue 1765, phase 3; decision D96 for the runs beside the
+ * main line). Every live model of the tick (the main line, then each
+ * methodology published beside it: v5) is its own ledger run with its own
+ * outcome, and the tick shares one extract and one committed read:
+ *
+ *   1. begin the main-line run, then each beside run (publish.ts). A beside
+ *      run that cannot begin is logged and dropped from the tick; the main
+ *      line's begin failure is the tick's error, and the beside runs go on;
+ *   2. extract ONCE for every model (extract.ts): one acquisition pass for the
+ *      union of their series, one floor read, one trimmed floor write;
+ *   3. ONE committed read, at one database-clock cutoff, for the union of the
+ *      models' storage keys (inputs.ts);
+ *   4. for each model, main line first: its slice of the read, one runModel and
+ *      one publishedRows call (compute.ts), its vintage at the SHARED cutoff
+ *      with only its own read versions, and its terminal package.
+ *
+ * A beside run that fails is logged with "regime failed" and neither fails nor
+ * changes the main-line run; a failed main-line run does not stop the beside
+ * runs. The tick's result and its error are the main-line run's.
+ */
+export async function runRegimeTick(
+  asof: string,
+  source: AnalyticsDataSource,
+  persistence: AnalyticsPersistence,
+  opts: RegimeTickOptions = {},
+): Promise<Record<string, unknown>> {
+  const logger = console;
+  const telemetry = opts.telemetry ?? telemetryHttpSink();
+  const now = opts.now ?? new Date();
+  const versions = opts.versions ?? [CURRENT_REGIME_VERSION, ...BESIDE_REGIME_VERSIONS];
+  const own = versions[0];
+  const sourceLabel = sourceLabelOf(source);
+  let result: Record<string, unknown> | null = null;
+  let error: unknown = null;
+  const settle = (version: RegimeVersion, outcome: { result: Record<string, unknown> } | { error: unknown }) => {
+    if (version === own) {
+      if ("result" in outcome) result = outcome.result;
+      else error = outcome.error;
+    } else if ("error" in outcome) {
+      logBesideFailure(version, asof, outcome.error);
+    }
+  };
+
+  // 1. BEGIN, main line first. beginRun precedes every source call (issue #977).
+  const runs: TickRun[] = [];
+  for (const version of versions) {
+    try {
+      const model = modelOf(version);
+      if (model.history === "kept" && !persistence.loadKeptRegimeDays) {
+        throw new Error(`regime methodology ${version} keeps its history: the persistence must read its kept days (loadKeptRegimeDays)`);
+      }
+      const run = await beginLedgerRun(persistence, { asof, toolId: "regime", sourceLabel, version, jobId: null });
+      runs.push({ version, model, run, day: asof });
+    } catch (err) {
+      settle(version, { error: err });
+    }
+  }
+
+  // 2. EXTRACT once, recorded in every run's telemetry, and 3. the ONE committed read.
+  let ex: Extraction | null = null;
+  let collected: CollectedRegime | null = null;
+  let committed: CommittedInputs | null = null;
+  if (runs.length > 0) {
+    try {
+      const dayRule = opts.dayRule ?? DAY_RULE;
+      // Issue 1514: one provider request per symbol for the whole tick.
+      const runSource = source.forRun?.({ regime: true, research: false }) ?? source;
+      ex = await extract({
+        asof,
+        source: runSource,
+        persistence,
+        sourceLabel,
+        jobId: null,
+        logger,
+        log: fanOut(runs.map((r) => r.run.collector)),
+        regime: true,
+        research: null,
+        // Issue 1655: each model's day. A model whose day is incomplete fails
+        // alone; when every model's is, nothing is written.
+        checkDay: (merged, startedAt) => {
+          const byInput = dayRuleInput(merged);
+          for (const r of runs) {
+            try {
+              r.day = scoredDay(byInput, r.version, r.model, { asof, dayRule, now, log: r.run.collector, logger, startedAt });
+            } catch (err) {
+              r.run.failed = err;
+            }
+          }
+          if (runs.every((r) => r.run.failed)) throw runs[0]!.run.failed;
+        },
+      });
+      collected = { fetched: ex.fetched!, merged: ex.merged!, committedFloor: ex.committedFloor!, extras: ex.extras! };
+      const live = runs.filter((r) => !r.run.failed);
+      if (persistence.loadCommittedInputs && ex.registryInLedger && live.length > 0) {
+        const t0 = new Date();
+        committed = await readCommitted(persistence, asof, now, live.map((r) => r.version));
+        for (const r of live) r.run.collector.stage("store", "ok", `read ${committed.values.length} ledger head(s) at ${committed.knowledgeTimeCutoff}, the cutoff the vintages freeze`, t0);
+      }
+    } catch (err) {
+      for (const r of runs) r.run.failed ??= err;
+    }
+  }
+
+  // 4. Each model on its own, main line first.
+  for (const r of runs) {
+    if (!r.run.failed && ex && collected) {
+      try {
+        const inputs = modelInputs(collected, committed, r.model, ex.inputEvidence);
+        r.run.droppedRatios = inputs.droppedRatios;
+        reportInputEvidence(inputs.evidence, r.run.collector, logger);
+        await computeModel(r.run, { version: r.version, model: r.model, day: r.day, inputs, persistence, logger });
+        await freezeRunVintage(persistence, r.run, { knowledgeTimeCutoff: inputs.knowledgeTimeCutoff, ...(inputs.regimeVersionIds ? { regimeVersionIds: inputs.regimeVersionIds } : {}) });
+      } catch (err) {
+        r.run.failed = err;
+      }
+    }
+    try {
+      settle(r.version, { result: await finishLedgerRun(persistence, telemetry, r.run, logger) });
+    } catch (err) {
+      settle(r.version, { error: err });
+    }
+  }
+  if (result === null) throw error;
+  return result;
+}
+
+// A regime tick an injected runner drives one run at a time (issue 1753): the
+// main-line run first, then one run for each methodology published beside it,
+// each with its own extract, sharing one run-scoped source. A beside run that
+// fails is logged and neither fails nor changes the main-line run, and a
+// failed main-line run does not stop the beside runs. The tick's result and
+// its error are the main-line run's.
+async function runnerTick(runner: Runner, asof: string, source: AnalyticsDataSource, persistence: AnalyticsPersistence): Promise<Record<string, unknown>> {
   const runSource = source.forRun?.({ regime: true, research: false }) ?? source;
   let main: Record<string, unknown> | null = null;
   let mainError: unknown = null;
@@ -81,8 +250,7 @@ async function runRegimeTick(runner: Runner, asof: string, source: AnalyticsData
     try {
       await runner(asof, "regime", source, persistence, { regimeVersion, runSource });
     } catch (err) {
-      // "regime failed" is the phrase the standing soak check reads (scripts/lib/gate/standing.ts PRODUCER_FAILURE).
-      console.error(`[analytics-producer] regime failed for methodology ${regimeVersion} (beside the main line), ${asof}: ${err instanceof Error ? err.message : err}`);
+      logBesideFailure(regimeVersion, asof, err);
     }
   }
   if (main === null) throw mainError;
