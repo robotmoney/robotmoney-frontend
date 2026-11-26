@@ -5,6 +5,9 @@
 // The revised copy (scripts/archive-fixture-regenerate.ts) is replayed against
 // committed expected CSVs: rosemarys-baby resolveRevised and extractBacktestPrices
 // output on the same copy, captured once (tests/fixtures/archive/revised/expected/).
+// The model-runs copy (issue 1765) is a v4 run and three chained v5 runs that
+// the backend recorded through its public archive routes
+// (backend/tests/analyst-sdk-model-runs-recording.test.ts).
 import { describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
@@ -13,7 +16,8 @@ import { openBackupsDir, collectRunInputs as binCollectRunInputs } from "../bin/
 import * as binExports from "../bin/backups-dir.ts";
 import * as sdkIndex from "../src/index.ts";
 import { runVintageMembers } from "../src/archive/reader.ts";
-import { RunInputCollector, type RunInputs } from "../src/archive/format1.ts";
+import { RunInputCollector, seriesForStorageKey, type RunInputs } from "../src/archive/format1.ts";
+import { SERIES_MAPPING, V5_ONLY_STORAGE_KEYS, V5_SERIES_MAPPING } from "../src/series-ids.ts";
 import { ArchiveError, INPUT_TABLES, collectRunInputs, openArchive, selectBackups, type ArchiveFiles, type Archive, type ArchiveRow as Row } from "../src/index.ts";
 
 const ARCHIVE = join(import.meta.dir, "fixtures/archive");
@@ -621,6 +625,80 @@ describe("the retired reader names are gone", () => {
         const text = readFileSync(f, "utf8");
         expect(text, f).not.toMatch(new RegExp(`${retired}|\\b${retiredType}\\b|${retiredFile.replace(".", "\\.")}`));
       }
+    }
+  });
+});
+
+// ── Issue 1765 (D-a): every v5 storage key has an input id, read per run ──
+
+describe("the archive reader maps every v5 storage key, through each run's own methodology (issue 1765, D-a)", () => {
+  const MODEL_RUNS = join(ARCHIVE, "model-runs");
+  const MODEL_FACTS = JSON.parse(readFileSync(join(MODEL_RUNS, "facts.json"), "utf8")) as {
+    v4: { runKey: string; asof: string; label: string };
+    v5: { runKey: string; asof: string; label: string }[];
+  };
+  const FIVE = ["FED_SURPLUS_MONTHLY", "US_GDP", "CBOE_VIX3M", "CBOE_SKEW", "SPX_VOLUME"] as const;
+  const FIVE_KEYS = FIVE.map((id) => `raw_indicator_history:${id}`);
+
+  test("the five keys are the storage keys only a v5 run reads", () => {
+    expect([...V5_ONLY_STORAGE_KEYS].sort()).toEqual([...FIVE_KEYS].sort());
+  });
+
+  test("seriesForStorageKey returns an input id for every storage key in V5_SERIES_MAPPING; a main-line key keeps its main-line id", () => {
+    for (const m of V5_SERIES_MAPPING) expect(seriesForStorageKey(m.storageKey), m.storageKey).not.toBeNull();
+    for (const key of FIVE_KEYS) expect(seriesForStorageKey(key), key).toBe(key.slice("raw_indicator_history:".length));
+    // First id wins: V5_SERIES_MAPPING starts with SERIES_MAPPING.
+    const first = new Map<string, string>();
+    for (const m of SERIES_MAPPING) if (!first.has(m.storageKey)) first.set(m.storageKey, m.inputId);
+    for (const [key, id] of first) expect(seriesForStorageKey(key), key).toBe(id);
+    expect(seriesForStorageKey("raw_indicator_history:VIX")).toBe("VIX");
+  });
+
+  test("the committed copy holds a v4 run and three v5 runs, by their methodology labels", () => {
+    const copy = openBackupsDir(MODEL_RUNS);
+    expect(MODEL_FACTS.v4.label).toBe("v4");
+    expect(MODEL_FACTS.v5.map((f) => f.label)).toEqual(["v5", "v5", "v5"]);
+    for (const f of [MODEL_FACTS.v4, ...MODEL_FACTS.v5]) {
+      const { run } = collectRunInputs(copy, f.runKey);
+      expect({ label: run.methodology.label, asof: run.asof }, f.runKey).toEqual({ label: f.label, asof: f.asof });
+    }
+  });
+
+  test("collectRunInputs on each committed v5 run skips none of the five keys, and reads each under its input id", () => {
+    const v4 = collectRunInputs(openBackupsDir(MODEL_RUNS), MODEL_FACTS.v4.runKey);
+    for (const f of MODEL_FACTS.v5) {
+      const out = collectRunInputs(openBackupsDir(MODEL_RUNS), f.runKey);
+      for (const key of FIVE_KEYS) expect(Object.keys(out.skipped), `${f.asof} ${key}`).not.toContain(key);
+      expect(out.skipped, f.asof).toEqual({});
+      const series = new Set(out.rows.map((r) => r.series));
+      for (const id of FIVE) expect(series.has(id), `${f.asof} ${id}`).toBe(true);
+      // The v5 run of the v4 run's as-of day reads the same versions: each key's rows are the ones the v4 run skips.
+      if (f.asof === MODEL_FACTS.v4.asof) {
+        for (const id of FIVE) expect(out.rows.filter((r) => r.series === id).length, id).toBe(v4.skipped[`raw_indicator_history:${id}`]!);
+      }
+    }
+  });
+
+  test("red control: the v4 run still lists all five keys in skipped, so its generated input is what it was", () => {
+    const out = collectRunInputs(openBackupsDir(MODEL_RUNS), MODEL_FACTS.v4.runKey);
+    expect(Object.keys(out.skipped).sort()).toEqual([...FIVE_KEYS].sort());
+    for (const key of FIVE_KEYS) expect(out.skipped[key], key).toBeGreaterThan(0);
+    const series = new Set(out.rows.map((r) => r.series));
+    for (const id of FIVE) expect(series.has(id), id).toBe(false);
+    // Every member is either generated or counted.
+    const skipped = Object.values(out.skipped).reduce((a, b) => a + b, 0);
+    expect(out.rows.length + skipped).toBeLessThanOrEqual(out.run.memberCount);
+    expect(skipped).toBeGreaterThan(0);
+  });
+
+  test("latestValues over the model-runs copy reads every V5_SERIES_MAPPING storage key without throwing", () => {
+    const keys = [...new Set(V5_SERIES_MAPPING.map((m) => m.storageKey))];
+    let vals: ReturnType<Archive["latestValues"]> = [];
+    expect(() => (vals = openBackupsDir(MODEL_RUNS).latestValues(keys))).not.toThrow();
+    for (const id of FIVE) {
+      const got = vals.filter((v) => v.sourceKey === `raw_indicator_history:${id}`);
+      expect(got.length, id).toBeGreaterThan(0);
+      expect(got.every((v) => v.series === id), id).toBe(true);
     }
   });
 });

@@ -1,0 +1,196 @@
+{
+  "format": 1,
+  "backup": "2026-11-26T000000Z",
+  "source": "api",
+  "consistency": "paged",
+  "snapshot": {
+    "exported_at_db": "2026-11-26 00:00:00+00",
+    "replica_replay_ts": null,
+    "db_user": "api",
+    "was_replica": false
+  },
+  "tool": {
+    "name": "robotmoney-api",
+    "commit": null
+  },
+  "append_only": {
+    "analytics_output_snapshots": {
+      "time": {
+        "column": "created_at"
+      },
+      "watermark_before": null,
+      "watermark_after": "11",
+      "rows_added": 11,
+      "files": [
+        {
+          "path": "csv/2026-11-26T000000Z/data/analytics_output_snapshots.2026-11-25T233959Z_2026-11-25T234012Z.csv.gz",
+          "rows": 11,
+          "bytes_raw": 4359332,
+          "sha256_raw": "b681541cb61ff7bb1d3bf534d5713f50264e8cc7309faade3add7d75160c0d00",
+          "id_min": "1",
+          "id_max": "11",
+          "sum_id": "66",
+          "time_min": "2026-11-25 23:39:59.734909+00",
+          "time_max": "2026-11-25 23:40:12.29608+00"
+        }
+      ],
+      "db_rows_through_watermark": "11",
+      "db_sum_id_through_watermark": "66"
+    },
+    "analytics_report_snapshots": {
+      "time": {
+        "column": "created_at"
+      },
+      "watermark_before": null,
+      "watermark_after": "4",
+      "rows_added": 4,
+      "files": [
+        {
+          "path": "csv/2026-11-26T000000Z/data/analytics_report_snapshots.2026-11-25T233959Z_2026-11-25T234012Z.csv.gz",
+          "rows": 4,
+          "bytes_raw": 2050,
+          "sha256_raw": "8e7e27f32b44b2f338eb5c10dc5315443fafa3c96a2fdbdf365ce63bf77c9616",
+          "id_min": "1",
+          "id_max": "4",
+          "sum_id": "10",
+          "time_min": "2026-11-25 23:39:59.786972+00",
+          "time_max": "2026-11-25 23:40:12.296416+00"
+        }
+      ],
+      "db_rows_through_watermark": "4",
+      "db_sum_id_through_watermark": "10"
+    },
+    "source_value_versions": {
+      "time": {
+        "column": "knowledge_time"
+      },
+      "watermark_before": null,
+      "watermark_after": "71592",
+      "rows_added": 71592,
+      "files": [
+        {
+          "path": "csv/2026-11-26T000000Z/data/source_value_versions.2026-11-25T233955Z_2026-11-25T233958Z.csv.gz",
+          "rows": 71592,
+          "bytes_raw": 9874739,
+          "sha256_raw": "b2f65653fb7a0e70f2cb250e2df561a4db4fd1a8417e1adf00cef9afbadd155a",
+          "id_min": "1",
+          "id_max": "71592",
+          "sum_id": "2562743028",
+          "time_min": "2026-11-25 23:39:55.545302+00",
+          "time_max": "2026-11-25 23:39:58.120561+00"
+        }
+      ],
+      "db_rows_through_watermark": "71592",
+      "db_sum_id_through_watermark": "2562743028"
+    },
+    "analytics_ledger_runs": {
+      "time": {
+        "column": "created_at"
+      },
+      "watermark_before": null,
+      "watermark_after": "4",
+      "rows_added": 4,
+      "files": [
+        {
+          "path": "csv/2026-11-26T000000Z/data/analytics_ledger_runs.2026-11-25T233955Z_2026-11-25T234010Z.csv.gz",
+          "rows": 4,
+          "bytes_raw": 671,
+          "sha256_raw": "c156b5b133c72ee3810ac2d391822d9f1489468f29de522fa8090ce34357d99a",
+          "id_min": "1",
+          "id_max": "4",
+          "sum_id": "10",
+          "time_min": "2026-11-25 23:39:55.519312+00",
+          "time_max": "2026-11-25 23:40:10.75647+00"
+        }
+      ],
+      "db_rows_through_watermark": "4",
+      "db_sum_id_through_watermark": "10"
+    },
+    "analytics_ledger_methodology_versions": {
+      "time": {
+        "column": "created_at"
+      },
+      "watermark_before": null,
+      "watermark_after": "2",
+      "rows_added": 2,
+      "files": [
+        {
+          "path": "csv/2026-11-26T000000Z/data/analytics_ledger_methodology_versions.2026-11-25T233955Z_2026-11-25T233959Z.csv.gz",
+          "rows": 2,
+          "bytes_raw": 379,
+          "sha256_raw": "c6c6ac3791cb628a03440c119ab540f08de62c1ecc9075dbfe29b2f097785d8c",
+          "id_min": "1",
+          "id_max": "2",
+          "sum_id": "3",
+          "time_min": "2026-11-25 23:39:55.518695+00",
+          "time_max": "2026-11-25 23:39:59.833994+00"
+        }
+      ],
+      "db_rows_through_watermark": "2",
+      "db_sum_id_through_watermark": "3"
+    },
+    "analytics_data_vintages": {
+      "time": {
+        "column": "created_at"
+      },
+      "watermark_before": null,
+      "watermark_after": "4",
+      "rows_added": 4,
+      "files": [
+        {
+          "path": "csv/2026-11-26T000000Z/data/analytics_data_vintages.2026-11-25T233959Z_2026-11-25T234012Z.csv.gz",
+          "rows": 4,
+          "bytes_raw": 26234,
+          "sha256_raw": "39d7928ea285e998154b141945e389839590517d549755af83cc679adba094fb",
+          "id_min": "1",
+          "id_max": "4",
+          "sum_id": "10",
+          "time_min": "2026-11-25 23:39:59.686789+00",
+          "time_max": "2026-11-25 23:40:12.279324+00"
+        }
+      ],
+      "db_rows_through_watermark": "4",
+      "db_sum_id_through_watermark": "10"
+    },
+    "analytics_vintage_members": {
+      "time": {
+        "lookup": {
+          "column": "vintage_id",
+          "table": "analytics_data_vintages",
+          "key": "id",
+          "timeColumn": "created_at"
+        }
+      },
+      "watermark_before": null,
+      "watermark_after": "240",
+      "rows_added": 240,
+      "files": [
+        {
+          "path": "csv/2026-11-26T000000Z/data/analytics_vintage_members.2026-11-25T233959Z_2026-11-25T234012Z.csv.gz",
+          "rows": 240,
+          "bytes_raw": 10050,
+          "sha256_raw": "b571c33c267014110ac6de1906d9334e2f7b14217f4b2bbe7981915660dab0c3",
+          "id_min": "1",
+          "id_max": "240",
+          "sum_id": "28920",
+          "time_min": "2026-11-25 23:39:59.686789+00",
+          "time_max": "2026-11-25 23:40:12.279324+00"
+        }
+      ],
+      "db_rows_through_watermark": "240",
+      "db_sum_id_through_watermark": "28920"
+    },
+    "analytics_overwrite_events": {
+      "time": {
+        "column": "recorded_at"
+      },
+      "watermark_before": null,
+      "watermark_after": null,
+      "rows_added": 0,
+      "files": [],
+      "db_rows_through_watermark": "0",
+      "db_sum_id_through_watermark": "0"
+    }
+  },
+  "revisions": {}
+}
