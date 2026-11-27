@@ -350,10 +350,9 @@ answering at all; the served document carries the unverified pipe-into-`tar`
 install form that issue #748 closed in the repo copy; or the endpoint's own
 negative control says a wrong document would slip through the other checks
 unchallenged. It is registered on `EXEMPT_FROM_MERGE_MIRROR` in
-`scripts/tests/unit/nightly-mirrors-merge-set.test.ts` beside
-`contribution-advisory-reviewer.yml` — the repo's own sanctioned mechanism for a
-scheduled workflow that is not a product test suite — with the justification
-carried in the entry rather than left to inference.
+`scripts/tests/unit/nightly-mirrors-merge-set.test.ts` — the repo's own
+sanctioned mechanism for a scheduled workflow that is not a product test suite —
+with the justification carried in the entry rather than left to inference.
 
 **A FOURTH QUESTION WAS HERE AND IS NOW DELETED — NOTHING IN CI REPORTS A STALE
 DEPLOY.** This exemption originally covered a workflow with four checks; the

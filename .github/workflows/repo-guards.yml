@@ -48,8 +48,8 @@ jobs:
       # scripts/lib/model-registry.ts and the environment carries a SELECTOR,
       # never a raw id — the anti-ambient-selection property that survived the
       # retirement of the old "keyless" mandate. Also re-asserts the retired
-      # knobs stay retired and that the contribution-advisory reviewer resolves
-      # keylessly. Runs here, in a REQUIRED per-PR job, so it genuinely gates.
+      # knobs stay retired. Runs here, in a REQUIRED per-PR job, so it genuinely
+      # gates.
       # Its behaviour is separately EXECUTED against planted fixtures by
       # scripts/tests/unit/model-selection-guard.test.ts (already run by "Check
       # root scripts" in unit.yml) — so a green here cannot come from a scan that

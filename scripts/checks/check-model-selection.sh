@@ -32,9 +32,6 @@
 #   2. REPO-WIDE: none of the retired credential/model knobs reappear.
 #   3. evals/ ONLY: no conditional skip — loud-skip-never. (D22 rule 2 / E2.)
 #   4. evals/ ONLY: no mock, stub, or injection seam. (D22 rule 2 / E2.)
-#   5. The contribution-advisory reviewer resolves its model through
-#      keylessModel(), never a literal — it reads untrusted PR diffs and posts
-#      output publicly, so it must hold no credential.
 #
 # ── Deliberately NOT covered ────────────────────────────────────────────────
 # scripts/tests/** is excluded from properties 1 and 2. Tests asserting what the
@@ -97,7 +94,6 @@ scan_all() {
 
 registry="$target_root/scripts/lib/model-registry.ts"
 evals_dir="$target_root/evals"
-advisory="$target_root/scripts/contribution-advisory-reviewer.ts"
 
 # EXISTENCE ANCHOR. A guard over zero paths is a green that means nothing. The
 # registry is this repo's single source of model ids and always exists, so
@@ -136,7 +132,7 @@ for f in "$target_root"/docker-compose*.yml; do [ -e "$f" ] && scan_paths+=("$f"
 #    .../anomalyco/opencode/releases/download/... is not a false positive and a
 #    doc mention in `backticks` stays legal prose.
 scan "[\"']opencode/[A-Za-z0-9][A-Za-z0-9._-]*[\"']" \
-  'model ids belong ONLY in scripts/lib/model-registry.ts — the environment carries a SELECTOR (AGENT_MODEL=deepseek, kimi/k2.6), never a raw id. Use resolveAgentModel()/keylessModel() instead of a literal (D22 rule 1 as amended 2026-07-28).' \
+  'model ids belong ONLY in scripts/lib/model-registry.ts — the environment carries a SELECTOR (AGENT_MODEL=deepseek, kimi/k2.6), never a raw id. Use resolveAgentModel() instead of a literal (D22 rule 1 as amended 2026-07-28).' \
   "${scan_paths[@]}"
 
 # 2. Retired credential/model knobs. OPENCODE_API_KEY is the ONE credential and
@@ -144,12 +140,6 @@ scan "[\"']opencode/[A-Za-z0-9][A-Za-z0-9._-]*[\"']" \
 scan 'OPENCODE_MODEL|ONBOARDING_EVAL_MODEL|MODEL_API_KEY_ENV_CANDIDATES|use_paid_model|(ANTHROPIC|OPENAI|MOONSHOT)_API_KEY' \
   'retired model/credential knob. OPENCODE_API_KEY is the single OpenCode Zen credential and AGENT_MODEL the single model selector (D22 rule 1 as amended).' \
   "${scan_paths[@]}"
-
-# 5. The advisory reviewer must resolve keylessly, by function, not by literal.
-if [ -f "$advisory" ]; then
-  grep -q 'keylessModel()' "$advisory" || fail \
-    "$advisory must resolve its model via keylessModel() — it feeds UNTRUSTED pull-request diffs to a model and posts the output as a public comment, so it may hold no credential (its workflow's no-secret assertion is the contract)." ""
-fi
 
 # 3 + 4. evals/ only — D22 rules 2-4, untouched by the rule-1 amendment.
 if [ -d "$evals_dir" ]; then
@@ -164,11 +154,11 @@ else
   # check's green as covering the eval tree.
   echo "check-model-selection: NOT SCANNED — no evals/ directory under $target_root."
   echo "  Properties 3 (no conditional skip) and 4 (no mock/injection seam) were NOT enforced by this run."
-  echo "  They apply to the eval tree that issue #278 introduces; this run covers only properties 1, 2, and 5."
+  echo "  They apply to the eval tree that issue #278 introduces; this run covers only properties 1 and 2."
   echo "  Deliberately not an error: evals/ does not exist on main yet. It becomes an anchor when #278 lands."
 fi
 
 if [ "$status" -eq 0 ]; then
-  echo "check-model-selection: OK (model ids confined to scripts/lib/model-registry.ts; no retired knobs; advisory reviewer keyless)"
+  echo "check-model-selection: OK (model ids confined to scripts/lib/model-registry.ts; no retired knobs)"
 fi
 exit "$status"

@@ -138,9 +138,8 @@
 #
 # CI taxonomy class: heavy. Chosen for TRIGGER SHAPE, not cost — this workflow
 # costs three HTTPS GETs and one API call, which is not what `heavy` usually
-# means. It is chosen because `heavy` is the class this repo already uses for
-# its one other scheduled, non-gating, exempt workflow
-# (`contribution-advisory-reviewer.yml`), and because the alternative classes
+# means. It is chosen because `heavy` is the class this repo used for its
+# scheduled, non-gating, exempt workflows, and because the alternative classes
 # are all worse lies: `feature-correctness` and `system-correctness` both carry
 # the E6 promise that "a red means the code on `main` is broken", which is
 # precisely the claim this workflow exists to refuse — a drift finding here is

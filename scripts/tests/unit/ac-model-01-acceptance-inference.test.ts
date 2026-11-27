@@ -26,7 +26,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DEFAULT_AGENT_MODEL, keylessModel } from "../../lib/model-registry.ts";
+import { DEFAULT_AGENT_MODEL, resolveAgentModel } from "../../lib/model-registry.ts";
 import { isAcceptancePath, resolveInferencePath, resolveModelConfig } from "../../lib/onboarding-eval.ts";
 import { ENV_FILE, READONLY_ENV_FILE, resolveStackZenKey, ZEN_KEY_ENV } from "../../lib/opencode-key.ts";
 
@@ -88,7 +88,7 @@ describe("development keeps every escape hatch D22 deliberately left open", () =
   });
 
   test("the raw-id escape hatch still goes straight through", () => {
-    const raw = `${keylessModel()}`;
+    const raw = resolveAgentModel({ AGENT_MODEL: "free" });
     expect(resolveModelConfig({ AGENT_MODEL: raw }, DEV).model).toBe(raw);
   });
 
@@ -113,7 +113,7 @@ describe("AC-MODEL-01: staging and production refuse a keyless model", () => {
 
     test(`${path} refuses a keyless model even when it arrives as a raw id`, () => {
       // Two refusals apply; the raw-id one fires first, and either is correct.
-      expect(() => resolveModelConfig({ ...FUNDED, AGENT_MODEL: keylessModel() }, { path })).toThrow();
+      expect(() => resolveModelConfig({ ...FUNDED, AGENT_MODEL: resolveAgentModel({ AGENT_MODEL: "free" }) }, { path })).toThrow();
     });
   }
 

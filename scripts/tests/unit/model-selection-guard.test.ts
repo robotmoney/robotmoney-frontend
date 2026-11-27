@@ -100,24 +100,6 @@ describe("check-model-selection.sh (executed, not merely present)", () => {
     }
   });
 
-  test("property 5: an advisory reviewer that does not resolve via keylessModel() is RED", () => {
-    const root = tree({
-      ...ANCHOR,
-      "scripts/contribution-advisory-reviewer.ts": "export const CONTRIBUTION_REVIEW_MODEL = someOtherThing();\n",
-    });
-    const r = run(root);
-    expect(r.code).toBe(1);
-    expect(r.out).toMatch(/must resolve its model via keylessModel\(\)/);
-  });
-
-  test("property 5 passes when it does resolve via keylessModel()", () => {
-    const root = tree({
-      ...ANCHOR,
-      "scripts/contribution-advisory-reviewer.ts": 'import { keylessModel } from "./lib/model-registry.ts";\nexport const M = keylessModel();\n',
-    });
-    expect(run(root).code).toBe(0);
-  });
-
   test("properties 3 and 4 fire ONLY when evals/ exists, and are announced as unscanned when it does not", () => {
     const absent = run(tree({ ...ANCHOR }));
     expect(absent.code).toBe(0);

@@ -387,10 +387,8 @@ export const DIGEST_SCHEME = "derivation-v2" as const;
 /** Every scheme `canonicalizeDigestInputs()` can still recompute, oldest first. */
 export const DIGEST_SCHEMES: readonly string[] = ["derivation-v1", DIGEST_SCHEME];
 
-// The fence around member-authored content. Same idea as
-// scripts/lib/contribution-reviewer-diff.ts's UNTRUSTED_DIFF markers: a take
-// body is text a third party wrote, and the model is told exactly where the
-// instructions stop. The structural defences do not depend on the model
+// The fence around member-authored content: a take body is text a third party
+// wrote, and the model is told exactly where the instructions stop. The structural defences do not depend on the model
 // honouring it — a smuggled weight is rejected by findWeightLikeKey() and an
 // invented dissenter by the member-id check in parseJudgeResponse() — but a
 // judge given no fence at all is a judge whose prose can be dictated by whoever

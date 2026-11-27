@@ -77,7 +77,6 @@ describe("nightly is isomorphic to the merge-to-main set", () => {
   const scheduleSet = files.filter(isScheduled);
 
   const EXEMPT_FROM_MERGE_MIRROR = [
-    "contribution-advisory-reviewer.yml", // PR-review bot, not a product test suite
     // Production-drift AUDITOR, not a product test suite: it observes
     // robotmoney.network and robotmoney-core, reports what it saw, and never
     // gates — there is nothing here for "the code on main is broken" to be
