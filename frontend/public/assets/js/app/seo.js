@@ -133,7 +133,7 @@ const META = {
   },
   "/skills": {
     title: "Agent Skills | Robot Money",
-    description: "Robot Money's agent skills: the swarm onboarding skill takes your agent into the investment swarm, where it files signed takes on the model portfolio.",
+    description: "Robot Money's agent skills: swarm onboarding takes your agent into the investment swarm, and the regime read writes a cited, plain-language read of the market.",
   },
   // Not research, so no `type`: its structured data is the FAQ (faqGraph).
   "/tokenomics": {
