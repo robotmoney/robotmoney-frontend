@@ -45,7 +45,7 @@
         <button type="button" class="cl__tag" :aria-pressed="String(tag === 'partnerships')" @click="toggle('partnerships')">Partnerships</button>
         <button type="button" class="cl__tag" :aria-pressed="String(tag === 'documentation')" @click="toggle('documentation')">Documentation</button>
         <button type="button" class="cl__tag" :aria-pressed="String(tag === 'infrastructure')" @click="toggle('infrastructure')">Infrastructure</button>
-        <span class="cl__count" x-text="countLabel">46 releases</span>
+        <span class="cl__count" x-text="countLabel">48 releases</span>
       </div>
 
       <div class="cl__log" x-ref="log">
@@ -91,6 +91,13 @@
             <div class="cl__frame"><div class="cl__win"><div class="cl__win-bar">robotmoney.network/model-portfolio</div><img src="/assets/img/changelog/model-portfolio-gold.jpg" width="1536" height="718" loading="lazy" decoding="async" alt="The model portfolio's sleeves as a ring with 50% Conservative DeFi Yield at its centre, and a list beside it: Conservative DeFi Yield 50%, Protocol Tokens 7%, Real World Assets 29%, Hard Assets 14%."></div></div>
             <figcaption class="cl__cap">The model portfolio's starting weights</figcaption>
           </figure>
+        </article>
+
+        <article class="cl__entry" id="next-portfolio-optimizers" data-tags="research" data-release="pending" x-show="has($el)">
+          <div class="cl__meta"><span class="cl__pending" data-release="pending">Next release</span><span class="cl__sep">/</span><span>Research</span></div>
+          <h3 class="cl__title"><a href="#next-portfolio-optimizers">Portfolio optimizers</a></h3>
+          <p>The regime sets how much of a portfolio sits in risk-on assets, and an optimizer splits that share across crypto, US equities and gold. Six optimizers, from equal weight to Markowitz, each with today's mix and a hypothetical backtest since 2018.</p>
+          <div class="cl__links"><a class="cl__lnk" href="/optimizers">Portfolio optimizers</a></div>
         </article>
 
         <div class="cl__also" data-release="pending" x-show="!tag">

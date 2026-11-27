@@ -348,6 +348,15 @@ const META = {
     published: "2026-04-24",
     modified: RESEARCH_REVISED,
   },
+  "/optimizers": {
+    title: "Portfolio Optimizers: How Risk-On Money Splits | Robot Money",
+    name: "Portfolio Optimizers",
+    description: "Six portfolio optimizers that split risk-on assets across crypto, US equities and gold, with today's mix from each and a hypothetical backtest since 2018.",
+    type: "TechArticle",
+    modified: "2026-11-24",
+    // Every figure on the page, for readers that do not run the page's script.
+    downloads: [{ path: "/data/optimizers.json", title: "Every optimizer's mix, curve and backtest figures, and the regime labels behind them, as JSON", type: "application/json" }],
+  },
   // Not on the blog index, so no published date.
   "/regime/indicators": {
     title: "The 26 Regime Indicators, Explained | Robot Money",

@@ -1,0 +1,375 @@
+<!-- /optimizers: how the risk-on money is split. The regime sets the risk-on
+     share; one of six optimizers sets the mix of crypto, US equities and commodities
+     inside it. Numbers: public/data/optimizers.json (research workbench,
+     src/reports/optimizers_page.ts). Today's regime: methodology v5 from the regime API (?methodology=v5),
+     the file's own last v5 day until the API serves it.
+     Behaviour: assets/js/app/alpine/views/optimizers.js. -->
+<style>
+  .op-regime { display: grid; grid-template-columns: 15rem minmax(0, 1fr) 17rem; gap: 2.25rem; align-items: start; }
+  .op-now { display: grid; gap: 0.75rem; justify-items: start; }
+  .op-now .rm-dial { width: 100%; }
+  .op-scale { margin: 0; display: grid; gap: 0.5rem; align-content: start; }
+  .op-scale__head, .op-scale__row { display: grid; grid-template-columns: 6.5rem 4rem minmax(0, 1fr) 4rem; align-items: center; column-gap: 0.75rem; padding: 0 1rem; }
+  .op-scale__head > div { grid-column: 2 / -1; display: flex; justify-content: space-between; }
+  .op-scale__row { padding-top: 0.75rem; padding-bottom: 0.75rem; border: 1px solid var(--color-border); }
+  .op-scale__row.is-today { border-color: var(--color-accent); box-shadow: inset 0 0 0 2px var(--color-accent); }
+  .op-scale__name { display: grid; gap: 0.25rem; }
+  .op-scale__n { margin: 0; }
+  .op-scale__n:last-child { text-align: right; }
+  .op-scale__row .op-bar { height: 1.25rem; }
+  .op-groups { display: grid; gap: 1.5rem; align-content: start; }
+  .op-groups h3 { display: flex; align-items: center; gap: 0.5rem; }
+  .op-groups h3 > i, .op-groups li > i { width: 0.5rem; height: 0.5rem; flex: none; display: inline-block; }
+  .op-groups ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.375rem; }
+  .op-groups li { display: flex; align-items: center; gap: 0.5rem; }
+  .op-bar { display: flex; height: 0.5rem; background: var(--color-border); }
+  .op-bar > i { display: block; height: 100%; }
+  .op-bar + .op-bar { margin-top: 0.375rem; }
+  .op-bar > i + i { box-shadow: inset 2px 0 0 var(--color-void); }
+  .op-card > .rv__panel-card-head { align-items: center; }
+  .op-card__title { display: flex; align-items: center; gap: 0.75rem; }
+  .op-icon { width: 2.75rem; height: 2.75rem; flex: none; display: block; }
+  .op-fig .rr-area__frame { grid-template-columns: 2.75rem minmax(0, 1fr) 12.5rem; grid-template-rows: 22rem 1.75rem; }
+  .op-ends { grid-row: 1; grid-column: 3; position: relative; list-style: none; margin: 0; padding: 0; }
+  .op-ends li { position: absolute; left: 0.75rem; transform: translateY(-50%); margin: 0; white-space: nowrap; cursor: default; }
+  .op-legend { display: none; }
+  .op-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem 1.5rem; }
+  @media (max-width: 760px) {
+    .op-fig .rr-area__frame { grid-template-columns: 2.75rem minmax(0, 1fr); grid-template-rows: 16rem 1.75rem; }
+    .op-ends { display: none; }
+    .op-legend { display: flex; }
+  }
+  .op-firm { margin: 0; }
+  .op-firm > span:first-child { display: block; margin-bottom: 0.25rem; }
+  .op-donut { width: 100%; height: 100%; display: block; }
+  .op-donut path { transition: opacity 200ms var(--ease-out-expo); }
+  .op-donut path.is-muted { opacity: 0.26; }
+  .op-cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.75rem; }
+  .op-card { display: flex; flex-direction: column; }
+  .op-card__body { padding: 1rem; display: flex; flex-direction: column; gap: 1rem; flex: 1; }
+  .op-card__body > p { margin: 0; }
+  .op-split { display: grid; grid-template-columns: 8.75rem minmax(0, 1fr); align-items: center; gap: 0.5rem 0.75rem; }
+  .op-split .rm-card-eyebrow { display: inline-flex; align-items: center; white-space: nowrap; }
+  .op-split .op-bar { height: 1.5rem; }
+  .op-split .op-bar > i { display: flex; align-items: center; justify-content: center; overflow: hidden; cursor: default; transition: opacity 200ms var(--ease-out-expo); }
+  .op-split .op-bar > i.is-muted { opacity: 0.26; }
+  .op-split .op-bar > i > span { color: var(--color-void); font-style: normal; }
+  /* The line under the bars appears on hover, so its box is held open at the
+     height its longest sentence takes: one line, two on the narrowest phones.
+     1.2em held 14px for a 20px line, and every hover moved the card 6px. */
+  .op-readout { min-height: 1.275rem; min-height: 1lh; }
+  @media (max-width: 380px) { .op-readout { min-height: 2.55rem; min-height: 2lh; } }
+  .op-rings { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 1rem; margin-top: auto; padding-top: 1rem; border-top: 1px solid var(--color-border); }
+  .op-ring { width: 8.5rem; height: 8.5rem; margin: 0 0 0.75rem; }
+
+  .op-rings .rr-legend li { cursor: default; transition: opacity 200ms var(--ease-out-expo); }
+  .op-rings .rr-legend li.is-muted { opacity: 0.45; }
+  @media (max-width: 1100px) {
+    .op-regime { grid-template-columns: 15rem minmax(0, 1fr); }
+    .op-groups { grid-column: 1 / -1; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  }
+  @media (max-width: 700px) {
+    .op-regime, .op-groups { grid-template-columns: minmax(0, 1fr); }
+  }
+  @media (max-width: 860px) {
+    .op-cards { grid-template-columns: minmax(0, 1fr); }
+  }
+  @media (max-width: 520px) {
+    .op-rings { grid-template-columns: minmax(0, 1fr); }
+    .op-scale__head, .op-scale__row { grid-template-columns: 3.75rem minmax(0, 1fr) 3.75rem; }
+    .op-scale__head > div { grid-column: 1 / -1; }
+    .op-scale__name { grid-column: 1 / -1; display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 0.5rem; }
+  }
+
+  /* Loading: the page keeps its own shape (frames, names, card text, the nine
+     table rows) and each figure's place breathes as the site's skeletons do
+     (views.css .rv__skel: flat surface, sv-skel opacity, no gradient), so
+     nothing moves and no number shows before it is real. */
+  .op-wait .op-scale__n, .op-wait .rr-legend b, .op-wait .op-ends b, .op-wait .op-legend b, .op-wait .rv__bt-table td,
+  .op-wait .rr-sec__aside, .op-wait .op-fig .rv__fig-d {
+    color: transparent; background: var(--color-surface-light); animation: sv-skel 1.8s ease-in-out infinite;
+  }
+  .op-wait .op-scale__n { justify-self: stretch; }
+  .op-wait .rr-legend b, .op-wait .op-ends b, .op-wait .op-legend b { display: inline-block; min-width: 2.5rem; }
+  .op-wait .rr-sec__aside { display: inline-block; min-width: 10rem; min-height: 1lh; }
+  .op-wait .op-bar { animation: sv-skel 1.8s ease-in-out infinite; }
+  .op-wait .rv__bt-table td { background-clip: content-box; }
+  .op-donut__skel { stroke: var(--color-surface-light); animation: sv-skel 1.8s ease-in-out infinite; }
+  /* The dial's footprint: its arc scales with the column, its labels do not. */
+  .op-dial-skel { width: 100%; padding-top: calc(52.8% + 46px); background: var(--color-surface); animation: sv-skel 1.8s ease-in-out infinite; }
+  /* The chart's summary and, under 760px, its legend list: held at the lines
+     they take once the figures are in, measured at each width (2026-11-25, on
+     the data file's text; a later file may differ by a line). */
+  .op-wait .op-fig .rv__fig-d { min-height: 1lh; }
+  @media (max-width: 1100px) { .op-wait .op-fig .rv__fig-d { min-height: 2lh; } }
+  @media (max-width: 640px) { .op-wait .op-fig .rv__fig-d { min-height: 3lh; } }
+  @media (max-width: 520px) { .op-wait .op-fig .rv__fig-d { min-height: 2lh; } }
+  @media (max-width: 500px) { .op-wait .op-fig .rv__fig-d { min-height: 3lh; } }
+  @media (max-width: 340px) { .op-wait .op-fig .rv__fig-d { min-height: 4lh; } }
+  @media (max-width: 760px) { .op-wait .op-legend { min-height: 49px; } }
+  @media (max-width: 640px) { .op-wait .op-legend { min-height: 77px; } }
+  @media (max-width: 500px) { .op-wait .op-legend { min-height: 106px; } }
+  @media (max-width: 440px) { .op-wait .op-legend { min-height: 134px; } }
+  @media (max-width: 414px) { .op-wait .op-legend { min-height: 162px; } }
+  @media (prefers-reduced-motion: reduce) {
+    .op-wait .op-scale__n, .op-wait .rr-legend b, .op-wait .op-ends b, .op-wait .op-legend b, .op-wait .rv__bt-table td,
+    .op-wait .rr-sec__aside, .op-wait .op-fig .rv__fig-d, .op-wait .op-bar, .op-donut__skel, .op-dial-skel { animation: none; }
+  }
+</style>
+<section class="rv rv--dash" x-data="optimizersView()" x-init="load()" data-anchors :class="{ 'op-wait': loading }" :aria-busy="loading ? 'true' : 'false'">
+  <div class="rv__hero">
+    <div class="rv__hero-art" x-data="orbitsHero()" aria-hidden="true"></div>
+    <div class="rv__hero-inner">
+      <h1 class="rv__title">Portfolio Optimizers</h1>
+      <p class="rv__hero-sub">The regime sets how much of the portfolio is in risk-on assets. An optimizer sets the mix of crypto, US equities and commodities inside that share. Six optimizers are shown here, each with today's mix and a backtest since 2018.</p>
+    </div>
+  </div>
+
+  <div class="rv__body rr">
+    <p class="rm-visually-hidden" role="status" x-show="loading">Loading the optimizers</p>
+    <p class="rv__error" x-show="error" x-text="error" x-cloak></p>
+
+    <section class="rr-sec" aria-labelledby="the-regime-sets-the-risk-on-share">
+      <div class="rr-sec__head">
+        <h2 class="rr-sec__h" id="the-regime-sets-the-risk-on-share">The regime sets the risk-on share</h2>
+        <span class="rr-sec__aside" x-text="updatedText()"></span>
+      </div>
+      <div class="op-regime">
+        <div class="op-now">
+          <h3 class="rr-subhead__h">Today's regime</h3>
+          <div class="op-dial-skel" x-show="loading" aria-hidden="true"></div>
+          <template x-if="dialModel()">
+            <div class="rm-dial rm-dial--sm" x-data="rmRegimeDial(() => dialModel())"
+                 @pointermove="move($event)" @mouseleave="point = null" @click.outside="point = null; pinned = null" @keydown.escape="point = null; pinned = null">
+              <div class="rm-dial__arc" x-ref="arc">
+                <div class="rm-dial__svg" x-html="svg()"></div>
+                <p class="rm-dial__v"><b class="rm-dial__n" x-text="reading()"></b><span class="rm-dial__name" x-text="todayLabel()"></span></p>
+                <div class="rm-dial__tip" role="tooltip" :id="tipId" :class="{ 'is-open': open }" :style="tipStyle()" :data-side="tipSide()">
+                  <p class="rm-dial__tip-h" x-text="tip(at).title"></p>
+                  <p x-text="tip(at).body"></p>
+                  <p class="rm-dial__tip-now" x-show="tip(at).now" x-text="tip(at).now"></p>
+                </div>
+              </div>
+              <template x-for="k in keys" :key="k">
+                <button type="button" class="rm-dial__k" :class="{ 'is-on': lit() === k }" :style="labelAt(k)" :data-at="k"
+                        :aria-describedby="shown() === k ? tipId : null" :aria-expanded="shown() === k ? 'true' : 'false'"
+                        @mouseenter="point = k" @focus="point = k" @blur="point = null" @click="pin(k)" x-text="tip(k).title"></button>
+              </template>
+            </div>
+          </template>
+          <p class="rr-stat__sub">The label sets the share of the portfolio held in risk-on assets. <a class="rr-lnk" href="/regime">See the regime classifier</a></p>
+        </div>
+        <figure class="op-scale" role="img" :aria-label="scaleLabel()">
+          <div class="op-scale__head" aria-hidden="true"><div><span class="rm-card-eyebrow">Risk-off assets</span><span class="rm-card-eyebrow">Risk-on assets</span></div></div>
+          <template x-for="s in states()" :key="s.key">
+            <div class="op-scale__row" :class="{ 'is-today': s.today }">
+              <div class="op-scale__name"><h3 class="rr-subhead__h" x-text="s.label"></h3><span class="rm-card-eyebrow" x-show="s.today" x-cloak>Today</span></div>
+              <p class="rm-card-val op-scale__n" x-text="pct(s.riskOff * 100)"></p>
+              <div class="op-bar" aria-hidden="true">
+                <i :style="`width:${s.riskOff * 100}%;background:${asset('risk_off').colour}`"></i>
+                <i :style="`width:${s.riskOn * 100}%;background:var(--color-text)`"></i>
+              </div>
+              <p class="rm-card-val op-scale__n" x-text="pct(s.riskOn * 100)"></p>
+            </div>
+          </template>
+        </figure>
+        <div class="op-groups">
+          <div>
+            <h3 class="rr-subhead__h rr-sub"><i :style="`background:${asset('risk_off').colour}`" aria-hidden="true"></i>Risk-off assets</h3>
+            <div class="rr-prose"><p>Sky savings (sUSDS), Aave v3 USDC, Morpho USDC vaults, Compound v3 USDC and USDC.</p></div>
+          </div>
+          <div>
+            <h3 class="rr-subhead__h rr-sub"><i style="background:var(--color-text)" aria-hidden="true"></i>Risk-on assets</h3>
+            <ul class="rr-prose">
+              <li><i :style="`background:${asset('crypto').colour}`" aria-hidden="true"></i>Crypto: BTC and ETH in equal amounts</li>
+              <li><i :style="`background:${asset('us_equities').colour}`" aria-hidden="true"></i>US equities: S&P 500 index</li>
+              <li><i :style="`background:${asset('gold').colour}`" aria-hidden="true"></i>Commodities: gold (GLD)</li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="rr-sec" aria-labelledby="an-optimizer-sets-the-mix-of-risk-on-assets">
+      <div class="rr-sec__head">
+        <h2 class="rr-sec__h" id="an-optimizer-sets-the-mix-of-risk-on-assets">An optimizer sets the mix of risk-on assets</h2>
+        <span class="rr-sec__aside" x-show="data || loading" x-text="data ? `Prices to ${dateLong(data.asof)}` : ''"></span>
+      </div>
+      <div class="rr-prose rr-sub">
+        <p>Each optimizer sets weights for crypto, US equities and commodities from past daily returns. Weights are reset on the first trading day of each month.</p>
+      </div>
+      <div class="op-cards">
+        <template x-for="k in ['naive', 'inverse_vol', 'equal_risk', 'risk_budget', 'min_variance', 'markowitz']" :key="k">
+          <article class="rv__panel-card op-card" :id="k.replace('_', '-')" @pointerleave="setFocus(k, null)">
+            <div class="rv__panel-card-head">
+              <div class="op-card__title"><span style="line-height:0" x-html="icon(k)"></span><h3 class="rr-subhead__h" x-text="{ naive: 'Equal weight', inverse_vol: 'Inverse volatility', equal_risk: 'Risk budget: parity', risk_budget: 'Risk budget: crypto', min_variance: 'Minimum variance', markowitz: 'Markowitz (maximum Sharpe ratio)' }[k]"></h3></div>
+            </div>
+            <div class="op-card__body">
+              <div>
+                <div class="op-split" @pointerleave="setFocus(k, null)">
+                  <template x-for="b in bars(k)" :key="b.key">
+                    <div style="display:contents">
+                      <span class="rm-card-eyebrow"><span x-text="b.label"></span><span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="What this bar shows">i</button><span class="rm-tip__bub" role="tooltip" x-text="b.tip"></span></span></span>
+                      <div class="op-bar" role="img" :aria-label="`${b.label}: ${b.parts.map((p) => `${p.label} ${pct(p.pct)}`).join(', ')}`">
+                        <template x-for="p in b.parts" :key="p.key"><i data-mark="series" :class="{ 'is-muted': focusOf(k) && focusOf(k) !== p.key }" :style="`width:${p.pct}%;background:${p.colour}`" @pointerenter="setFocus(k, p.key)"><span class="rm-card-eyebrow" x-show="p.pct >= 9" x-text="pct(p.pct)"></span></i></template>
+                      </div>
+                    </div>
+                  </template>
+                </div>
+                <p class="rr-stat__sub op-readout" x-text="readout(k)"></p>
+              </div>
+              <div class="rr-prose">
+                <p x-show="k === 'naive'">Puts the same amount of money in crypto, US equities and commodities. It uses no data, so it is the baseline for the other five.</p>
+                <p x-show="k === 'inverse_vol'">Gives each asset money in proportion to one over its volatility over the past year, so steadier assets get more. It ignores how the assets move together.</p>
+                <p x-show="k === 'equal_risk'">Sets the weights so each asset causes the same share of the mix's risk. It uses the volatility and covariance of the past year. It is also called equal risk or risk parity.</p>
+                <p x-show="k === 'risk_budget'">Works like risk budget: parity, but crypto causes 90% of the mix's risk. US equities and commodities cause 5% each.</p>
+                <p x-show="k === 'min_variance'">Picks the weights with the lowest expected swings for the whole mix, using the past year of returns. Crypto swings the most, so this optimizer holds little or no crypto.</p>
+                <p x-show="k === 'markowitz'">Uses an expected return for each asset: crypto 23.4%, US equities 7.5% and commodities 5.5% a year. It picks the weights with the highest Sharpe ratio, which is return above the cash rate divided by volatility. Covariance uses all daily returns since 2018.</p>
+              </div>
+              <p class="rr-meta__i rr-meta__i--list"><b x-show="k === 'naive'">w = 1/3 for each asset</b><b x-show="k === 'inverse_vol'">wᵢ = (1/σᵢ) ÷ (1/σ₁ + 1/σ₂ + 1/σ₃)</b><b x-show="k === 'equal_risk'">wᵢ(Σw)ᵢ ÷ wᵀΣw = 1/3 for each asset</b><b x-show="k === 'risk_budget'">wᵢ(Σw)ᵢ ÷ wᵀΣw = 90% crypto, 5% US equities, 5% commodities</b><b x-show="k === 'min_variance'">minimize wᵀΣw, with each w ≥ 0 and the weights adding to 1</b><b x-show="k === 'markowitz'">maximize (wᵀμ − r) ÷ √(wᵀΣw), with each w ≥ 0</b><span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="How to read the formula">i</button><span class="rm-tip__bub" role="tooltip" x-text="formulaTip(k)"></span></span></p>
+              <p class="op-firm rr-stat__sub"><span class="rm-card-eyebrow">Inspired by</span><a class="rr-lnk" :href="firm(k).url" target="_blank" rel="noopener" x-text="firm(k).name"></a>. <span x-text="firm(k).text"></span></p>
+              <div class="op-rings">
+                <div>
+                  <h4 class="rr-subhead__h rr-subhead__h--minor rr-sub">Risk-on mix</h4>
+                  <figure class="rr-ring op-ring" @pointerover="overRing(k, $event)" @pointerleave="setFocus(k, null)">
+                    <span class="sv__wdonut-host" role="img" :aria-label="`Risk-on mix: ${basketRows(k).map((r) => `${r.label} ${pct(r.pct)}`).join(', ')}`" x-html="basketSvg(k)" x-effect="muteArcs($el, k)"></span>
+                    <figcaption x-show="ringRow(basketRows(k), k)"><b x-text="pct(ringRow(basketRows(k), k)?.pct)"></b><span x-text="ringRow(basketRows(k), k)?.label"></span></figcaption>
+                  </figure>
+                  <ul class="rr-legend">
+                    <template x-for="r in basketRows(k)" :key="r.key">
+                      <li :class="{ 'is-zero': !r.pct, 'is-muted': focusOf(k) && focusOf(k) !== r.key }" @pointerenter="setFocus(k, r.key)" @pointerleave="setFocus(k, null)"><i :style="`background:${r.colour}`" data-mark="series"></i><span x-text="r.label"></span><b x-text="pct(r.pct)"></b></li>
+                    </template>
+                  </ul>
+                </div>
+                <div x-show="regime || loading" x-cloak>
+                  <h4 class="rr-subhead__h rr-subhead__h--minor rr-sub" x-text="regime ? `Whole portfolio, ${todayLabel()}` : 'Whole portfolio'"></h4>
+                  <figure class="rr-ring op-ring" @pointerover="overRing(k, $event)" @pointerleave="setFocus(k, null)">
+                    <span class="sv__wdonut-host" role="img" :aria-label="`Whole portfolio, ${todayLabel()} regime: ${wholeRows(k).map((r) => `${r.label} ${pct(r.pct)}`).join(', ')}`" x-html="wholeSvg(k)" x-effect="muteArcs($el, k)"></span>
+                    <figcaption x-show="ringRow(wholeRows(k), k)"><b x-text="pct(ringRow(wholeRows(k), k)?.pct)"></b><span x-text="ringRow(wholeRows(k), k)?.label"></span></figcaption>
+                  </figure>
+                  <ul class="rr-legend">
+                    <template x-for="r in wholeRows(k)" :key="r.key">
+                      <li :class="{ 'is-zero': !r.pct, 'is-muted': focusOf(k) && focusOf(k) !== r.key }" @pointerenter="setFocus(k, r.key)" @pointerleave="setFocus(k, null)"><i :style="`background:${r.colour}`" data-mark="series"></i><span x-text="r.label"></span><b x-text="pct(r.pct)"></b></li>
+                    </template>
+                  </ul>
+                </div>
+              </div>
+            </div>
+          </article>
+        </template>
+      </div>
+    </section>
+
+    <section class="rr-sec" aria-labelledby="backtest-since-2018">
+      <div class="rr-sec__head">
+        <h2 class="rr-sec__h" id="backtest-since-2018">Backtest since 2018</h2>
+        <span class="rr-sec__aside" x-show="data || loading" x-text="data ? btPeriod() : ''"></span>
+      </div>
+      <template x-if="data || loading">
+        <figure class="rr-area rv__fig op-fig">
+          <figcaption class="rr-area__head">
+            <div class="rv__fig-t">
+              <h3 class="rr-subhead__h">Growth of $1</h3>
+              <p class="rv__fig-d" x-text="btSummary()"></p>
+            </div>
+            <div class="rm-chips" role="group" aria-label="Scale">
+              <button type="button" class="rm-chip" :aria-pressed="log ? 'false' : 'true'" @click="log = false">Linear</button>
+              <button type="button" class="rm-chip" :aria-pressed="log ? 'true' : 'false'" @click="log = true" title="On a log scale each gridline is double the one below, so equal steps are equal percentage moves.">Log</button>
+            </div>
+          </figcaption>
+          <ul class="rr-area__legend rv__legend-list rv__legend-top">
+            <li><span class="rv__legend-axis">Compare with</span></li>
+            <template x-for="c in benchList()" :key="c.key">
+              <li :class="{ 'is-off': !compare[c.key] }">
+                <button type="button" class="rv__tgl" :aria-pressed="compare[c.key] ? 'true' : 'false'" @click="compare[c.key] = !compare[c.key]"><i class="rv__tgl-box" aria-hidden="true"></i><span x-text="c.label"></span></button>
+              </li>
+            </template>
+            <li class="rv__lg-bands" :class="{ 'is-off': !bands }">
+              <button type="button" class="rv__tgl" :aria-pressed="bands ? 'true' : 'false'" @click="bands = !bands"><i class="rv__tgl-box" aria-hidden="true"></i>Regime</button>
+              <span class="rv__lg-key">
+                <template x-for="r in bandKey()" :key="r.label">
+                  <span class="rv__legend-item"><span class="rv__legend-swatch" :class="{ 'is-outline': r.outline }" :style="`background:${r.bg}`"></span> <span x-text="r.label"></span></span>
+                </template>
+              </span>
+            </li>
+          </ul>
+          <div class="rr-area__frame">
+            <div class="rr-area__y" aria-hidden="true">
+              <template x-for="t in btYTicks()" :key="t.key"><span :style="`top:${t.top}%`" x-text="t.label"></span></template>
+            </div>
+            <div class="rr-area__plot" tabindex="0" role="img" :aria-label="btLabel()"
+                 @pointermove="btMove($event)" @pointerdown="btMove($event)" @pointerleave="if ($event.pointerType === 'mouse') btAt = null" @keydown="btKey($event)" @blur="btAt = null">
+              <div class="rv__bands" aria-hidden="true">
+                <template x-for="r in btBands()" :key="r.key"><i :style="`left:${r.left}%;width:${r.width}%;background:${bandBg(r.state)}`"></i></template>
+              </div>
+              <div class="rr-area__svg" x-html="btSvg()"></div>
+              <template x-if="btPoint()">
+                <div class="rr-area__cross" :style="`left:${btPoint().left}%`"></div>
+              </template>
+              <template x-if="btPoint()">
+                <div class="rr-area__tip" :class="{ 'is-left': btPoint().left > 62, 'is-past-mid': btPoint().left > 50 }" :style="`left:${btPoint().left}%`">
+                  <p class="rr-area__tip-h"><b x-text="btPoint().date"></b><span class="rv__tip-reg" x-show="btPoint().regime"><i :style="`background:${btPoint().regimeColour}`" aria-hidden="true"></i><span x-text="btPoint().regime"></span></span></p>
+                  <ul>
+                    <template x-for="it in btPoint().items" :key="it.token">
+                      <li :class="btFocus && btFocus !== it.token ? 'is-muted' : ''"><i :style="`background:${it.colour}`" data-mark="series"></i><span x-text="it.label"></span><b x-text="it.value"></b></li>
+                    </template>
+                  </ul>
+                </div>
+              </template>
+            </div>
+            <ul class="op-ends rr-area__legend" aria-hidden="true">
+              <template x-for="l in btEnds()" :key="l.token">
+                <li :class="{ 'is-muted': btFocus && btFocus !== l.token }" :style="`top:${l.top}%`" @pointerenter="btFocus = l.token" @pointerleave="btFocus = null">
+                  <template x-if="!l.dash"><i :style="`background:${l.colour}`" data-mark="series"></i></template>
+                  <template x-if="l.dash"><span class="rv__lg-dash" x-html="dashKey(l.colour, l.dash)"></span></template>
+                  <span x-text="l.label"></span><b x-text="l.value"></b>
+                </li>
+              </template>
+            </ul>
+            <div class="rr-area__x" aria-hidden="true">
+              <template x-for="t in btXTicks()" :key="t.key"><span :class="t.cls" :style="`left:${t.left}%`" x-text="t.label"></span></template>
+            </div>
+          </div>
+          <ul class="rr-area__legend rv__legend-list op-legend">
+            <template x-for="l in btEnds()" :key="l.token">
+              <li>
+                <template x-if="!l.dash"><i :style="`background:${l.colour}`" data-mark="series" aria-hidden="true"></i></template>
+                <template x-if="l.dash"><span class="rv__lg-dash" x-html="dashKey(l.colour, l.dash)"></span></template>
+                <span x-text="l.label"></span><b x-text="l.value"></b>
+              </li>
+            </template>
+          </ul>
+        </figure>
+      </template>
+      <!-- Outside the template, so a reader that does not run the script still
+           gets the caveat with the page. -->
+      <p class="rr-note" x-show="data || loading">Hypothetical backtest, not live results. $1 is invested on the first day and valued weekly. The regime label sets the risk-on share at 5%, 50% or 95%. Weights are reset on the first trading day of each month, and each trade costs 10 basis points (0.10%). Risk-off assets earn the 3-month T-bill rate. Markowitz starts in June 2019 because it needs a year of returns first. Cash, the S&P 500 index and ETH are held without trading.</p>
+      <div class="rr-tablewrap rr-tablewrap--tips" x-show="data || loading">
+        <table class="rr-table rv__bt-table">
+          <thead>
+            <tr>
+              <th scope="col">Portfolio</th>
+              <th scope="col" class="rv__num">Growth of $1</th>
+              <th scope="col" class="rv__num">CAGR<span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="About CAGR">i</button><span class="rm-tip__bub" role="tooltip">Compound annual growth rate: the steady yearly return that ends at the same place.</span></span></th>
+              <th scope="col" class="rv__num">Sharpe ratio<span class="rm-tip"><button class="rm-tip__btn" type="button" aria-label="About the Sharpe ratio">i</button><span class="rm-tip__bub" role="tooltip">The average daily return above the 3-month T-bill, divided by how much those returns swing, scaled to a year.</span></span></th>
+              <th scope="col" class="rv__num">Max drawdown<span class="rm-tip rm-tip--end"><button class="rm-tip__btn" type="button" aria-label="About max drawdown">i</button><span class="rm-tip__bub" role="tooltip">The largest fall from a peak to the low after it.</span></span></th>
+              <th scope="col" class="rv__num">Start</th>
+            </tr>
+          </thead>
+          <tbody>
+            <template x-for="row in tableRows()" :key="row.key">
+              <tr :class="{ 'rv__bt-baseline': row.baseline }">
+                <th scope="row"><span style="display:inline-flex;align-items:center;gap:0.5rem"><template x-if="!row.dash"><i :style="`background:${row.colour};width:0.5rem;height:0.5rem;display:inline-block`" aria-hidden="true"></i></template><template x-if="row.dash"><span class="rv__lg-dash" x-html="dashKey(row.colour, row.dash)"></span></template><span x-text="row.label"></span></span></th>
+                <td class="rv__num" x-text="money(row.s.final_value)"></td>
+                <td class="rv__num" x-text="fmtPct(row.s.cagr)"></td>
+                <td class="rv__num" x-text="row.key === 'cash' ? '—' : fmtNum(row.s.sharpe)"></td>
+                <td class="rv__num" x-text="fmtPct(row.s.max_drawdown)"></td>
+                <td class="rv__num" x-text="monthYear(row.s.start_date)"></td>
+              </tr>
+            </template>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+</section>
