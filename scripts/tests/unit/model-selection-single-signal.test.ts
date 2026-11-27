@@ -105,7 +105,7 @@ const MODEL_ENV_YAML_KEY = /^\s{2,}([A-Z][A-Z0-9_]*MODEL[A-Z0-9_]*)\s*:/;
 const MODEL_ID_LITERAL = /["'](opencode\/[A-Za-z0-9][A-Za-z0-9._-]*)["']/;
 const MODEL_STRING_CONST = /export\s+const\s+[A-Za-z0-9_]*MODEL[A-Za-z0-9_]*\s*(?::[^=]+)?=\s*["']/;
 const REGISTRY_SYMBOL_IMPORT = /import\s*(?:type\s*)?\{([^}]*)\}\s*from\s*["']([^"']+)["']/g;
-const REGISTRY_SYMBOLS = ["resolveAgentModel", "isKeylessModel", "keylessModel", "DEFAULT_AGENT_MODEL", "MODEL_FAMILIES"];
+const REGISTRY_SYMBOLS = ["resolveAgentModel", "isKeylessModel", "DEFAULT_AGENT_MODEL", "MODEL_FAMILIES"];
 
 /**
  * The competing model-selection paths present in `root`, or [] when
@@ -142,7 +142,7 @@ export function competingSelectionPaths(root: string): Finding[] {
       }
 
       // C. An exported model constant whose value is a STRING. A model constant
-      //    must be an expression over the registry (keylessModel(),
+      //    must be an expression over the registry (resolveAgentModel(),
       //    DEFAULT_AGENT_MODEL), never a hand-written id.
       if (MODEL_STRING_CONST.test(raw)) findings.push({ ...line, rule: "model-string-constant" });
 
@@ -283,7 +283,7 @@ describe("red controls: a reintroduced selection path is caught", () => {
 
   test("RULE C — a model constant DERIVED from the registry is fine", () => {
     const root = tree({
-      "scripts/lib/x.ts": 'import { keylessModel } from "./model-registry.ts";\nexport const REVIEW_MODEL = keylessModel();\n',
+      "scripts/lib/x.ts": 'import { DEFAULT_AGENT_MODEL } from "./model-registry.ts";\nexport const REVIEW_MODEL = DEFAULT_AGENT_MODEL;\n',
     });
     expect(competingSelectionPaths(root)).toEqual([]);
   });

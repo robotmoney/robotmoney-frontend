@@ -83,7 +83,6 @@ jobs:
               - 'scripts/fusion/**'
               - 'scripts/lib/**'
               - 'scripts/ops/**'
-              - 'scripts/prompts/**'
               - 'scripts/stack/**'
               - 'scripts/web-client/**'
               - 'scripts/tests/fixtures/**'

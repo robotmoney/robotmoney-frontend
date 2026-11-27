@@ -287,8 +287,8 @@ owner-review mechanism guarding them; the grant list **is** the guard.
   go through the **automated loop / merge tooling**, which refuses to merge
   unless all checks are green — not the GitHub merge button.
 - Judgment calls (is a new file justified, is this a decision that belongs
-  upstream, is the PR one concern) are for the PR reviewer. NOTE: a follow-up
-  will add an automated reviewer agent for these; for now they are human-reviewed.
+  upstream, is the PR one concern) are for the PR reviewer, human or agent.
+  No automated bot rules on them.
 
 ## Where things are documented
 

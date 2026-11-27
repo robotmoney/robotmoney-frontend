@@ -171,14 +171,3 @@ export function describeFamilies(): string {
     .map(([name, f]) => `  ${name}/${f.default} (default)  members: ${Object.keys(f.models).join(", ")}`)
     .join("\n");
 }
-
-/**
- * The pinned keyless model, for callers that must NOT hold a credential —
- * currently the contribution-advisory reviewer, which reads untrusted PR diffs
- * and posts model output publicly. Resolved from the `free` family so it tracks
- * the catalogue rather than rotting as a second hardcoded id.
- */
-export function keylessModel(): string {
-  const free = MODEL_FAMILIES.free!;
-  return `${ZEN_PREFIX}${free.models[free.default]}`;
-}

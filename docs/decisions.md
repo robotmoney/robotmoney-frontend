@@ -1008,6 +1008,12 @@ constant" was actually protecting.
   Rules 2-4's `evals/` properties (no conditional skip, no mock or injection
   seam) are enforced by the same script once that tree exists (#278); until then
   it prints exactly what it did not scan rather than passing silently.
+- **Retired 2026-11-27 (lucky, issue #1773):** the contribution-advisory
+  reviewer is deleted, along with `keylessModel()` and the guard's fifth
+  property. OpenCode Zen dropped the free models it was pinned to, so every run
+  with an eligible PR failed, and it had posted no comment since 2026-10-22.
+  `check-model-selection.sh` now enforces the raw-id, retired-knob and `evals/`
+  properties only. The `free` family and `AGENT_MODEL=free` are unchanged.
 
 ### Amendment: E6 (2026-07-28) — the per-PR eval is opt-in, not unreachable
 
@@ -1366,7 +1372,7 @@ otherwise.** Cost is a consequence of that rule, never the criterion.
 | `onboarding-evals-nightly.yml` | **Folded** (`push: branches: [main]` added) | The four isolated claims bisect the funnel `e2e.yml`'s single admission reports as one opaque red. Nothing in the merge set duplicates them. |
 | `rmpc-release-e2e-nightly.yml` | **Folded** | Nothing else proves a *released* rmpc binary drives the documented flow. Its "not every PR" rationale is about release-CDN flake on a **required PR gate**; push-to-`main` is not one. |
 | `nightly-fetchers.yml` | **Folded** | The per-PR suites for these surfaces are fully offline/mocked, so the live sweep is not duplicated. Same PR-only rationale as above. |
-| `contribution-advisory-reviewer.yml` | **Folded** | Nothing else reviews contribution-governance judgment on open PRs, and a merge is exactly when every open PR's diff has changed underneath it. Its `reviewed-head` dedupe now keys on "not a manual dispatch" so a push run re-reviews only PRs whose head moved. |
+| `contribution-advisory-reviewer.yml` | **Folded** | Nothing else reviews contribution-governance judgment on open PRs, and a merge is exactly when every open PR's diff has changed underneath it. Its `reviewed-head` dedupe now keys on "not a manual dispatch" so a push run re-reviews only PRs whose head moved. **Note 2026-11-27 (lucky, issue #1773):** the workflow is deleted. Its only triggers were `schedule` and `workflow_dispatch`, so the "Folded" claim never held. Judgment review stays with the PR reviewer. |
 
 `admission-eval-nightly.yml` (a seventh heavy schedule running a bespoke K=5
 sampled sweep) was **never created**: this decision supersedes #280, and PR #367
@@ -1465,7 +1471,8 @@ the set of *product test suites*, and false over the set of workflow files.
 a scheduled workflow with no merge-to-`main` counterpart. It is registered on
 `EXEMPT_FROM_MERGE_MIRROR` in `scripts/tests/unit/nightly-mirrors-merge-set.test.ts`
 next to `contribution-advisory-reviewer.yml`, with the justification carried in
-the entry. Its three checks are A (does the pinned `rmpc` release still publish
+the entry. (Note 2026-11-27, lucky, issue #1773: the reviewer is deleted, so
+this workflow is now the only exempt entry.) Its three checks are A (does the pinned `rmpc` release still publish
 the checksums the skill carries?), B (does the endpoint still serve a real
 procedure rather than a deprecation stub?) and C (does the served copy carry an
 unverified `| tar` install form?). B and C are code that MOVED off the merge
