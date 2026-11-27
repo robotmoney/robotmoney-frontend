@@ -419,9 +419,14 @@ steps:
     standing: ["SV.1"]
     host: "target"
     phase: "qa"
-    description: "Identity: /api/version and /version.json carry the release commit, no +dirty or +unknown; when the go's ref is the rc tag, /api/version carries it as tag (RM_BUILD_TAG)"
+    description: "Identity: /api/version carries the release commit, no +dirty or +unknown; when the go's ref is the rc tag, /version carries it as tag (RM_BUILD_TAG). /version.json answers clean but names the serving web release's commit, which is not compared (--api-only: the site step keeps the serving bundle, D81)"
     cmds:
-      - ["bun", "scripts/release/identity-check.ts", "--origin", "{publicOrigin}", "--commit", "{commit}", "--ref", "{ref}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
+      - ["bun", "scripts/release/identity-check.ts", "--origin", "{publicOrigin}", "--commit", "{commit}", "--ref", "{ref}", "--api-only", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
+    changedSince: "v0.11.1"
+    before:
+      description: "Identity: /api/version and /version.json carry the release commit, no +dirty or +unknown; when the go's ref is the rc tag, /api/version carries it as tag (RM_BUILD_TAG)"
+      cmds:
+        - ["bun", "scripts/release/identity-check.ts", "--origin", "{publicOrigin}", "--commit", "{commit}", "--ref", "{ref}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
     expectExit: 0
     receipts:
       - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "identity-check.json", "required": true}
@@ -1027,9 +1032,14 @@ steps:
     standing: ["SV.1"]
     host: "target"
     phase: "cutover"
-    description: "Identity: /api/version and /version.json carry the release commit, no +dirty or +unknown; when the go's ref is the rc tag, /api/version carries it as tag (RM_BUILD_TAG)"
+    description: "Identity: /api/version carries the release commit, no +dirty or +unknown; when the go's ref is the rc tag, /version carries it as tag (RM_BUILD_TAG). /version.json answers clean but names the serving web release's commit, which is not compared (--api-only: the site step keeps the serving bundle, D81)"
     cmds:
-      - ["bun", "scripts/release/identity-check.ts", "--origin", "{publicOrigin}", "--commit", "{commit}", "--ref", "{ref}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
+      - ["bun", "scripts/release/identity-check.ts", "--origin", "{publicOrigin}", "--commit", "{commit}", "--ref", "{ref}", "--api-only", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
+    changedSince: "v0.11.1"
+    before:
+      description: "Identity: /api/version and /version.json carry the release commit, no +dirty or +unknown; when the go's ref is the rc tag, /api/version carries it as tag (RM_BUILD_TAG)"
+      cmds:
+        - ["bun", "scripts/release/identity-check.ts", "--origin", "{publicOrigin}", "--commit", "{commit}", "--ref", "{ref}", "--receipt-dir", "{home}/.local/state/robotmoney-release/{target}/{runTs}"]
     expectExit: 0
     receipts:
       - {"dir": "{home}/.local/state/robotmoney-release/{target}/{runTs}", "pattern": "identity-check.json", "required": true}

@@ -145,6 +145,13 @@
     "reason": "A Caddy access-log line (website-server/Caddyfile `log { format json }`, the immutable website-server of issue 1627) for a request the website answered below 500. Caddy writes an access line at level info for every status under 500 and at level error for a 5xx, and the level, logger and message lead the line before any client-supplied field, so the class is read from that prefix and never from words in the request: a URI like ?state=failed or a scanner's /error.php is the client's, as with expected-nginx-access-line-2xx-3xx and expected-website-access-line-4xx. Held to the website-server container. A 5xx access line (level error), a proxy error (logger http.log.error) and any other Caddy line stay unclassified."
   },
   {
+    "id": "expected-caddy-archive-record-building-503",
+    "match": "^\\{\"level\":\"error\",\"ts\":[0-9.e+-]+,\"logger\":\"http\\.log\\.access(\\.[a-z0-9_]+)?\",\"msg\":\"handled request\",\"request\":\\{\"method\":\"(GET|HEAD)\",\"host\":\"[^\"]*\",\"uri\":\"/api/public/analytics/archive/csv/\\d{4}-\\d{2}-\\d{2}T\\d{6}Z/backup\\.json\"\\},\"status\":503\\}$",
+    "source": "website-server",
+    "class": "expected",
+    "reason": "A Caddy 5xx access line for one designed answer: GET archive/csv/<backup>/backup.json answers 503 with Retry-After 10 when the backup's record is still being built after RECORD_WAIT_MS (4 s) (backend/src/api/routes/public-analytics.ts archiveTarget). The first read of a new day's backup builds its record, so the first client after the day cut gets this 503 and its retry gets 200. Seen twice on production on 2026-11-27 at 18:51 UTC, from the v0.11.0 cutover's own C24 SDK quickstart (Bun user agent) fetching 2026-11-27T000000Z (issue 1754). The gate reads a Caddy access line as its projection (log-inventory.ts caddyAccessProjection: level, ts, logger, msg, method, host, uri, status), so the status is read, and JSON.stringify escapes every client value, so no client word can supply a field. Held to the website-server container, to the backup record path and to 503. Any other 5xx, any other path, and an archive data file stay unclassified."
+  },
+  {
     "id": "known-api-slow-request",
     "match": "\\[api\\] slow request:",
     "class": "known-issue",
@@ -309,6 +316,20 @@
     "match": "\\[extract\\] FRED \\S+ FAILED: The operation timed out",
     "class": "external",
     "reason": "A FRED series fetch timing out; the extractor keeps the persisted real floor for that series."
+  },
+  {
+    "id": "external-fred-series-http-error",
+    "match": "^\\[extract\\] fetch \\S+ \\(fred\\) FAILED: (404 Not Found|5[0-9][0-9] [A-Za-z ]+) for https://fred\\.stlouisfed\\.org/graph/fredgraph\\.csv\\?id=[A-Z0-9_]+&cosd=\\d{4}-\\d{2}-\\d{2}$",
+    "source": "analytics-producer",
+    "class": "external",
+    "reason": "FRED answering a series download with a 404 or a 5xx. backend/src/analytics/access/data-source.ts safe() drops only that series for the run and the extractor keeps its persisted real floor, as with external-fred-series-timeout. Seen on production between 2026-11-26 and 2026-11-27: DFII10, MTSDS133FMS and T10Y2Y each 404 on 2 of about 13 ticks, and the same URLs answered 200 again (issue 1754). Held to the analytics-producer, to the fredgraph.csv URL shape and to 404 and 5xx: a 400 or 403 says the request is wrong and stays unclassified."
+  },
+  {
+    "id": "external-shiller-multpl-unreachable",
+    "match": "^\\[shiller\\] datahub fallback only: \\d+ rows \\(multpl failed: (ECONNREFUSED|ECONNRESET|ETIMEDOUT|The operation timed out|HTTP 5[0-9][0-9])",
+    "source": "analytics-producer|worker-analytics",
+    "class": "external",
+    "reason": "multpl.com, the Shiller CAPE primary (packages/analyst-sdk/src/extract/shiller.ts fetchShillerCape), cannot be reached, so the series comes from the datahub fallback alone; it is logged at warn and nothing synthetic is served. Seen on every production tick from 2026-11-26 (ECONNREFUSED; multpl.com also refused from outside production on 2026-11-27, issue 1754). Held to a connection failure, a timeout or a 5xx: '0 rows' (the page shape changed) stays unclassified, and both sources failing is a different line."
   },
   {
     "id": "external-participant-take-timeout",

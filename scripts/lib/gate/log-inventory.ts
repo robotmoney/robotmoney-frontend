@@ -87,13 +87,33 @@ export function normalizeLogLine(line: string): string {
     .slice(0, 240);
 }
 
+/**
+ * PURE. A Caddy JSON access line (website-server, issue 1627) reduced to the fields a rule reads:
+ * level, ts, logger, msg, the request's method, host and uri, and the status. Its status sits
+ * after the client's headers, past the 400-character sample, so without this a rule could not
+ * tell a 503 from a 502 (issue 1754). JSON.stringify escapes every client value, so a client's
+ * words cannot supply a field. `status` joins the group key after normalisation, which turns every
+ * number into <n>, so a 502 never shares a 503's group. Any other line is null.
+ */
+export function caddyAccessProjection(text: string): { text: string; status: string } | null {
+  const t = text.trim();
+  if (!t.startsWith('{"level":') || !t.includes('"msg":"handled request"')) return null;
+  let d: { level?: unknown; ts?: unknown; logger?: unknown; msg?: unknown; status?: unknown; request?: { method?: unknown; host?: unknown; uri?: unknown } };
+  try { d = JSON.parse(t); } catch { return null; }
+  if (typeof d.logger !== "string" || !d.logger.startsWith("http.log.access") || d.msg !== "handled request") return null;
+  const r = d.request ?? {};
+  return { text: JSON.stringify({ level: d.level, ts: d.ts, logger: d.logger, msg: d.msg, request: { method: r.method, host: r.host, uri: r.uri }, status: d.status }), status: String(d.status) };
+}
+
 /** PURE. Group one source's error- and warning-like lines. */
 export function inventory(source: string, lines: readonly RawLine[]): InventoryGroup[] {
   const groups = new Map<string, InventoryGroup>();
-  for (const { ts, text } of lines) {
-    const level = lineLevel(text);
+  for (const { ts, text: raw } of lines) {
+    const level = lineLevel(raw);
     if (!level) continue;
-    const key = normalizeLogLine(text);
+    const caddy = caddyAccessProjection(raw);
+    const text = caddy?.text ?? raw;
+    const key = caddy ? `${normalizeLogLine(text)} [status ${caddy.status}]` : normalizeLogLine(text);
     const id = `${level}\u0001${key}`;
     const g = groups.get(id);
     if (g) {

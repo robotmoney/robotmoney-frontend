@@ -1152,13 +1152,30 @@ describe("host guards, the rolling cutover and identity (C05-migrate, C14-verify
   test("identity --site-only: the site names the release commit; the running api's commit and tag are not compared", () => {
     const site = `{"commit":"${SHA.slice(0, 8)}"}`;
     const runningApi = JSON.stringify({ api: "0.5.1", commit: OTHER_SHA });
-    expect(identityProblems(runningApi, null, site, SHA, TAG, true)).toEqual([]);
-    expect(identityProblems(runningApi, null, site, SHA, SHA, true)).toEqual([]);
+    expect(identityProblems(runningApi, null, site, SHA, TAG, "site")).toEqual([]);
+    expect(identityProblems(runningApi, null, site, SHA, SHA, "site")).toEqual([]);
     // red controls: without the flag the same bodies fail; the flag still needs the site's commit, a served api and no +dirty.
     expect(identityProblems(runningApi, null, site, SHA, SHA).join()).toContain(`/api/version commit is ${OTHER_SHA}`);
-    expect(identityProblems(runningApi, null, `{"commit":"${OTHER_SHA.slice(0, 8)}"}`, SHA, TAG, true)).toHaveLength(1);
-    expect(identityProblems(null, null, site, SHA, TAG, true)).toEqual(["/api/version did not answer 200"]);
-    expect(identityProblems(JSON.stringify({ api: "0.5.1", commit: `${OTHER_SHA}+dirty` }), null, site, SHA, TAG, true)).toEqual(["/api/version carries +dirty or +unknown"]);
+    expect(identityProblems(runningApi, null, `{"commit":"${OTHER_SHA.slice(0, 8)}"}`, SHA, TAG, "site")).toHaveLength(1);
+    expect(identityProblems(null, null, site, SHA, TAG, "site")).toEqual(["/api/version did not answer 200"]);
+    expect(identityProblems(JSON.stringify({ api: "0.5.1", commit: `${OTHER_SHA}+dirty` }), null, site, SHA, TAG, "site")).toEqual(["/api/version carries +dirty or +unknown"]);
+  });
+
+  // Kitchen-sink (issue 1754): a platform release keeps the serving web bundle, so --api-only compares
+  // /api/version's commit and /version's tag; /version.json must answer clean with a commit, which is not compared.
+  test("identity --api-only: the api names the release commit and tag; the serving web bundle's commit is not compared", () => {
+    const api = JSON.stringify({ api: "0.5.12", commit: SHA });
+    const version = JSON.stringify({ commit: SHA, tag: TAG });
+    const webSite = `{"name":"@robotmoney/web-client","version":"0.4.0","commit":"${OTHER_SHA}"}`;
+    expect(identityProblems(api, version, webSite, SHA, TAG, "api")).toEqual([]);
+    expect(identityProblems(api, null, webSite, SHA, SHA, "api")).toEqual([]);
+    // red controls: the default scope fails on the same site; --api-only still compares the api and the tag.
+    expect(identityProblems(api, version, webSite, SHA, TAG).join()).toContain("does not name");
+    expect(identityProblems(JSON.stringify({ api: "0.5.12", commit: OTHER_SHA }), version, webSite, SHA, TAG, "api")).toEqual([`/api/version commit is ${OTHER_SHA}, expected ${SHA}`]);
+    expect(identityProblems(api, JSON.stringify({ commit: SHA, tag: "v0.0.1-rc.0" }), webSite, SHA, TAG, "api")).toHaveLength(1);
+    expect(identityProblems(api, version, null, SHA, TAG, "api")).toEqual(["/version.json did not answer 200"]);
+    expect(identityProblems(api, version, `{"commit":"${OTHER_SHA}+dirty"}`, SHA, TAG, "api")).toEqual(["/version.json carries +dirty or +unknown"]);
+    expect(identityProblems(api, version, `{"version":"0.4.0"}`, SHA, TAG, "api")).toEqual(["/version.json commit is undefined, not a commit"]);
   });
 
   // Issue 1613: {windowStartIso} is the run's probe-start step's start, from the journal, for stage and production.

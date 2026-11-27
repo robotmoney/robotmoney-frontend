@@ -233,22 +233,26 @@ describe("the web template", () => {
         expect(s).toEqual(k);
         continue;
       }
-      const { cmds, description, before, ...rest } = s;
-      const { cmds: kCmds, description: _kDescription, before: kBefore, ...kRest } = k;
+      const { cmds, description, before, changedSince, ...rest } = s;
+      const { cmds: kCmds, description: _kDescription, before: kBefore, changedSince: kChangedSince, ...kRest } = k;
       expect(rest).toEqual(kRest);
+      if (SITE_ONLY.includes(s.id)) {
+        // Kitchen-sink's identity step changed to --api-only (issue 1754); the web step it mirrors did not.
+        expect(before).toBeUndefined();
+        expect(kChangedSince).toBe("v0.11.1");
+        const flag = kCmds[0]!.indexOf("--api-only");
+        expect(flag).toBeGreaterThan(0);
+        expect(cmds).toEqual([[...kCmds[0]!.slice(0, flag), "--site-only", ...kCmds[0]!.slice(flag + 1)]]);
+        continue;
+      }
       // The step as earlier releases ran it (changedSince, issue 1684) carries the same adjustment.
+      expect(changedSince).toBe(kChangedSince);
       expect(before === undefined).toBe(kBefore === undefined);
       const pairs: [readonly (readonly string[])[], readonly (readonly string[])[]][] = [[cmds, kCmds], ...(before && kBefore ? [[before.cmds, kBefore.cmds] as [readonly (readonly string[])[], readonly (readonly string[])[]]] : [])];
       for (const [c, kc] of pairs) {
-        if (SITE_ONLY.includes(s.id)) {
-          // the same step but for --site-only before --receipt-dir.
-          const flag = kc[0]!.indexOf("--receipt-dir");
-          expect(c).toEqual([[...kc[0]!.slice(0, flag), "--site-only", ...kc[0]!.slice(flag)]]);
-        } else {
-          // the same step but for --since {windowStartIso} before --report (issue 1613).
-          const flag = kc[0]!.indexOf("--report");
-          expect(c).toEqual([[...kc[0]!.slice(0, flag), "--since", "{windowStartIso}", ...kc[0]!.slice(flag)]]);
-        }
+        // the same step but for --since {windowStartIso} before --report (issue 1613).
+        const flag = kc[0]!.indexOf("--report");
+        expect(c).toEqual([[...kc[0]!.slice(0, flag), "--since", "{windowStartIso}", ...kc[0]!.slice(flag)]]);
       }
       expect(description).toContain(SITE_ONLY.includes(s.id) ? "site only" : "window start");
     }

@@ -2,7 +2,7 @@
 // scripts/release/identity-check.ts — release step Q26-verify-version/C14-verify-version, run ON THE TARGET HOST.
 // Standing check SV.1.
 //
-//   bun scripts/release/identity-check.ts --origin <https://host> --commit <sha> [--ref <tag|sha>] [--site-only] --receipt-dir <dir>
+//   bun scripts/release/identity-check.ts --origin <https://host> --commit <sha> [--ref <tag|sha>] [--site-only | --api-only] --receipt-dir <dir>
 //
 // GET <origin>/api/version must carry the release commit; GET
 // <origin>/version.json must name it too. Neither may say `+dirty` or
@@ -17,6 +17,14 @@
 // the running release's commit and /version its tag. Then only /version.json
 // must name the release commit; /api/version must still answer 200 as JSON
 // with no +dirty or +unknown, and neither its commit nor /version's tag is compared.
+//
+// `--api-only` is the kitchen-sink template's, the mirror case. Since the web
+// split (D54, D81) a platform release keeps the bundle the site serves
+// (P/Q site step: `bun smoke:web --bundle serving`), so /version.json names the
+// web release's commit (a `web-vA.B.C` tag on web/releases-A.B.x), never the
+// platform's. Then /api/version and /version are compared as above; /version.json
+// must still answer 200 as JSON naming a commit, with no +dirty or +unknown, and
+// its commit is not compared. v0.11.0's C14 stopped on this (issue 1754).
 //
 // A signed bundle's /version.json names the commit the bundle was BUILT at. A platform release that deploys
 // one (v0.9.0's first rollout, scripts/release/platform-bundle.ts) builds it once, at the QA commit stage
@@ -33,7 +41,10 @@ import { notCheckOnly } from "./journal.ts";
  * ref; a tag must be served as `tag` at /version (`versionText`). A commit ref
  * (stage) compares no tag, so /version is not read.
  */
-export function identityProblems(apiText: string | null, versionText: string | null, siteText: string | null, commit: string, ref: string = commit, siteOnly = false, sameSite: (siteCommit: string) => boolean = () => false): string[] {
+export type IdentityScope = "all" | "site" | "api";
+
+export function identityProblems(apiText: string | null, versionText: string | null, siteText: string | null, commit: string, ref: string = commit, scope: IdentityScope = "all", sameSite: (siteCommit: string) => boolean = () => false): string[] {
+  const siteOnly = scope === "site";
   const out: string[] = [];
   const tag = ref === commit || siteOnly ? undefined : ref;
   if (apiText === null) out.push("/api/version did not answer 200");
@@ -59,7 +70,9 @@ export function identityProblems(apiText: string | null, versionText: string | n
     try { site = JSON.parse(siteText) as { commit?: unknown }; } catch { out.push("/version.json is not JSON"); }
     const siteCommit = site && typeof site.commit === "string" ? site.commit.replace(/\+.*$/, "") : "";
     const hex = siteCommit.length >= 7 && /^[0-9a-f]+$/.test(siteCommit);
-    if (site && !(hex && (commit.startsWith(siteCommit) || sameSite(siteCommit)))) {
+    if (site && scope === "api") {
+      if (!hex) out.push(`/version.json commit is ${String(site.commit)}, not a commit`);
+    } else if (site && !(hex && (commit.startsWith(siteCommit) || sameSite(siteCommit)))) {
       out.push(`/version.json commit is ${String(site.commit)}, which does not name ${commit} or a commit whose site tree equals it`);
     }
     if (/\+(dirty|unknown)/.test(siteText)) out.push("/version.json carries +dirty or +unknown");
@@ -93,19 +106,26 @@ async function main(): Promise<number> {
   const ref = flag("--ref") ?? commit;
   const receiptDir = flag("--receipt-dir");
   const siteOnly = process.argv.includes("--site-only");
+  const apiOnly = process.argv.includes("--api-only");
+  const scope: IdentityScope = siteOnly ? "site" : apiOnly ? "api" : "all";
+  if (siteOnly && apiOnly) {
+    console.error("[identity-check] --site-only and --api-only exclude each other");
+    return 2;
+  }
   if (!origin || !commit || !/^[0-9a-f]{40}$/.test(commit) || !receiptDir || !ref) {
-    console.error("usage: bun scripts/release/identity-check.ts --origin <url> --commit <sha> [--ref <tag|sha>] [--site-only] --receipt-dir <dir>");
+    console.error("usage: bun scripts/release/identity-check.ts --origin <url> --commit <sha> [--ref <tag|sha>] [--site-only | --api-only] --receipt-dir <dir>");
     return 2;
   }
   const apiText = await get(`${origin}/api/version`);
   const versionText = await get(`${origin}/version`);
   const siteText = await get(`${origin}/version.json`);
-  const problems = identityProblems(apiText, versionText, siteText, commit, ref, siteOnly, (siteCommit) => siteTreeMatches(siteCommit, commit));
+  const problems = identityProblems(apiText, versionText, siteText, commit, ref, scope, (siteCommit) => siteTreeMatches(siteCommit, commit));
   mkdirSync(receiptDir, { recursive: true, mode: 0o700 });
   const file = join(receiptDir, "identity-check.json");
-  writeFileSync(file, `${JSON.stringify({ step: "verify-version", origin, commit, ref, siteOnly, api: apiText, version: versionText, site: siteText, problems, at: new Date().toISOString() }, null, 2)}\n`, { mode: 0o600 });
+  writeFileSync(file, `${JSON.stringify({ step: "verify-version", origin, commit, ref, scope, api: apiText, version: versionText, site: siteText, problems, at: new Date().toISOString() }, null, 2)}\n`, { mode: 0o600 });
   console.log(`[identity-check] ${origin}/api/version: ${apiText ?? "(no answer)"}`);
   console.log(`[identity-check] ${origin}/version: ${versionText ?? "(no answer)"}`);
+  console.log(`[identity-check] ${origin}/version.json: ${siteText ?? "(no answer)"}`);
   console.log(`[identity-check] receipt: ${file}`);
   for (const p of problems) console.error(`[identity-check] FAIL: ${p}`);
   return problems.length === 0 ? 0 : 1;

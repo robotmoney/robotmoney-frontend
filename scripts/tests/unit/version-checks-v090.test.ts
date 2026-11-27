@@ -310,8 +310,8 @@ describe("identity-check: a signed bundle built at the QA commit names productio
   const api = JSON.stringify({ api: "x", commit: RC });
   test("/version.json naming the QA commit passes only when the checkout says its site tree equals the rc's", () => {
     const site = JSON.stringify({ version: "0.1.0", commit: "aaaaaaa" });
-    expect(identityProblems(api, null, site, RC, RC, false, (c) => c === "aaaaaaa")).toEqual([]);
-    expect(identityProblems(api, null, site, RC, RC, false, () => false).join()).toContain("does not name");
+    expect(identityProblems(api, null, site, RC, RC, "all", (c) => c === "aaaaaaa")).toEqual([]);
+    expect(identityProblems(api, null, site, RC, RC, "all", () => false).join()).toContain("does not name");
     expect(identityProblems(api, null, site, RC).join()).toContain("does not name");
     expect(identityProblems(api, null, JSON.stringify({ commit: "bbbbbbb" }), RC)).toEqual([]);
   });
