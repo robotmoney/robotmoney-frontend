@@ -143,7 +143,7 @@ jobs:
       - name: Purity and suite-guard tests ran (issue 1421)
         run: >-
           bun scripts/checks/assert-junit-suites.ts /tmp/test-unit.junit.xml
-          scripts/tests/unit/analyst-sdk-purity.test.ts:55
+          scripts/tests/unit/analyst-sdk-purity.test.ts:71
           scripts/tests/unit/assert-junit-suites.test.ts:9
       # Issue 1498: each byte-for-byte replay sentence says that payloads
       # published before D78 replay up to rounding.
@@ -185,6 +185,21 @@ jobs:
           bun scripts/checks/assert-junit-suites.ts /tmp/test-unit.junit.xml
           scripts/tests/unit/release-runbook.test.ts:42
           scripts/tests/unit/release-breaking-cutover.test.ts:31
+      # Issue 1765: the analytics engine guards ran. Each plants a violation in
+      # a temporary file or map and expects it named: one published-row
+      # builder and no literal artifact kind check outside the SDK, the one
+      # preparation seam (D59), the SDK's purity and its node/ fs edge, the
+      # README's commands, the SDK release checks, and the analytics docs
+      # guard. Each minimum is the count measured on the branch that added it.
+      - name: Analytics engine guards ran (issue 1765)
+        run: >-
+          bun scripts/checks/assert-junit-suites.ts /tmp/test-unit.junit.xml
+          scripts/tests/unit/analyst-sdk-one-row-builder.test.ts:22
+          scripts/tests/unit/regime-seam-guard.test.ts:14
+          scripts/tests/unit/analyst-sdk-purity.test.ts:71
+          scripts/tests/unit/analyst-sdk-readme-commands.test.ts:22
+          scripts/tests/unit/sdk-checks.test.ts:32
+          scripts/tests/unit/check-docs-analytics.test.ts:12
       - name: Empty test selection is red
         run: |
           if bun test scripts/tests/__no_such_dir__ >/dev/null 2>&1; then

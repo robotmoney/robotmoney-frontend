@@ -3,9 +3,13 @@
 // universe through bin/universe-option.ts (issue 1400): `--universe <path>`
 // and `--allow-outside-universe`.
 import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { periodStats, simulatePortfolio } from "../src/analyze/backtest.ts";
+import {
+  BACKTEST_FILL, CASH_RATE_NAMES, PortfolioError, backtestAxis, checkBacktestOptions, checkPortfolio, dateAxis, isDay, portfolioFill, portfolioSeries,
+} from "../src/analyze/backtest-portfolio.ts";
+import { loadUniverse } from "../src/allocate/universe.ts";
 import { parseInput } from "../src/input/load.ts";
 
 setDefaultTimeout(120_000);
@@ -93,5 +97,80 @@ describe("bun run backtest", () => {
     expect(outs[1]!.stderr).toMatch(/--from given more than once/);
     expect(outs[3]!.stderr).toMatch(/yield series/);
     expect(outs[4]!.stderr).toMatch(/missing price coverage/);
+  });
+});
+
+// Issue 1765: the command is argument parsing over the pure module
+// src/analyze/backtest-portfolio.ts. The module's calls give the command's
+// output byte for byte, and the moved definitions live only there.
+describe("bin/backtest.ts is argument parsing over src/analyze/backtest-portfolio.ts (issue 1765)", () => {
+  test("the pure calls reproduce the command's stdout byte for byte", async () => {
+    const r = await run([portfolio("pure.json", { BTC: 10, GOLD: 6, cash: 84 }), "prices.csv", "--cost-bps", "25", "--full"]);
+    expect(r.code, r.stderr).toBe(0);
+    const p = checkPortfolio({ BTC: 10, GOLD: 6, cash: 84 });
+    const { costBps } = checkBacktestOptions({ costBps: "25" });
+    const universe = loadUniverse();
+    const { weights, prices, cashRate } = portfolioSeries(p, universe, parseInput(lines.join("\n")).history);
+    const { axis } = backtestAxis(prices, {});
+    const sim = simulatePortfolio(axis, axis.map(() => weights), prices, cashRate, { costBps, fill: portfolioFill(Object.keys(prices)) });
+    const { _daily, ...stats } = periodStats(sim.values, sim.startDate, sim.endDate, { returns: sim.returns, excess: sim.excess, trades: sim.trades });
+    const out = { portfolio: p, universe: { exported: universe.exported, findings: 0 }, stats, daily: _daily, returns: sim.returns, trades: sim.trades };
+    expect(r.stdout).toBe(`${JSON.stringify(out, null, 2)}\n`);
+  });
+
+  test("the checks refuse with PortfolioError, a RangeError; the command still prints it as the usage error it was", async () => {
+    expect(new PortfolioError("x")).toBeInstanceOf(RangeError);
+    expect(() => checkPortfolio([1])).toThrow(PortfolioError);
+    expect(() => checkPortfolio({ BTC: 10, cash: 80 })).toThrow(/^portfolio: weights must sum to 100, got 90$/);
+    expect(() => checkPortfolio({ BTC: "x", cash: 90 })).toThrow(/BTC must be a finite nonnegative percent, got "x"/);
+    expect(() => checkBacktestOptions({ costBps: "-3" })).toThrow(/--cost-bps must be a nonnegative number, got "-3"/);
+    expect(() => checkBacktestOptions({ from: "2025-02-30" })).toThrow(/--from must be a real YYYY-MM-DD date/);
+    expect(checkBacktestOptions({ costBps: "2.5", from: "2025-01-01", to: "2025-01-31" })).toEqual({ costBps: 2.5 });
+    expect(checkBacktestOptions({})).toEqual({});
+    const r = await run([portfolio("sum2.json", { BTC: 10, cash: 80 }), "prices.csv"]);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toStartWith("UsageError: portfolio: weights must sum to 100, got 90\n");
+  });
+
+  test("a holding is priced from its universe asset's series, else its own; cash earns the first CASH_RATE_NAMES series held", () => {
+    const pt = (v: number) => [{ date: "2025-01-01", value: v }];
+    const history = { "yahoo:BTC-USD": pt(1), "yahoo:WIDGET": pt(2), "fred:DTB3": [], "backtest:DTB3": pt(4) };
+    const got = portfolioSeries({ BTC: 50, "yahoo:WIDGET": 20, cash: 30 }, loadUniverse(), history);
+    expect(got.weights).toEqual({ BTC: 0.5, "yahoo:WIDGET": 0.2, cash: 0.3 });
+    expect(got.prices.BTC).toBe(history["yahoo:BTC-USD"]);
+    expect(got.prices["yahoo:WIDGET"]).toBe(history["yahoo:WIDGET"]);
+    expect(got.cashRate).toBe(history["backtest:DTB3"]);
+    expect(CASH_RATE_NAMES).toEqual(["TBILL3M", "fred:DTB3", "backtest:DTB3"]);
+    expect(portfolioSeries({ cash: 100 }, loadUniverse(), {}).cashRate).toEqual([]);
+    expect(() => portfolioSeries({ AAVE: 10, cash: 90 }, loadUniverse(), history)).toThrow(PortfolioError);
+    expect(() => portfolioSeries({ AAVE: 10, cash: 90 }, loadUniverse(), history)).toThrow(/is priced by a yield series/);
+    let missing: unknown;
+    try {
+      portfolioSeries({ GOLD: 10, cash: 90 }, loadUniverse(), history);
+    } catch (e) {
+      missing = e;
+    }
+    expect(missing).toBeInstanceOf(Error);
+    expect(missing).not.toBeInstanceOf(PortfolioError);
+    expect((missing as Error).message).toMatch(/^missing input: GOLD needs the price series yahoo:GLD/);
+    expect(portfolioFill(["BTC"])).toEqual({ cash: BACKTEST_FILL, BTC: BACKTEST_FILL });
+    expect(BACKTEST_FILL).toEqual({ kind: "forward", maxAgeDays: null, reason: "Reproduces the former command-line carry" });
+  });
+
+  test("the window and its axis: the given days, else the priced days; a calendar axis with real days only", () => {
+    const prices = { A: [{ date: "2025-01-03", value: 1 }, { date: "2025-01-05", value: 1 }], B: [{ date: "2025-01-02", value: 1 }] };
+    expect(backtestAxis(prices, {})).toEqual({ from: "2025-01-02", to: "2025-01-05", axis: ["2025-01-02", "2025-01-03", "2025-01-04", "2025-01-05"] });
+    expect(backtestAxis({}, { from: "2025-01-01", to: "2025-01-02" }).axis).toEqual(["2025-01-01", "2025-01-02"]);
+    expect(() => backtestAxis({}, {})).toThrow(/^an all-cash portfolio needs --from and --to$/);
+    expect(() => backtestAxis(prices, { from: "2025-01-04", to: "2025-01-03" })).toThrow(/^--from 2025-01-04 is after --to 2025-01-03$/);
+    expect(dateAxis("2024-02-27", "2024-03-01")).toEqual(["2024-02-27", "2024-02-28", "2024-02-29", "2024-03-01"]);
+    expect([isDay("2024-02-29"), isDay("2025-02-29"), isDay("2025-1-01"), isDay("")]).toEqual([true, false, false, false]);
+  });
+
+  test("bin/backtest.ts holds none of the moved definitions", () => {
+    const bin = readFileSync(BIN, "utf8");
+    for (const name of ["CASH_RATE_NAMES", "BACKTEST_FILL", "isDay", "dateAxis"]) expect(bin, name).not.toMatch(new RegExp(`\\b(const|function)\\s+${name}\\b`));
+    expect(bin).not.toContain("defillama-yields:");
+    expect(bin).not.toContain("pct / 100");
   });
 });

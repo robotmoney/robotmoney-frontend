@@ -2,9 +2,15 @@
 // REGIME_RULES.v3 and REGIME_RULES.v4 are the per-version tables, so a run given
 // a preset equals the run given its version; one changed rule changes only what
 // that rule decides; and runRegime's in-sample end can follow the version computed.
+// Issue 1765: runRegime takes the rules, and rules.keptHistory picks the engine
+// (D-g); the main line is computed once when its panels are ALL_PANELS (D-e).
+// A model value's history picks the engine the same way, through runModel and
+// through runRegime({ model }); a history other than recompute or kept is a
+// RangeError (AC 7).
 import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { join } from "node:path";
 import {
+  computeKeptRegime,
   computeRegime,
   knowledgeTimeHistory,
   latestCompleteDay,
@@ -16,6 +22,7 @@ import {
   requireComplete,
   runRegime,
   toHistory,
+  ALL_PANELS,
   PANELS,
   REGIME_ADOPTION_DATE,
   REGIME_COMPOSITE_NORMALISATION,
@@ -28,10 +35,17 @@ import {
   REGIME_RULES,
   REGIME_VERSIONS,
   REGIME_WEIGHT_REFRESH,
+  MODELS,
+  runModel,
+  type RegimeModel,
   type RegimeRules,
   type RegimeVersion,
+  type RawIndicatorHistory,
   type RunOptions,
 } from "../src/index.ts";
+import { ratioDeclarationsFor, ratiosFromLegs } from "../src/transform/ratios.ts";
+import { resolveInputHistory } from "../src/series-ids.ts";
+import { seriesMappingFor, storedUnderFor } from "../src/model/index.ts";
 
 setDefaultTimeout(120_000);
 
@@ -178,15 +192,167 @@ describe("runRegime in-sample end (issue 1751)", () => {
     expect(split({ inSampleEnd: "computed-version" }).run).toEqual(split({}).run);
   });
 
-  test("an unknown RunOptions key or value is a RangeError naming it", () => {
+  test("computed-version splits on the adoption date of the rules in force (issue 1765)", () => {
+    const { date, composite } = split({ version: "v4", rules: { ...REGIME_RULES.v4, adoptionDate: "2025-01-01" }, inSampleEnd: "computed-version" });
+    expect(date).toBe("2025-01-01");
+    expect(composite.in_sample.end_date).toBe("2025-01-01");
+    // current-version keeps the current version's adoption date whatever the rules.
+    expect(split({ version: "v4", rules: { ...REGIME_RULES.v4, adoptionDate: "2025-01-01" } }).date).toBe("2026-11-17");
+  });
+
+  test("an unknown RunOptions key or value is a RangeError naming it; a full rules object is a known option", () => {
     const bad = (o: unknown, field: RegExp) => {
       const call = () => runRegime(raw, o as RunOptions);
       expect(call).toThrow(RangeError);
       expect(call).toThrow(field);
     };
     bad({ insampleEnd: "computed-version" }, /unknown option "insampleEnd"/);
-    bad({ rules: REGIME_RULES.v3 }, /unknown option "rules"/);
+    // Issue 1765: rules is a known option, checked whole by regimeRulesOf.
+    expect(requireComplete(runRegime(raw, { version: "v3", rules: REGIME_RULES.v3 }))).toEqual(requireComplete(runRegime(raw, { version: "v3" })));
+    bad({ rules: { ...REGIME_RULES.v4, labelCut: "bogus" } }, /rules\.labelCut/);
+    bad({ rules: "v4" }, /rules must be a RegimeRules object/);
     bad({ inSampleEnd: "v3" }, /inSampleEnd/);
     bad({ storedOnlyRatio: "warn" }, /storedOnlyRatio/);
+  });
+});
+
+// The input runRegime hands its engine under version v4: storage names resolved
+// and each ratio set from its legs as the rules' knowledgeTime declares.
+const runInputOf = (rules: RegimeRules): RawIndicatorHistory =>
+  ratiosFromLegs(raw, resolveInputHistory(raw, seriesMappingFor("v4"), storedUnderFor("v4")), ratioDeclarationsFor(rules));
+
+// v4 under rules the kept engine accepts: calendar-day windows, labels cut on
+// the series, a daily refit, and keptHistory.
+const KEPT_V4: RegimeRules = {
+  ...REGIME_RULES.v4,
+  observationWindows: false,
+  labelCut: "series",
+  weightRefresh: { ...REGIME_RULES.v4.weightRefresh, intervalDays: 1 },
+  keptHistory: true,
+};
+const { keptHistory: _kept, ...RECOMPUTE_V4 } = KEPT_V4;
+
+describe("rules pick the engine (issue 1765, D-g)", () => {
+  // Computed once, inside the first test that reads it.
+  let keptMemo: ReturnType<typeof requireComplete> | undefined;
+  const keptRunOf = () => (keptMemo ??= requireComplete(runRegime(raw, { version: "v4", rules: KEPT_V4, asof, start: START })));
+
+  test("custom rules with keptHistory on version v4 run the kept engine, equal day for day to computeKeptRegime", () => {
+    expect(REGIME_KEPT_HISTORY.v4).toBe(false);
+    const keptRun = keptRunOf();
+    const direct = computeKeptRegime(runInputOf(KEPT_V4), { version: "v4", rules: KEPT_V4, asof, start: START });
+    expect(keptRun.version).toBe("v4");
+    expect(keptRun.dateAxis).toEqual(direct.dateAxis);
+    expect(keptRun.result.composite).toEqual(direct.record.composite);
+    expect(keptRun.result.regime).toEqual(direct.record.regime);
+    for (const p of PANELS) expect(keptRun.result.panelIndices[p]).toEqual(direct.record.panelIndices[p]!);
+    expect(keptRun.result.compositeMean).toEqual(direct.record.compositeMean);
+    expect(keptRun.result.weightsByPanel).toEqual(direct.fit.weightsByPanel);
+    // The kept engine computes no trailing percentile of the composite.
+    expect(keptRun.result.compositePercentile.every(Number.isNaN)).toBe(true);
+    expect(keptRun.result.regime.filter((l) => l != null).length).toBeGreaterThan(1000);
+  });
+
+  test("the same rules without keptHistory run the recompute engine, which reads them", () => {
+    const rec = requireComplete(runRegime(raw, { version: "v4", rules: RECOMPUTE_V4, asof, start: START }));
+    const prepared = prepareRegimeInputs(runInputOf(RECOMPUTE_V4), { start: START, asof, version: "v4", rules: RECOMPUTE_V4 });
+    const direct = computeRegime(prepared.transformed, prepared.dateAxis, PANELS, prepared.ages, undefined, "v4", undefined, undefined, { rules: RECOMPUTE_V4 }, prepared.carried);
+    expect(rec.result).toEqual(direct);
+    // The recompute engine keeps the trailing percentile; the kept engine has none and states its mean.
+    expect(rec.result.compositePercentile.filter(Number.isFinite).length).toBeGreaterThan(1000);
+    expect(rec.result.compositeMean).toBeUndefined();
+    expect(keptRunOf().result.compositeMean).toBeDefined();
+    // The rules are read, not the v4 preset: the daily refit gives other weights.
+    const preset = requireComplete(runRegime(raw, { version: "v4", asof, start: START }));
+    expect(rec.result.panelIndices).not.toEqual(preset.result.panelIndices);
+  });
+
+  test("a kept rules object whose weightRefresh.intervalDays is not 1 is a RangeError", () => {
+    const every21 = { ...KEPT_V4, weightRefresh: REGIME_RULES.v4.weightRefresh };
+    // The object is valid rules; only the kept engine, which fits every day, refuses it.
+    expect(regimeRulesOf("v4", every21)).toBe(every21);
+    for (const call of [
+      () => runRegime(raw, { version: "v4", rules: every21, asof, start: START }),
+      () => computeKeptRegime(runInputOf(every21), { version: "v4", rules: every21, asof, start: START }),
+    ]) {
+      expect(call).toThrow(RangeError);
+      expect(call).toThrow(/rules\.weightRefresh\.intervalDays must be 1, got 21/);
+    }
+  });
+});
+
+describe("a model's history picks the engine, through runModel and runRegime (issue 1765, AC 7)", () => {
+  // v4 as a model that keeps its history: the rules above, history "kept".
+  const KEPT_MODEL: RegimeModel = { ...MODELS.v4, id: "v4-kept", rules: KEPT_V4, history: "kept" };
+  let directMemo: ReturnType<typeof computeKeptRegime> | undefined;
+  const directOf = () => (directMemo ??= computeKeptRegime(runInputOf(KEPT_V4), { version: "v4", rules: KEPT_V4, asof, start: START }));
+  const sameDays = (got: { composite: number[]; regime: (string | null)[]; panelIndices: Record<string, number[]>; compositeMean?: number[] }) => {
+    const { record } = directOf();
+    expect(got.composite).toEqual(record.composite);
+    expect(got.regime).toEqual(record.regime);
+    expect(got.compositeMean).toEqual(record.compositeMean);
+    for (const p of PANELS) expect(got.panelIndices[p]).toEqual(record.panelIndices[p]!);
+    expect(record.regime.filter((l) => l != null).length).toBeGreaterThan(1000);
+  };
+
+  test("runModel with a model whose history is kept runs the kept engine, equal day for day to computeKeptRegime", () => {
+    const run = runModel(KEPT_MODEL, runInputOf(KEPT_V4), { asof, start: START });
+    const direct = directOf();
+    expect(run.keptRun!.record).toEqual(direct.record);
+    expect(run.keptRun!.computed).toEqual(direct.computed);
+    expect(run.keptRun!.fit).toEqual(direct.fit);
+    sameDays(run.result);
+    expect(run.result.weightsByPanel).toEqual(direct.fit.weightsByPanel);
+    expect(run.result.compositePercentile.every(Number.isNaN)).toBe(true);
+    // A research model's run is stamped with the current version.
+    expect(run.version).toBe("v4");
+  });
+
+  test("runRegime({ model }) runs the same kept engine, and equals the run its rules give", () => {
+    const run = requireComplete(runRegime(raw, { model: KEPT_MODEL, asof, start: START }));
+    sameDays(run.result);
+    expect(run.keptRun!.record).toEqual(directOf().record);
+    // The model states its rules and its registry: they are not options beside it.
+    expect(() => runRegime(raw, { model: KEPT_MODEL, rules: KEPT_V4 })).toThrow(RangeError);
+    expect(() => runRegime(raw, { model: "v4", version: "v3" })).toThrow(/two methodologies/);
+    // A preset named by its tag is the run of its version.
+    expect(requireComplete(runRegime(raw, { model: "v3", asof }))).toEqual(requireComplete(runRegime(raw, { version: "v3", asof })));
+  });
+
+  test("the same model with history recompute runs the recompute engine", () => {
+    const rec: RegimeModel = { ...KEPT_MODEL, id: "v4-recompute", rules: RECOMPUTE_V4, history: "recompute" };
+    const run = runModel(rec, runInputOf(RECOMPUTE_V4), { asof, start: START });
+    expect(run.keptRun).toBeUndefined();
+    expect(run.result).toEqual(requireComplete(runRegime(raw, { version: "v4", rules: RECOMPUTE_V4, asof, start: START })).result);
+    expect(run.result.compositePercentile.filter(Number.isFinite).length).toBeGreaterThan(1000);
+  });
+
+  test("a history other than recompute or kept is a RangeError, through runModel and through runRegime", () => {
+    const bogus = { ...MODELS.v4, history: "bogus" } as unknown as RegimeModel;
+    for (const call of [() => runModel(bogus, runInputOf(REGIME_RULES.v4), { asof }), () => runRegime(raw, { model: bogus })]) {
+      expect(call).toThrow(RangeError);
+      expect(call).toThrow(/model\.history must be "recompute" or "kept", got "bogus"/);
+    }
+  });
+});
+
+describe("runRegime computes the main line once (issue 1765, D-e)", () => {
+  const overAll = (rules: RegimeRules = REGIME_RULES.v4) => {
+    const prepared = prepareRegimeInputs(runInputOf(rules), { start: START, asof, version: "v4" });
+    return computeRegime(prepared.transformed, prepared.dateAxis, ALL_PANELS, prepared.ages, undefined, "v4", undefined, undefined, undefined, prepared.carried);
+  };
+
+  test("with the default panels factor is result itself, and deep-equals a separate computeRegime over ALL_PANELS", () => {
+    expect(PANELS).toEqual(ALL_PANELS);
+    const run = requireComplete(runRegime(raw, { factor: true, asof, start: START }));
+    expect(run.factor).toBe(run.result);
+    expect(run.factor).toEqual(overAll());
+  });
+
+  test("with panels macro and onchain factor is a second computation over ALL_PANELS", () => {
+    const run = requireComplete(runRegime(raw, { factor: true, panels: ["macro", "onchain"], asof, start: START }));
+    expect(run.factor).not.toBe(run.result);
+    expect(run.result.panels).toEqual(["macro", "onchain"]);
+    expect(run.factor).toEqual(overAll());
   });
 });

@@ -2,6 +2,14 @@
 // date. Upserts on the natural key so re-running a slot overwrites rather than
 // duplicates. The only SQL write for research payloads.
 //
+// An unchanged payload is skipped (issue 1765 storage S1): the DO UPDATE carries
+// WHERE research_signals.payload IS DISTINCT FROM EXCLUDED.payload, so a re-run
+// that recomputes the same signal writes no new row version. It compares the
+// payload only, never the whole row: EXCLUDED.id is a fresh nextval, so a
+// whole-row comparison would always differ. The overwrite evidence is the same
+// either way, because the capture trigger (migration 0056) fires only WHEN (OLD
+// IS DISTINCT FROM NEW).
+//
 // API-OWNED (issue #106): only the API process (api/routes/analytics.ts +
 // store/direct.ts) may import this writer; updaters submit through the
 // AnalyticsPersistence port. Accepts an injectable Sql handle so the API route
@@ -24,7 +32,8 @@ const upsertSignal = registerQuery({
   callers: ["src/api/routes/analytics"],
   probe: {
     statement: `INSERT INTO research_signals (signal_key, date, payload) VALUES ($1, $2::date, $3::jsonb)
-      ON CONFLICT (signal_key, date) DO UPDATE SET payload = EXCLUDED.payload`,
+      ON CONFLICT (signal_key, date) DO UPDATE SET payload = EXCLUDED.payload
+      WHERE research_signals.payload IS DISTINCT FROM EXCLUDED.payload`,
     params: ["probe_signal", "2026-01-01", "{\"probe\":true}"],
   },
 });
@@ -51,7 +60,8 @@ export async function persistResearchSignal(
   await on(db, upsertSignal)`
     INSERT INTO research_signals (signal_key, date, payload)
     VALUES (${key}, ${asof}, ${db.json(jsonValue(payload))})
-    ON CONFLICT (signal_key, date) DO UPDATE SET payload = EXCLUDED.payload`;
+    ON CONFLICT (signal_key, date) DO UPDATE SET payload = EXCLUDED.payload
+    WHERE research_signals.payload IS DISTINCT FROM EXCLUDED.payload`;
 }
 
 // Which (signal_key, date) pairs exist on/after `sinceDate` — the read side of

@@ -103,6 +103,15 @@ They read the backups, never the database, and write a report to `--out`, by def
 The replay rebuilds a run's exact inputs from its frozen vintage and runs the analyst SDK; `--sdk` defaults to
 `../analyst-sdk`, the package beside this one.
 
+The replay is the SDK's own replay module (`src/replay`, issue 1765): the backups are opened with that SDK's archive
+reader, the run replays under its methodology label over the panels that version's published runs average, and every
+published day (its payload checked against `payload_sha256`) is compared with the row the SDK computes for that day.
+Without `--run` it takes the newest succeeded run with a vintage on the main line: the line of the run's methodology
+label, so a beside run (v5) is never taken, and every run of a copy with no methodology table. The choice reads the
+ledger tables only; the artifacts, which hold every payload, are read for the one run replayed. An `--sdk` commit older than that module has no `src/replay/index.ts` and is refused:
+`this SDK predates its replay module (issue 1765); audit replay needs an SDK commit that has src/replay`. To audit
+with such a commit, use a csvb of the same age.
+
 ## Making a backup
 
 ```

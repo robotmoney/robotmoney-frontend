@@ -167,10 +167,13 @@ export function analyticsApiClient(cfg: AnalyticsApiConfig = resolveAnalyticsApi
     async saveSourceAcquisition(acquisition) {
       return await call<SaveSourceAcquisitionResult>("POST", ROUTES.analytics.sourceAcquisitions, { acquisition });
     },
-    async loadCommittedInputs(marketTimeCutoff: string, knownBy?: string, methodology?: string) {
+    async loadCommittedInputs(marketTimeCutoff: string, knownBy?: string, methodology?: string | readonly string[]) {
       const known = knownBy === undefined ? "" : `&knownBy=${encodeURIComponent(knownBy)}`;
-      // Issue 1753: named only by a run of a methodology that reads more than the main line.
-      const method = methodology === undefined ? "" : `&methodology=${encodeURIComponent(methodology)}`;
+      // Issue 1753: named only by a run of a methodology that reads more than
+      // the main line. Issue 1765: a producer tick names every live model, one
+      // `methodology` parameter each, and reads the union of their keys once.
+      const named = methodology === undefined ? [] : typeof methodology === "string" ? [methodology] : methodology;
+      const method = named.map((m) => `&methodology=${encodeURIComponent(m)}`).join("");
       return await call<CommittedInputs>("GET", `${ROUTES.analytics.committedInputs}?asof=${encodeURIComponent(marketTimeCutoff)}${known}${method}`);
     },
     async loadKeptRegimeDays(methodology: string, before: string) {

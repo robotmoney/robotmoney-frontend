@@ -1,6 +1,7 @@
-import { expect, test } from "bun:test";
+import { expect, spyOn, test } from "bun:test";
 import { hermeticDataSource } from "../src/analytics/access/hermetic-source.ts";
 import type { AnalyticsPersistence } from "../src/analytics/persistence.ts";
+import type { AnalyticsDataSource } from "../src/analytics/access/data-source.ts";
 import { runAnalytics, RESEARCH_TOOL_GROUP } from "../src/analytics/index.ts";
 import { noopTelemetrySink } from "../src/analytics/telemetry.ts";
 import { requireProducerApiConfig, runProducerCommand, runProducerOnce, startProducerSchedules } from "../src/producer/index.ts";
@@ -35,60 +36,160 @@ function recordingPersistence(): AnalyticsPersistence {
   };
 }
 
-test("independent producer computes regime itself and receives only an HTTP persistence port", async () => {
+// Issue 1765 (phase 3): an in-memory ledger that records every persistence
+// call of a regime tick, in order, labelled with its run's methodology. The
+// tick's order and isolation are about which calls it makes, not about SQL.
+// Its floor reads empty and keeps nothing; the hermetic source records no
+// acquisition, so each model computes from the floor the extract built. A
+// model that keeps its history finds its kept-days read refused, so the beside
+// run (v5) fails fast inside its own compute instead of walking every day.
+function tickLedger(opts: { refuseBeginOf?: string; failFreezeOf?: string } = {}) {
   const calls: string[] = [];
-  const result = await runProducerOnce("regime", "2031-01-02", {
-    source: hermeticDataSource,
-    persistence,
-    runner: async (asof, tool, source, store, run) => {
-      expect(asof).toBe("2031-01-02");
-      expect(source).toBe(hermeticDataSource);
-      expect(store).toBe(persistence);
-      calls.push(`${tool}:${run?.regimeVersion ?? "main"}`);
-      return { [tool]: { submitted: true, version: run?.regimeVersion ?? "main" } };
+  const labels = new Map<string, string>();
+  const persistence: AnalyticsPersistence = {
+    async beginRun(input) {
+      const label = input.methodology.versionLabel;
+      calls.push(`beginRun ${label}`);
+      if (label === opts.refuseBeginOf) throw new Error(`beginRun refused for ${label}`);
+      const runId = String(labels.size + 1);
+      labels.set(runId, label);
+      return { runId, methodologyVersionId: runId, replayed: false };
     },
-  });
-  // Issue 1753: the main-line run first, then one run for each methodology
-  // published beside it (v5). The tick's result is the main-line run's.
-  expect(calls).toEqual(["regime:main", "regime:v5"]);
-  expect(result).toEqual({ regime: { submitted: true, version: "main" } });
-});
-
-// Issue 1753: a failed beside run never fails or changes the main-line run, a
-// failed main-line run does not stop the beside run, and the two share one
-// run-scoped source so a tick makes one provider request per series.
-test("a regime tick isolates the beside run from the main-line run and hands both one shared source", async () => {
-  const shared = { ...hermeticDataSource };
-  const source = { ...hermeticDataSource, forRun: () => shared };
-  const seen: (typeof shared | undefined)[] = [];
-  const out = await runProducerOnce("regime", "2031-01-02", {
-    source,
-    persistence,
-    runner: async (_asof, _tool, _source, _store, run) => {
-      seen.push(run?.runSource as typeof shared | undefined);
-      if (run?.regimeVersion === "v5") throw new Error("v5 failed");
-      return { regime: { submitted: true } };
+    async appendRunEvent(runId, event) {
+      calls.push(`${event} ${labels.get(runId)}`);
     },
-  });
-  expect(out).toEqual({ regime: { submitted: true } });
-  expect(seen.length).toBe(2);
-  expect(seen[0]).toBe(shared);
-  expect(seen[1]).toBe(shared);
+    async freezeVintage(input) {
+      calls.push(`freezeVintage ${labels.get(input.runId)}`);
+      if (labels.get(input.runId) === opts.failFreezeOf) throw new Error(`freeze failed for ${opts.failFreezeOf}`);
+      return recordingPersistence().freezeVintage(input);
+    },
+    async submitTerminalRunPackage(input) {
+      calls.push(`package ${input.status} ${labels.get(input.runId)}`);
+      return { outputSnapshots: [], reportSnapshotId: null, replayed: false };
+    },
+    async loadKeptRegimeDays(methodology) {
+      calls.push(`loadKeptRegimeDays ${methodology}`);
+      throw new Error("no kept days in this test");
+    },
+    async loadRawHistory() {
+      calls.push("loadRawHistory");
+      return {};
+    },
+    async saveRawHistory() {
+      calls.push("saveRawHistory");
+    },
+    async seedRawHistory() { return { seededPoints: 0, existingPoints: 0, indicators: 0 }; },
+    async loadResearchSignalDates() { return []; },
+    async loadRawHistoryGapDates() { return []; },
+  };
+  return { calls, persistence };
+}
 
-  const order: string[] = [];
-  await expect(
-    runProducerOnce("regime", "2031-01-02", {
-      source,
-      persistence,
-      runner: async (_asof, _tool, _source, _store, run) => {
-        order.push(run?.regimeVersion ?? "main");
-        if (run?.regimeVersion === undefined) throw new Error("main failed");
-        return { regime: { submitted: true } };
-      },
-    }),
-  ).rejects.toThrow("main failed");
-  expect(order).toEqual(["main", "v5"]);
-});
+// The hermetic source behind a run-scoped source, every call recorded in the
+// same list as the ledger's, so one list shows the tick's whole order.
+function recordingSource(calls: string[]): AnalyticsDataSource {
+  const scoped: AnalyticsDataSource = {
+    fetchIndicators: (...a) => { calls.push("fetchIndicators"); return hermeticDataSource.fetchIndicators(...a); },
+    fetchBacktestExtras: (...a) => { calls.push("fetchBacktestExtras"); return hermeticDataSource.fetchBacktestExtras(...a); },
+    fetchResearchInputs: (...a) => { calls.push("fetchResearchInputs"); return hermeticDataSource.fetchResearchInputs(...a); },
+  };
+  return { ...scoped, forRun: () => { calls.push("forRun"); return scoped; } };
+}
+
+// Console capture for the tick tests: the beside failure is logged, never thrown.
+async function capturingErrors<T>(run: () => Promise<T>): Promise<{ value: T | null; error: unknown; errors: string[] }> {
+  const errors: string[] = [];
+  const spy = spyOn(console, "error").mockImplementation((...a: unknown[]) => void errors.push(a.map(String).join(" ")));
+  try {
+    return { value: await run(), error: null, errors };
+  } catch (error) {
+    return { value: null, error, errors };
+  } finally {
+    spy.mockRestore();
+  }
+}
+
+const TICK = { telemetry: noopTelemetrySink, now: new Date("2031-01-02T23:59:00Z") };
+const finished = (label: string) => new RegExp(`^(succeeded|degraded) ${label}$`);
+
+// Issue 1765: one regime tick begins every model's ledger run (main line
+// first) before any source call, extracts ONCE through one run-scoped source,
+// and then computes and publishes each model on its own, main line first. The
+// tick's result is the main-line run's; the beside run's failure is logged.
+test("a regime tick begins each model's run before its one extract, then computes and publishes each model, main line first", async () => {
+  const { calls, persistence: store } = tickLedger();
+  const { value, error, errors } = await capturingErrors(() => runProducerOnce("regime", "2031-01-02", { source: recordingSource(calls), persistence: store, tick: TICK }));
+  expect(error).toBeNull();
+  expect(calls.slice(0, 9)).toEqual([
+    "beginRun v4", "started v4", "beginRun v5", "started v5",
+    // One extract for both models: one run-scoped source, one floor read, one registry fetch, one floor write, one extras fetch.
+    "forRun", "loadRawHistory", "fetchIndicators", "saveRawHistory", "fetchBacktestExtras",
+  ]);
+  // The main line computes and publishes first, then the beside model.
+  expect(calls[9]).toBe("freezeVintage v4");
+  expect(calls[10]).toMatch(finished("v4"));
+  expect(calls.slice(11)).toEqual(["package succeeded v4", "loadKeptRegimeDays v5", "failed v5", "package failed v5"]);
+  // The tick answers with the main-line run, and logs the beside failure.
+  expect(Object.keys(value!)).toEqual(["regime"]);
+  expect((value as any).regime.methodology).toBeUndefined();
+  expect(errors.filter((e) => e.includes("regime failed for methodology v5") && e.includes("no kept days in this test")).length).toBe(1);
+}, 120_000);
+
+// Issue 1753, kept by the shared tick: a failed main-line run does not stop the
+// beside run, a beside run that cannot begin is dropped and never reaches the
+// main-line run, and the tick's error is the main-line run's.
+test("a regime tick isolates its runs: a failed main-line run does not stop the beside run, and a beside run that cannot begin is dropped", async () => {
+  const failingMain = tickLedger({ failFreezeOf: "v4" });
+  const failed = await capturingErrors(() => runProducerOnce("regime", "2031-01-02", { source: recordingSource(failingMain.calls), persistence: failingMain.persistence, tick: TICK }));
+  expect((failed.error as Error).message).toBe("freeze failed for v4");
+  expect(failingMain.calls.filter((c) => c.startsWith("fetch"))).toEqual(["fetchIndicators", "fetchBacktestExtras"]);
+  expect(failingMain.calls.slice(-6)).toEqual(["freezeVintage v4", "failed v4", "package failed v4", "loadKeptRegimeDays v5", "failed v5", "package failed v5"]);
+
+  const refused = tickLedger({ refuseBeginOf: "v5" });
+  const main = await capturingErrors(() => runProducerOnce("regime", "2031-01-02", { source: recordingSource(refused.calls), persistence: refused.persistence, tick: TICK }));
+  expect(main.error).toBeNull();
+  expect(refused.calls.slice(0, 4)).toEqual(["beginRun v4", "started v4", "beginRun v5", "forRun"]);
+  expect(refused.calls.filter((c) => c.endsWith(" v5"))).toEqual(["beginRun v5"]);
+  expect(refused.calls.at(-1)).toBe("package succeeded v4");
+  expect((main.value as any).regime).toBeDefined();
+  expect(main.errors.filter((e) => e.includes("regime failed for methodology v5") && e.includes("beginRun refused for v5")).length).toBe(1);
+}, 120_000);
+
+// Issue 1753, kept by the one tick path (issue 1765): the models of a regime
+// tick share one run-scoped source, so the tick makes one provider request per
+// series. A failed beside run never fails or changes the main-line run: the
+// main line's calls and result equal those of a tick without the beside model.
+// A regime tick has one path, runRegimeTick: an injected runner is refused.
+test("a regime tick's models share one run-scoped source, and a failed beside run never changes the main-line run: its result equals a tick of the main line alone", async () => {
+  const both = tickLedger();
+  const withBeside = await capturingErrors(() => runProducerOnce("regime", "2031-01-02", { source: recordingSource(both.calls), persistence: both.persistence, tick: TICK }));
+  const alone = tickLedger();
+  const mainOnly = await capturingErrors(() => runProducerOnce("regime", "2031-01-02", { source: recordingSource(alone.calls), persistence: alone.persistence, tick: { ...TICK, versions: ["v4"] } }));
+  expect(withBeside.error).toBeNull();
+  expect(mainOnly.error).toBeNull();
+  // One run-scoped source for the whole tick, each fetch made once through it.
+  expect(both.calls.filter((c) => c === "forRun")).toEqual(["forRun"]);
+  expect(both.calls.filter((c) => c.startsWith("fetch"))).toEqual(["fetchIndicators", "fetchBacktestExtras"]);
+  // The beside run failed alone, and was logged.
+  expect(both.calls.slice(-3)).toEqual(["loadKeptRegimeDays v5", "failed v5", "package failed v5"]);
+  expect(withBeside.errors.filter((e) => e.includes("regime failed for methodology v5")).length).toBe(1);
+  // The main line's calls and result are those of a tick without the beside model.
+  expect(both.calls.filter((c) => !c.endsWith(" v5"))).toEqual(alone.calls);
+  expect(alone.calls.some((c) => c.endsWith(" v5"))).toBe(false);
+  expect(withBeside.value).toEqual(mainOnly.value);
+  expect((withBeside.value as any).regime.asof).toBe("2031-01-02");
+  // A regime tick has one path: a runner is refused before any call.
+  const refused: string[] = [];
+  await expect(runProducerOnce("regime", "2031-01-02", {
+    source: recordingSource(refused),
+    persistence,
+    runner: async () => {
+      refused.push("runner");
+      return {};
+    },
+  })).rejects.toThrow(/regime tick takes no runner/);
+  expect(refused).toEqual([]);
+}, 120_000);
 
 // Issue #509: the research producer must invoke the orchestrator ONCE per
 // scheduled run, not once per research tool. Both signals share a single

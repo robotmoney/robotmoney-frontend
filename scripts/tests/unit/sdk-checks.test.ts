@@ -3,15 +3,19 @@
 // Each check's decision has a passing case and a red control. The checks that
 // run the SDK use a local export of the working tree for the sparse clone, a
 // fake API for the target and the real `bun`, `bash`, `curl` and `jq`.
-import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { latestReport, noRunMessage, retryAfterMs, sha256Hex, getWithRetry } from "../../release/public-analytics-read.ts";
 import {
   acquireBlocks, archivedRuns, archiveRouteProblems, archiveRoutesCheck, copyDifferences, fillScript, homeScratch, isFixedProducer, newestArchivedReport, packageTestsCheck, postSealCheck, quickstartCheck,
   spawnRunner, sparseCloneSdk, text, type SdkDeps,
 } from "../../release/sdk-lib.ts";
-import { compareRows, comparisonProblems, publishedAsofRow } from "../../release/replay-row.ts";
+import { comparisonProblems, labelProblems, loadReplaySdk, SDK_TOO_OLD, type ReplaySdk } from "../../release/replay-row.ts";
+import { compareRows, labelMismatches, MISSING_ROW } from "../../../packages/analyst-sdk/src/replay/index.ts";
+import { REGIME_ARTIFACT_KIND } from "../../../packages/analyst-sdk/src/analyze/regime-versions.ts";
+import { encodeCsvRow, parseCopyCsv, toObjects, type Row } from "../../../packages/analyst-sdk/src/archive/format1.ts";
+import { openBackupsDir } from "../../../packages/analyst-sdk/bin/backups-dir.ts";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { exportPackage } from "./support/analyst-sdk-export.ts";
 import { COMMIT, fakeNet, fakeServer, RECORDING, RUN_KEY } from "./support/fake-public-api.ts";
@@ -82,36 +86,73 @@ const localDeps = (net: SdkDeps["net"], run: SdkDeps["run"] = spawnRunner): SdkD
   prepareSdk: async () => { const dir = exportPackage("rm-sdk-check-"); cleanup.push(dir); return { sdkDir: dir }; },
 });
 
+// The recorded model runs (packages/analyst-sdk/tests/fixtures/archive/model-runs, issue 1765): one v4 run with its
+// published regime_snapshots artifact, then three v5 runs on the beside line, and the listing the fake API serves.
+// Never regenerated; a scenario edits a scratch copy.
+const MODEL_RUNS = join(repoRoot, "packages/analyst-sdk/tests/fixtures/archive/model-runs");
+const MODEL_FACTS = JSON.parse(readFileSync(join(MODEL_RUNS, "facts.json"), "utf8")) as { v4: { runKey: string; asof: string }; v5: { runKey: string; asof: string }[] };
+// The published reports of the four runs in run order: the newest report is a v5 run's.
+const MODEL_REPORTS = [MODEL_FACTS.v4, ...MODEL_FACTS.v5].map((r) => ({ run_key: r.runKey, asof: r.asof, bytes: new TextEncoder().encode("{}") }));
+
 /**
- * A copy of the recording whose second backup also lists the run's published
- * `regime_snapshots` artifact (analytics_output_snapshots), holding `row` as the
- * as-of row. The backup record lists the file with its hash, as csvb writes it.
+ * A scratch copy of the recorded model runs with each row of `table` passed through `edit`. The file is rewritten
+ * and listed again with its bytes and hash, as csvb writes it; the row count and ids are unchanged.
  */
-function recordingWithArtifact(row: Record<string, unknown>, legacyBuild = false): string {
+function modelRunsWith(table?: string, edit?: (r: Row) => Row): string {
+  const dir = homeScratch("sdk-model-runs-");
+  cleanup.push(dir);
+  cpSync(MODEL_RUNS, dir, { recursive: true });
+  if (table === undefined || edit === undefined) return dir;
+  const [backup] = readdirSync(join(dir, "csv"));
+  const recPath = join(dir, "csv", backup!, "backup.json");
+  const rec = JSON.parse(readFileSync(recPath, "utf8"));
+  const file = rec.append_only[table].files[0];
+  const csv = parseCopyCsv(gunzipSync(readFileSync(join(dir, file.path))).toString("utf8"));
+  const rows = toObjects(csv).map(edit);
+  const text = [encodeCsvRow(csv.header), ...rows.map((r) => encodeCsvRow(csv.header.map((h) => r[h] ?? null)))].join("");
+  writeFileSync(join(dir, file.path), gzipSync(text));
+  Object.assign(file, { bytes_raw: Buffer.byteLength(text), sha256_raw: sha256Hex(text) });
+  writeFileSync(recPath, JSON.stringify(rec, null, 2));
+  return dir;
+}
+
+// The v4 run's ledger id in the recorded copy.
+const MODEL_V4_ID = openBackupsDir(MODEL_RUNS).table("analytics_ledger_runs").find((r) => r.run_key === MODEL_FACTS.v4.runKey)!.id!;
+
+/** An edit of the v4 run's published main-line artifact: `change` alters its as-of row; the payload hash is recomputed unless `rehash` is false. */
+const tamperV4Asof = (change: (row: Record<string, unknown>) => void, rehash = true) => (o: Row): Row => {
+  if (o.run_id !== MODEL_V4_ID || o.artifact_kind !== REGIME_ARTIFACT_KIND.main) return o;
+  const rows = JSON.parse(o.payload_json!) as Record<string, unknown>[];
+  change(rows.find((r) => r.date === MODEL_FACTS.v4.asof)!);
+  const text = JSON.stringify(rows);
+  return { ...o, payload_json: text, payload_sha256: rehash ? sha256Hex(text) : o.payload_sha256 };
+};
+
+/** Add one data file of an append-only table to a backup record of a copy, listed with its hash as csvb writes it. */
+function addTableFile(dir: string, rec: Record<string, any>, backup: string, table: string, csv: string, rows: number, at: string): void {
+  const rel = `csv/${backup}/data/${table}.${at}_${at}.csv.gz`;
+  writeFileSync(join(dir, rel), gzipSync(csv));
+  rec.append_only[table] = {
+    time: { column: "created_at" }, watermark_before: null, watermark_after: String(rows), rows_added: rows,
+    files: [{ path: rel, rows, bytes_raw: Buffer.byteLength(csv), sha256_raw: sha256Hex(csv), id_min: "1", id_max: String(rows), sum_id: String(rows), time_min: "2001-01-02 05:30:00+00", time_max: "2001-01-02 05:30:00+00" }],
+    db_rows_through_watermark: String(rows), db_sum_id_through_watermark: String(rows),
+  };
+}
+
+/**
+ * A copy of the API recording whose run published a report and no regime artifact: its recorded inputs are too
+ * short to label a day, so the recording serves the cases that stop before a row is compared.
+ */
+function recordingWithReportOnly(): string {
   const dir = homeScratch("sdk-recording-");
   cleanup.push(dir);
   cpSync(RECORDING, dir, { recursive: true });
-  const payload = JSON.stringify([row]);
-  const csv = `id,run_id,artifact_kind,payload_json,payload_sha256,created_at\n1,2,regime_snapshots,"${payload.replaceAll('"', '""')}",${sha256Hex(payload)},2001-01-02 05:30:00+00\n`;
-  const rel = "csv/2001-01-03T000000Z/data/analytics_output_snapshots.2001-01-02T053000Z_2001-01-02T053000Z.csv.gz";
-  writeFileSync(join(dir, rel), gzipSync(csv));
-  const recPath = join(dir, "csv/2001-01-03T000000Z/backup.json");
+  const backup = "2001-01-03T000000Z";
+  const recPath = join(dir, `csv/${backup}/backup.json`);
   const rec = JSON.parse(readFileSync(recPath, "utf8"));
-  rec.append_only.analytics_output_snapshots = {
-    time: { column: "created_at" }, watermark_before: null, watermark_after: "1", rows_added: 1,
-    files: [{ path: rel, rows: 1, bytes_raw: Buffer.byteLength(csv), sha256_raw: sha256Hex(csv), id_min: "1", id_max: "1", sum_id: "1", time_min: "2001-01-02 05:30:00+00", time_max: "2001-01-02 05:30:00+00" }],
-    db_rows_through_watermark: "1", db_sum_id_through_watermark: "1",
-  };
-  if (legacyBuild) {
-    // The run was made by the old producer: its build identity is a package label, not an image commit.
-    const ledger = rec.append_only.analytics_ledger_runs.files[0];
-    const lp = join(dir, ledger.path);
-    const old = gunzipSync(readFileSync(lp)).toString("utf8");
-    const edited = old.replace(/,4b4414c0e5a1d2f3b4c5d6e7f8091a2b3c4d5e6f,/g, ",pkg:0.1.0+bun:1.4.4,");
-    writeFileSync(lp, gzipSync(edited));
-    ledger.bytes_raw = Buffer.byteLength(edited);
-    ledger.sha256_raw = sha256Hex(edited);
-  }
+  const report = '{"asof":"2026-08-15","results":{},"toolId":"regime"}';
+  const csv = `id,run_id,asof,checksum,byte_length,created_at,report_json,report_sha256\n1,2,2026-08-15,${sha256Hex(report)},${report.length},2001-01-02 05:30:00+00,"${report.replaceAll('"', '""')}",${sha256Hex(report)}\n`;
+  addTableFile(dir, rec, backup, "analytics_report_snapshots", csv, 1, "2001-01-02T053000Z");
   writeFileSync(recPath, JSON.stringify(rec, null, 2));
   return dir;
 }
@@ -251,42 +292,48 @@ describe("Q36-sdk-quickstart/C24-sdk-quickstart: a minimal contract smoke", () =
 });
 
 describe("post-seal: the full-archive replay (bun scripts/release/sdk-check.ts --check post-seal)", () => {
-  let replayed: Record<string, unknown>;
-  const withApi = async (recording: string, reports: boolean, body: (net: SdkDeps["net"]) => Promise<void>) => {
-    const api = fakeServer({ recording, reports: reports ? [{ run_key: RUN_KEY, asof: "2026-08-15", bytes: new TextEncoder().encode("{}") }] : [] });
+  const withApi = async (recording: string, reports: typeof MODEL_REPORTS, body: (net: SdkDeps["net"]) => Promise<void>) => {
+    const api = fakeServer({ recording, reports });
     try {
       await body({ ...fakeNet(), origin: api.origin, fetch: (u: string, i?: RequestInit) => fetch(u, i) });
     } finally {
       api.server.stop(true);
     }
   };
+  const recordedReport = [{ run_key: RUN_KEY, asof: "2026-08-15", bytes: new TextEncoder().encode("{}") }];
 
-  test("setup: the SDK's as-of row for the recorded run", async () => {
+  test("replay-row --print-row prints the SDK's computed as-of row, equal in every compared field to the published one", async () => {
     const dir = exportPackage("rm-sdk-check-ref-");
     cleanup.push(dir);
-    cpSync(RECORDING, join(dir, "api-copy"), { recursive: true });
-    const inputs = await spawnRunner(["bun", "run", "inputs", "--archive", "api-copy", "--run", RUN_KEY, "--out", join(dir, "api-fill")], { cwd: dir });
-    expect(inputs.code, inputs.stderr).toBe(0);
-    const row = await spawnRunner(["bun", join(repoRoot, "scripts/release/replay-row.ts"), "--sdk", dir, "--archive", join(dir, "api-copy"), "--run", RUN_KEY, "--inputs", join(dir, "api-fill/inputs.csv"), "--print-row"], { cwd: dir });
+    const row = await spawnRunner(["bun", join(repoRoot, "scripts/release/replay-row.ts"), "--sdk", dir, "--archive", MODEL_RUNS, "--run", MODEL_FACTS.v4.runKey, "--print-row"], { cwd: dir });
     expect(row.code, row.stderr).toBe(0);
-    replayed = JSON.parse(text(row.stdout));
-    expect(replayed.date).toBe("2026-08-15");
-    expect("regime" in replayed && "backtest" in replayed).toBe(true);
+    const printed = JSON.parse(text(row.stdout)) as Record<string, unknown>;
+    expect(printed.date).toBe(MODEL_FACTS.v4.asof);
+    expect("regime" in printed && "backtest" in printed && "indicators" in printed).toBe(true);
+    const sdk = (await loadReplaySdk(dir))!;
+    const published = sdk.replayRun(sdk.openBackupsDir(MODEL_RUNS), MODEL_FACTS.v4.runKey).published.asof!;
+    expect(compareRows(published, printed).match).toBe(true);
   });
 
-  test("a run of the old producer fails naming the sealed days; a fixed run's whole row must match, and both hashes are reported", async () => {
-    await withApi(recordingWithArtifact(replayed, true), true, async (net) => {
+  test("issue 1765 D-c, end to end: the newest report is a v5 run; the check replays the newest main-line run (v4), its whole row matches, and both hashes are reported", async () => {
+    await withApi(MODEL_RUNS, MODEL_REPORTS, async (net) => {
       const r = await postSealCheck(localDeps(net), COMMIT);
-      expect(r.problems.join()).toContain("old producer");
-      expect(r.problems.join()).toContain("sealed backups run through");
-    });
-    await withApi(recordingWithArtifact(replayed), true, async (net) => {
-      const r = await postSealCheck(localDeps(net), COMMIT);
+      expect(r.found.newestPublishedRun).toBe(MODEL_FACTS.v5.at(-1)!.runKey);
+      expect(r.found).toMatchObject({ run_key: MODEL_FACTS.v4.runKey, asof: MODEL_FACTS.v4.asof, methodology: "v4", tier: "full", fixedProducer: true });
       expect(r.problems).toEqual([]);
       expect(r.found.sdkRowSha256).toBe(r.found.publishedRowSha256);
       expect(String(r.found.sdkRowSha256)).toMatch(/^[0-9a-f]{64}$/);
     });
-    await withApi(recordingWithArtifact({ ...replayed, composite: 0.123456 }), true, async (net) => {
+  });
+
+  test("a run of the old producer fails naming the sealed days; a fixed run's tampered number fails naming the field and both hashes", async () => {
+    const legacy = modelRunsWith("analytics_ledger_runs", (r) => (r.run_key === MODEL_FACTS.v4.runKey ? { ...r, build_identity: "pkg:0.1.0+bun:1.4.4" } : r));
+    await withApi(legacy, MODEL_REPORTS, async (net) => {
+      const r = await postSealCheck(localDeps(net), COMMIT);
+      expect(r.problems.join()).toContain("old producer");
+      expect(r.problems.join()).toContain("sealed backups run through");
+    });
+    await withApi(modelRunsWith("analytics_output_snapshots", tamperV4Asof((row) => void (row.composite = 0.123456))), MODEL_REPORTS, async (net) => {
       const r = await postSealCheck(localDeps(net), COMMIT);
       expect(r.found.tier).toBe("full");
       expect(r.problems.join()).toContain("differs from the published one in composite");
@@ -295,28 +342,50 @@ describe("post-seal: the full-archive replay (bun scripts/release/sdk-check.ts -
   });
 
   test("RED CONTROL: a label that differs fails", async () => {
-    await withApi(recordingWithArtifact({ ...replayed, regime: "not-a-regime" }), true, async (net) => {
+    await withApi(modelRunsWith("analytics_output_snapshots", tamperV4Asof((row) => void (row.regime = "not-a-regime"))), MODEL_REPORTS, async (net) => {
       expect((await postSealCheck(localDeps(net), COMMIT)).problems.join()).toContain("differs from the published one in regime");
     });
   });
 
-  test("RED CONTROL: a run with no archived record fails with the missing-run message", async () => {
-    const api = fakeServer({ recording: recordingWithArtifact(replayed), reports: [{ run_key: "99999999-9999-4999-8999-999999999999", asof: "2026-10-27", bytes: new TextEncoder().encode("{}") }] });
-    try {
-      const r = await postSealCheck(localDeps({ ...fakeNet(), origin: api.origin, fetch: (u: string, i?: RequestInit) => fetch(u, i) }), COMMIT);
-      expect(r.problems.join()).toContain("no sealed backup holds a published run yet");
-    } finally {
-      api.server.stop(true);
-    }
+  test("RED CONTROL: a published payload that does not match its stored payload_sha256 fails, never compared", async () => {
+    await withApi(modelRunsWith("analytics_output_snapshots", tamperV4Asof((row) => void (row.composite = 0.123456), false)), MODEL_REPORTS, async (net) => {
+      const r = await postSealCheck(localDeps(net), COMMIT);
+      expect(r.problems.join()).toContain("does not match its stored payload_sha256");
+    });
   });
 
-  test("red: a published artifact with no row for the as-of day fails; a copy with no artifact at all fails", async () => {
-    await withApi(recordingWithArtifact({ ...replayed, date: "2001-01-01" }), true, async (net) => {
-      expect((await postSealCheck(localDeps(net), COMMIT)).problems.join()).toContain("has no as-of row for 2026-08-15");
+  test("RED CONTROL: a run with no archived record fails with the missing-run message", async () => {
+    await withApi(MODEL_RUNS, [{ run_key: "99999999-9999-4999-8999-999999999999", asof: "2026-10-27", bytes: new TextEncoder().encode("{}") }], async (net) => {
+      expect((await postSealCheck(localDeps(net), COMMIT)).problems.join()).toContain("no sealed backup holds a published run yet");
     });
-    await withApi(RECORDING, true, async (net) => {
-      expect((await postSealCheck(localDeps(net), COMMIT)).problems.join()).toContain("has no regime_snapshots artifact");
+  });
+
+  test("red: a published artifact with no row for the as-of day fails; a published run with no artifact in the copy fails", async () => {
+    await withApi(modelRunsWith("analytics_output_snapshots", tamperV4Asof((row) => void (row.date = "2001-01-01"))), MODEL_REPORTS, async (net) => {
+      expect((await postSealCheck(localDeps(net), COMMIT)).problems.join()).toContain(`has no as-of row for ${MODEL_FACTS.v4.asof}`);
     });
+    // The run published (its report is in the copy) but its regime artifact is not.
+    await withApi(recordingWithReportOnly(), recordedReport, async (net) => {
+      expect((await postSealCheck(localDeps(net), COMMIT)).problems.join()).toContain(`has no ${REGIME_ARTIFACT_KIND.main} artifact`);
+    });
+    // A run that froze a vintage and published nothing (no report, no artifact) is no candidate (D-c).
+    await withApi(RECORDING, recordedReport, async (net) => {
+      expect((await postSealCheck(localDeps(net), COMMIT)).problems.join()).toContain("no sealed backup holds a published run yet");
+    });
+  });
+
+  test("red: an SDK commit without src/replay (before issue 1765) is refused by name before the fill", async () => {
+    const old: SdkDeps["prepareSdk"] = async () => {
+      const dir = exportPackage("rm-sdk-check-old-");
+      cleanup.push(dir);
+      rmSync(join(dir, "src", "replay"), { recursive: true, force: true });
+      return { sdkDir: dir };
+    };
+    const net = fakeNet({ reports: recordedReport });
+    const r = await postSealCheck({ ...localDeps(net), prepareSdk: old }, COMMIT);
+    expect(r.problems).toEqual([SDK_TOO_OLD]);
+    expect(SDK_TOO_OLD).toContain("predates its replay module (issue 1765)");
+    expect(net.requests.some((q) => q.includes("/archive/"))).toBe(false);
   });
 
   test("red: a target with no published run fails with a message that says so, never skips", async () => {
@@ -325,7 +394,7 @@ describe("post-seal: the full-archive replay (bun scripts/release/sdk-check.ts -
   });
 
   test("red: a fill that fails (the API answers 404 for the archive) fails the check", async () => {
-    const api = fakeServer({ reports: [{ run_key: RUN_KEY, asof: "2026-08-15", bytes: new TextEncoder().encode("{}") }], archiveStatus: 404 });
+    const api = fakeServer({ reports: recordedReport, archiveStatus: 404 });
     try {
       const net = { ...fakeNet(), origin: api.origin, fetch: (u: string, i?: RequestInit) => fetch(u, i) };
       expect((await postSealCheck(localDeps(net), COMMIT)).problems.join()).toContain("fill api-copy exited");
@@ -335,18 +404,46 @@ describe("post-seal: the full-archive replay (bun scripts/release/sdk-check.ts -
   });
 });
 
+// The comparison is the SDK's compareRows (issue 1765); replay-row.ts turns it into the check's problems.
 describe("the as-of row comparison (PR 1448)", () => {
-  const row = { date: "d", regime: "risk_on", composite: 0.5, percentiles: { A: 1 }, correlations: { a: [1, 2] }, backtest: null };
+  const row = { date: "d", regime: "risk_on", composite: 0.5, macroRegime: "neutral", percentiles: { A: 1 }, correlations: { a: [1, 2] }, backtest: null };
   test("equal rows match whatever the key order; each differing field is named, in compared order; a missing row is a mismatch", () => {
     expect(compareRows(row, row).match).toBe(true);
-    expect(compareRows({ backtest: null, correlations: { a: [1, 2] }, percentiles: { A: 1 }, composite: 0.5, regime: "risk_on", date: "x" }, row).match).toBe(true);
+    expect(comparisonProblems(compareRows(row, row), "k", "d")).toEqual([]);
+    expect(compareRows({ backtest: null, correlations: { a: [1, 2] }, percentiles: { A: 1 }, macroRegime: "neutral", composite: 0.5, regime: "risk_on", date: "x" }, row).match).toBe(true);
     const c = compareRows({ ...row, composite: 0.6, percentiles: { A: 2 } }, row);
     expect([c.match, c.differing, c.firstDiff?.field]).toEqual([false, ["composite", "percentiles"], "composite"]);
     expect(c.publishedSha256).not.toBe(c.replaySha256);
-    expect(compareRows(null, row)).toMatchObject({ match: false, differing: ["as-of row"], publishedSha256: null });
+    expect(comparisonProblems(c, "k", "d").join()).toContain("differs from the published one in composite, percentiles");
+    expect(compareRows(null, row)).toMatchObject({ match: false, differing: [MISSING_ROW], publishedSha256: null });
     expect(comparisonProblems(compareRows(null, row), "k", "d").join()).toContain("has no as-of row for d");
-    expect(publishedAsofRow(JSON.stringify([row]), "d")).toEqual(row);
-    expect(publishedAsofRow(JSON.stringify([row]), "e")).toBeNull();
+  });
+
+  test("a missing computed row is a mismatch, never a pass, on either tier", () => {
+    const c = compareRows(row, null);
+    expect(c).toMatchObject({ match: false, differing: [MISSING_ROW], replaySha256: null });
+    expect(c.publishedSha256).toMatch(/^[0-9a-f]{64}$/);
+    expect(comparisonProblems(c, "k", "d")).toEqual(["run k: the SDK computed no as-of row for d"]);
+    expect(labelMismatches(c)).toEqual([MISSING_ROW]);
+    expect(labelProblems(c, labelMismatches(c), "k", "d")).toEqual(["run k: the SDK computed no as-of row for d"]);
+  });
+
+  test("the label tier (labelMismatches): only the as-of labels must be equal; a missing published row is a problem", () => {
+    // A number moved (a pre-1421 run): info on the label tier, a problem on the full tier.
+    const moved = compareRows({ ...row, composite: 0.500001, percentiles: { A: 1.000001 } }, row);
+    expect(labelMismatches(moved)).toEqual([]);
+    expect(labelProblems(moved, labelMismatches(moved), "k", "d")).toEqual([]);
+    expect(comparisonProblems(moved, "k", "d").length).toBe(1);
+    // A label moved, with a number: only the label is named.
+    const flipped = compareRows({ ...row, macroRegime: "risk_off", composite: 0.6 }, row);
+    expect(labelMismatches(flipped)).toEqual(["macroRegime"]);
+    expect(labelProblems(flipped, labelMismatches(flipped), "k", "d")).toEqual(["run k as of d: the SDK's as-of label differs from the published one in macroRegime"]);
+    const both = compareRows({ ...row, regime: "risk_off", macroRegime: "risk_off" }, row);
+    expect(labelMismatches(both)).toEqual(["regime", "macroRegime"]);
+    // red: no published row is a problem on the label tier too, never a pass.
+    const absent = compareRows(null, row);
+    expect(labelMismatches(absent)).toEqual([MISSING_ROW]);
+    expect(labelProblems(absent, labelMismatches(absent), "k", "d").join()).toContain("has no as-of row for d");
   });
 });
 
@@ -403,33 +500,88 @@ describe("Q37-sdk-tests/C25-sdk-tests", () => {
   });
 });
 
-describe("the quickstart replays the newest published run the archive holds", () => {
-  test("a run published after the newest sealed backup is skipped; the build identity splits the producers", () => {
+/** A format 1 local copy of one backup holding these append-only tables, listed with their hashes, as the SDK reader opens it. */
+function writeCopy(dir: string, backup: string, tables: Record<string, { header: string[]; rows: (string | null)[][] }>): void {
+  mkdirSync(join(dir, "csv", backup, "data"), { recursive: true });
+  const append_only: Record<string, unknown> = {};
+  for (const [table, t] of Object.entries(tables)) {
+    const csv = [t.header, ...t.rows].map((r) => encodeCsvRow(r)).join("");
+    const rel = `csv/${backup}/data/${table}.2026-01-01T000000Z_2026-01-01T000000Z.csv.gz`;
+    writeFileSync(join(dir, rel), gzipSync(csv));
+    append_only[table] = { watermark_before: null, watermark_after: String(t.rows.length), rows_added: t.rows.length, files: [{ path: rel, rows: t.rows.length, bytes_raw: Buffer.byteLength(csv), sha256_raw: sha256Hex(csv) }] };
+  }
+  writeFileSync(join(dir, "csv", backup, "backup.json"), JSON.stringify({ format: 1, backup, append_only }, null, 2));
+}
+
+describe("the post-seal check replays the newest published main-line run the archive holds (issue 1765, D-c)", () => {
+  let sdk: ReplaySdk;
+  beforeAll(async () => {
+    sdk = (await loadReplaySdk(join(repoRoot, "packages/analyst-sdk")))!;
+  });
+  const [k1, k2, k3, k4, k5] = ["1", "2", "3", "4", "5"].map((d) => `${d.repeat(8)}-${d.repeat(4)}-4${d.repeat(3)}-8${d.repeat(3)}-${d.repeat(12)}`) as [string, string, string, string, string];
+  const sha = "4b4414c0759305df046a2de511bb446070ee7057";
+  const pkg = "pkg:0.1.0+bun:1.4.4";
+  /**
+   * A filled copy: v4 runs 1 to 3 (old producer, fixed, old producer) and the newest run 5 under methodology 2,
+   * labelled `label2` ("v5": a beside run). Each froze a vintage and published a report. Run 4 is published but
+   * made after the newest sealed backup, so it is not in the copy.
+   */
+  const filledCopy = (label2: string): string => {
     const dir = homeScratch("sdk-ledger-test-");
     cleanup.push(dir);
-    const data = join(dir, "csv", "2026-01-02T000000Z", "data");
-    mkdirSync(data, { recursive: true });
-    const [k1, k2, k3, k4] = ["1", "2", "3", "4"].map((d) => `${d.repeat(8)}-${d.repeat(4)}-4${d.repeat(3)}-8${d.repeat(3)}-${d.repeat(12)}`);
-    const sha = "4b4414c0759305df046a2de511bb446070ee7057";
-    writeFileSync(join(data, "analytics_ledger_runs.a_b.csv.gz"), gzipSync([
-      "id,run_key,asof,tool_id,source_label,methodology_version_id,build_identity,job_id,created_at",
-      `1,${k1},2026-10-20,regime,live,1,pkg:0.1.0+bun:1.4.4,,2026-10-20 21:30:00.5+00`,
-      `2,${k2},2026-10-24,regime,live,1,${sha},,2026-10-24 21:30:00.5+00`,
-      `3,${k3},2026-10-26,regime,live,1,pkg:0.1.0+bun:1.4.4,,2026-10-26 21:30:00.5+00`,
-    ].join("\n") + "\n"));
-    const runs = archivedRuns(dir);
-    expect([...runs.keys()].sort()).toEqual([k1, k2, k3]);
-    const row = (id: number, k: string) => ({ report_id: id, run_key: k, asof: "2026-10-2" + id, checksum: "c", byte_length: 1 });
-    // k4 is published but not archived; k3 is the newest archived.
-    expect(newestArchivedReport([row(1, k1), row(2, k2), row(3, k3), row(4, k4)], runs)?.run_key).toBe(k3);
+    const runs: [string, string, string, string, string][] = [["1", k1, "2026-10-20", "1", pkg], ["2", k2, "2026-10-24", "1", sha], ["3", k3, "2026-10-26", "1", pkg], ["5", k5, "2026-10-28", "2", sha]];
+    const report = '{"asof":"2026-10-20","results":{},"toolId":"regime"}';
+    writeCopy(dir, "2026-11-01T000000Z", {
+      analytics_ledger_methodology_versions: {
+        header: ["id", "tool_id", "version_label", "config", "config_digest", "created_at"],
+        rows: [["1", "regime", "v4", "{}", "d".repeat(64), "2026-10-01 00:00:00+00"], ["2", "regime", label2, "{}", "e".repeat(64), "2026-10-01 00:00:00+00"]],
+      },
+      analytics_ledger_runs: {
+        header: ["id", "run_key", "asof", "tool_id", "source_label", "methodology_version_id", "build_identity", "job_id", "created_at"],
+        rows: runs.map(([id, key, asof, meth, build]) => [id, key, asof, "regime", "live", meth, build, null, `${asof} 21:30:00.5+00`]),
+      },
+      analytics_data_vintages: {
+        header: ["id", "run_id", "tool_id", "knowledge_time_cutoff", "market_time_cutoff", "member_count", "created_at"],
+        rows: runs.map(([id, , asof]) => [id, id, "regime", `${asof} 21:00:00+00`, asof, "0", `${asof} 21:31:00+00`]),
+      },
+      analytics_report_snapshots: {
+        header: ["id", "run_id", "asof", "checksum", "byte_length", "created_at", "report_json", "report_sha256"],
+        rows: runs.map(([id, , asof]) => [id, id, asof, sha256Hex(report), String(report.length), `${asof} 21:31:00+00`, report, sha256Hex(report)]),
+      },
+    });
+    return dir;
+  };
+  const row = (id: number, k: string) => ({ report_id: id, run_key: k, asof: "2026-10-2" + id, checksum: "c", byte_length: 1 });
+  const published = [row(1, k1), row(2, k2), row(3, k3), row(4, k4), row(5, k5)];
+
+  test("the newest report is a v5 run: the choice skips it, and the run published after the newest sealed backup, for the newest main-line run", () => {
+    const runs = archivedRuns(sdk, filledCopy("v5"));
+    // Main-line runs only, newest first (publicationCandidates over the copy, opened with the SDK's reader).
+    expect([...runs.keys()]).toEqual([k3, k2, k1]);
+    expect(runs.get(k3)).toMatchObject({ methodology: "v4", asof: "2026-10-26", buildIdentity: pkg });
+    expect(latestReport(published)?.run_key).toBe(k5);
+    expect(newestArchivedReport(published, runs)?.run_key).toBe(k3);
     expect(newestArchivedReport([row(4, k4)], runs)).toBeUndefined();
+    expect(newestArchivedReport([row(5, k5)], runs)).toBeUndefined();
+  });
+
+  test("RED CONTROL: with the v5 run relabelled v4 (a main-line run), the same copy's choice is that run", () => {
+    const runs = archivedRuns(sdk, filledCopy("v4"));
+    expect([...runs.keys()]).toEqual([k5, k3, k2, k1]);
+    expect(newestArchivedReport(published, runs)?.run_key).toBe(k5);
+  });
+
+  test("the build identity splits the producers; a folder with no csv/ is no copy", () => {
+    const runs = archivedRuns(sdk, filledCopy("v5"));
     expect(isFixedProducer(runs.get(k1)!.buildIdentity)).toBe(false);
     expect(isFixedProducer(runs.get(k2)!.buildIdentity)).toBe(true);
     expect(isFixedProducer("")).toBe(false);
     // v0.7.0 predates D78's exact arithmetic: its runs replay equal on the labels only.
     expect(isFixedProducer("8c2690bac11440a8d8ef86733a567066afaea116")).toBe(false);
     expect(isFixedProducer("4928ee57f5bb833dd4b543113b385f1570251eac")).toBe(true);
-    expect(archivedRuns(join(dir, "missing")).size).toBe(0);
+    const empty = homeScratch("sdk-ledger-test-");
+    cleanup.push(empty);
+    expect(archivedRuns(sdk, join(empty, "missing")).size).toBe(0);
   });
 });
 

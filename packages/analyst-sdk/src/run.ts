@@ -1,62 +1,37 @@
 // Replay raw indicator history through the regime pipeline. This is the same
 // path backend/tests/regime-fidelity.test.ts replays: prepareRegimeInputs (the
 // seam production shares: align each registry indicator, forward-fill or
-// zero-fill, apply its transform and its fill policy), then computeRegime.
+// zero-fill, apply its transform and its fill policy), then the regime engine
+// (src/engine/, issue 1765): runRegime checks its options, resolves the input
+// names, sets each ratio from its legs, applies the day rule and calls runModel.
 // Run semantics (as-of, fill policy, complete days, replay):
 // docs/technical/regime-engine.md section 8.1; the seam is D59 in docs/decisions.md.
 // Optional SPX, ETH and TBILL3M price series in
 // the same input add the correlation and backtest output.
-import type { Point, RawIndicatorHistory } from "./types.ts";
+import type { RawIndicatorHistory } from "./types.ts";
 import { ALL_PANELS, DAY_RULE, DAY_RULES, INDICATORS, PANELS, type DayRule, type Indicator, type Panel } from "./analyze/indicators.ts";
-import { computeRegime, type RegimeComputeResult } from "./analyze/compute.ts";
-import { computeCorrelations, type CorrelationsPayload } from "./analyze/correlations.ts";
-import { computeBacktest, stripDailyFromSnapshot, REGIME_BACKTEST_RULES, type BacktestPayload } from "./analyze/backtest.ts";
-import { computeKeptRegime, withDerivedSeries, type KeptRegimeRun } from "./analyze/kept-regime.ts";
-import { CURRENT_REGIME_VERSION, REGIME_DERIVED_SERIES, REGIME_KEPT_HISTORY, REGIME_REGISTRY, REGIME_RULES, REGIME_VERSIONS, isRegimeVersion, type RegimeVersion } from "./analyze/regime-versions.ts";
-import { cutAtAsof, latestCompleteDay, missingOnDay, prepareRegimeInputs, type MissingIndicator } from "./prepare.ts";
-import { LEDGER_EXTRA_KEYS } from "./extras.ts";
-import { StoredRatioOnlyError, resolveInputHistory, seriesMappingFor, storedUnderFor } from "./series-ids.ts";
-import { derivedInputIds } from "./transform/derived.ts";
+import type { RegimeComputeResult } from "./analyze/compute.ts";
+import { CURRENT_REGIME_VERSION, REGIME_VERSIONS, isRegimeVersion, regimeRulesOf, type RegimeRules, type RegimeVersion } from "./analyze/regime-versions.ts";
+import { cutAtAsof, latestCompleteDay, missingOnDay, type MissingIndicator } from "./prepare.ts";
+import { StoredRatioOnlyError, resolveInputHistory } from "./series-ids.ts";
+import { MODELS, modelOf, type RegimeModel } from "./model/models.ts";
+import { derivedInputIds, type DerivedSeries } from "./transform/derived.ts";
 import { ratioDeclarationsFor, ratiosFromLegs } from "./transform/ratios.ts";
 import { assertRequiredCoverage } from "./coverage.ts";
+import { withDerivedSeries } from "./engine/prepare.ts";
+import { BACKFILL_START, EXTRA_IDS, assertIsoDate, assertPanelList, runModel, type InSampleEnd, type RunResult } from "./engine/run-model.ts";
 
-export const BACKFILL_START = "2018-01-01";
-// Indicator ids in the input that carry price levels for correlations/backtest.
-export const EXTRA_IDS = {
-  spx: LEDGER_EXTRA_KEYS.spx.inputId,
-  eth: LEDGER_EXTRA_KEYS.eth.inputId,
-  tbill3m: LEDGER_EXTRA_KEYS.tbill3m.inputId,
-} as const;
+// The run constants and the run shape live with runModel (src/engine/run-model.ts, issue 1765).
+export { BACKFILL_START, EXTRA_IDS, type InSampleEnd, type RunPrepared, type RunResult } from "./engine/run-model.ts";
+
 // The ids a run reads: its scoring registry and the price extras, and under a
-// version with derived series (v5, issue 1753) their raw inputs in place of the
+// model with derived series (v5, issue 1753) their raw inputs in place of the
 // derived ids, which no input carries.
-const readIds = (indicators: readonly Indicator[], version: RegimeVersion = CURRENT_REGIME_VERSION): ReadonlySet<string> => {
-  const derived = REGIME_DERIVED_SERIES[version];
+const readIds = (indicators: readonly Indicator[], derived: readonly DerivedSeries[] = []): ReadonlySet<string> => {
   const computed = new Set(derived.map((d) => d.id));
   return new Set([...indicators.map((i) => i.id).filter((id) => !computed.has(id)), ...Object.values(EXTRA_IDS), ...derived.flatMap(derivedInputIds)]);
 };
 const READ_IDS = readIds(INDICATORS);
-
-export interface RunResult {
-  kind: "complete";
-  // The methodology version the run computed (RunOptions.version).
-  version: RegimeVersion;
-  dateAxis: string[];
-  result: RegimeComputeResult;
-  // Production's second computeRegime call (ALL_PANELS), present only when
-  // runRegime ran with factor: true. Display-only: result keeps the composite
-  // and labels over the run's panels.
-  factor?: RegimeComputeResult;
-  correlations?: CorrelationsPayload;
-  backtest?: BacktestPayload;
-  // Coverage entry (issue 1751): the id of each ratio declared ratioInput
-  // "legs" that the run dropped (weight 0) because the input carries its stored
-  // ratio and neither selected leg. Empty when none was dropped.
-  droppedRatios: string[];
-  // The scoring registry of the run, only when it is not INDICATORS (a v5 run,
-  // issue 1753): buildReport lists these indicators.
-  registry?: readonly Indicator[];
-}
 
 // The as-of day is not complete (issue 1655): some indicator has neither a
 // real observation on it nor a value its fill policy allows. No figure is
@@ -96,26 +71,41 @@ export interface RunOptions {
   // Last day of the date axis (YYYY-MM-DD). Input rows dated after it are
   // ignored. Default: the newest date of any input series the run reads.
   asof?: string;
-  // Also run a second computeRegime call over every panel (ALL_PANELS) and
-  // return its factor_* figures. The composite and labels stay the ones over
-  // `panels`.
+  // Also return the run over every panel (ALL_PANELS) as RunResult.factor.
+  // The composite and labels stay the ones over `panels`. A second computation
+  // runs only when `panels` is not ALL_PANELS in order (issue 1765, D-e).
   factor?: boolean;
   // The panels the composite averages, 1/n each (issue 1708). Default PANELS,
   // the included entries of PANEL_MEMBERSHIP. A caller replaying an older
   // composite (e.g. the two-panel originals) passes its panel set explicitly.
   panels?: readonly Panel[];
+  // The model to run (issue 1765): a published tag, or a RegimeModel (a
+  // research model) checked by modelOf. Its registry, derived series, rules,
+  // history, storage and backtest rules decide the run. Given with `rules` or
+  // `indicators`, it is a RangeError: the model states both. Given with
+  // `version`, a tag must be that version; a model object's run is stamped
+  // with it.
+  model?: RegimeVersion | RegimeModel;
   // The methodology version to compute (issue 1652). Default
   // CURRENT_REGIME_VERSION. A published run replays under the version it was
   // stamped with: "v3" cuts the labels on the rolling percentile, "v4" on the
   // composite and panel indices.
   version?: RegimeVersion;
+  // Every engine rule as one full RegimeRules object (issue 1765, D-g).
+  // Default REGIME_RULES of `version`. It is checked whole (regimeRulesOf) and
+  // never merged onto a preset: the v3 and v4 presets leave out
+  // compositeNormalisation and keptHistory, so a partial object would inherit
+  // another version's. rules.keptHistory picks the engine: true runs the kept
+  // record (analyze/kept-regime.ts), absent or false recomputes every day.
+  rules?: RegimeRules;
   // The scoring registry (issue 1653). Default INDICATORS. A list holding a
   // collected series (extract/collected-series.ts) with its scoring fields
   // scores it, with no edit to the registry.
   indicators?: readonly Indicator[];
   // The in-sample end of the backtest (issue 1751). "current-version" (the
   // default, decision D94 item 3): the adoption date of the current
-  // methodology version. "computed-version": the adoption date of `version`.
+  // methodology version. "computed-version": the adoption date of the rules
+  // in force (rules.adoptionDate; the preset of `version` by default).
   inSampleEnd?: InSampleEnd;
   // A ratio declared ratioInput "legs" whose input carries only the stored
   // ratio (issue 1751). "drop" (the default): it gets no weight and is listed
@@ -123,16 +113,35 @@ export interface RunOptions {
   storedOnlyRatio?: StoredOnlyRatio;
 }
 
-export type InSampleEnd = "current-version" | "computed-version";
 export type StoredOnlyRatio = "drop" | "error";
 
-// A real calendar date in YYYY-MM-DD form (rejects 2026-02-30, 2026-13-45, "").
-function assertIsoDate(name: string, v: string): void {
-  const ok = /^\d{4}-\d{2}-\d{2}$/.test(v) && new Date(`${v}T00:00:00Z`).toISOString().slice(0, 10) === v;
-  if (!ok) throw new RangeError(`${name} must be a real date in YYYY-MM-DD form, got ${JSON.stringify(v)}`);
-}
+const KNOWN_OPTIONS: readonly string[] = ["start", "asof", "factor", "model", "version", "rules", "dayRule", "indicators", "panels", "inSampleEnd", "storedOnlyRatio"];
 
-const KNOWN_OPTIONS: readonly string[] = ["start", "asof", "factor", "version", "dayRule", "indicators", "panels", "inSampleEnd", "storedOnlyRatio"];
+// The model a run's options name, and the tag its run is stamped with. Without
+// `model` it is the preset of `version`, or, with other rules or another
+// registry, that preset with them (its history read from rules.keptHistory).
+function modelOfOptions(opts: RunOptions): { model: RegimeModel; version: RegimeVersion } {
+  if (opts.version !== undefined && !isRegimeVersion(opts.version)) {
+    throw new RangeError(`version must be one of ${REGIME_VERSIONS.join(", ")}, got ${JSON.stringify(opts.version)}`);
+  }
+  if (opts.model !== undefined) {
+    if (opts.rules !== undefined || opts.indicators !== undefined) throw new RangeError("model states its rules and its registry: pass model, or rules and indicators, not both");
+    const model = modelOf(opts.model);
+    if (typeof opts.model === "string" && opts.version !== undefined && opts.version !== opts.model) {
+      throw new RangeError(`model ${opts.model} and version ${opts.version} name two methodologies`);
+    }
+    return { model, version: opts.version ?? (isRegimeVersion(model.id) ? model.id : CURRENT_REGIME_VERSION) };
+  }
+  const version = opts.version ?? CURRENT_REGIME_VERSION;
+  const preset = MODELS[version];
+  // The rules in force (issue 1765, D-g): opts.rules checked whole, else the preset of `version`.
+  const rules = regimeRulesOf(version, opts.rules);
+  // The registry of the version computed (issue 1753): INDICATORS for v3 and v4.
+  const registry = opts.indicators ?? preset.registry;
+  if (rules === preset.rules && registry === preset.registry) return { model: preset, version };
+  const history = rules.keptHistory === true ? "kept" : "recompute";
+  return { model: modelOf({ ...preset, id: `${version}+options`, rules, registry, history }), version };
+}
 
 export function runRegime(input: RawIndicatorHistory, opts: RunOptions = {}): RunOutcome {
   // An option this version does not know is an error, never silently ignored
@@ -146,21 +155,15 @@ export function runRegime(input: RawIndicatorHistory, opts: RunOptions = {}): Ru
     throw new RangeError(`factor must be a boolean, got ${JSON.stringify(opts.factor)}`);
   }
   const panels = opts.panels ?? PANELS;
-  if (!Array.isArray(panels) || panels.length === 0 || new Set(panels).size !== panels.length || panels.some((p) => !ALL_PANELS.includes(p))) {
-    throw new RangeError(`panels must be a non-empty list of distinct panels from ${ALL_PANELS.join(", ")}, got ${JSON.stringify(opts.panels)}`);
-  }
+  assertPanelList("panels", panels);
   const dayRule = opts.dayRule ?? DAY_RULE;
   if (!DAY_RULES.includes(dayRule)) throw new RangeError(`dayRule must be one of ${DAY_RULES.join(", ")}, got ${JSON.stringify(opts.dayRule)}`);
   if (opts.indicators !== undefined && !Array.isArray(opts.indicators)) {
     throw new RangeError(`indicators must be an array of registry entries, got ${JSON.stringify(opts.indicators)}`);
   }
-  const version = opts.version ?? CURRENT_REGIME_VERSION;
-  if (!isRegimeVersion(version)) {
-    throw new RangeError(`version must be one of ${REGIME_VERSIONS.join(", ")}, got ${JSON.stringify(opts.version)}`);
-  }
-  // The registry of the version computed (issue 1753): INDICATORS for v3 and v4.
-  const indicators = opts.indicators ?? REGIME_REGISTRY[version];
-  const read = indicators === INDICATORS ? READ_IDS : readIds(indicators, version);
+  const { model, version } = modelOfOptions(opts);
+  const { rules, registry: indicators } = model;
+  const read = indicators === INDICATORS ? READ_IDS : readIds(indicators, model.derived);
   // Input names (input id, storage key or source id, D74) -> the ids read
   // below, and each ratio the input does not store from its legs (4.3).
   const inSampleEnd = opts.inSampleEnd ?? "current-version";
@@ -172,7 +175,7 @@ export function runRegime(input: RawIndicatorHistory, opts: RunOptions = {}): Ru
     throw new RangeError(`storedOnlyRatio must be "drop" or "error", got ${JSON.stringify(opts.storedOnlyRatio)}`);
   }
   const droppedRatios: string[] = [];
-  const rawIn = ratiosFromLegs(input, resolveInputHistory(input, seriesMappingFor(version), storedUnderFor(version)), ratioDeclarationsFor(version), (id) => {
+  const rawIn = ratiosFromLegs(input, resolveInputHistory(input, model.seriesMapping, model.storedUnder), ratioDeclarationsFor(rules), (id) => {
     if (storedOnlyRatio === "error") throw new StoredRatioOnlyError(id);
     droppedRatios.push(id);
   });
@@ -216,10 +219,10 @@ export function runRegime(input: RawIndicatorHistory, opts: RunOptions = {}): Ru
   // Required data is supplied or the run stops with a named error; a
   // downstream run never fetches (issue 1421, src/coverage.ts).
   assertRequiredCoverage(raw, asof ?? maxDate, panels, indicators);
-  // A version that keeps its history (v5, issue 1753) has its own path below.
-  const kept = REGIME_KEPT_HISTORY[version];
+  // The model's history picks the engine, not the version (issue 1765, D-g).
+  const kept = model.history === "kept";
   // The day rule reads the registry's series, so the derived ones are computed first, as known on the newest day.
-  const forDayRule = kept && dayRule !== "score-newest" ? withDerivedSeries(raw, asof ?? maxDate, REGIME_DERIVED_SERIES[version]) : raw;
+  const forDayRule = kept && dayRule !== "score-newest" ? withDerivedSeries(raw, asof ?? maxDate, model.derived) : raw;
   // Issue 1655, the day rule. score-newest (declared): the day given, or the
   // newest row the run reads, as before. require-complete: without an as-of day
   // the latest complete day on or before that newest row; an explicit
@@ -227,8 +230,8 @@ export function runRegime(input: RawIndicatorHistory, opts: RunOptions = {}): Ru
   if (dayRule === "score-newest") {
     asof ??= maxDate;
   } else if (asof === undefined) {
-    const day = latestCompleteDay(forDayRule, { notAfter: maxDate, notBefore: start, indicators, version });
-    if (day === null) return { kind: "incomplete", asof: maxDate, missing: missingOnDay(forDayRule, maxDate, indicators, version) };
+    const day = latestCompleteDay(forDayRule, { notAfter: maxDate, notBefore: start, indicators, version, rules });
+    if (day === null) return { kind: "incomplete", asof: maxDate, missing: missingOnDay(forDayRule, maxDate, indicators, version, rules) };
     asof = day;
     if (asof < maxDate) {
       const cut: RawIndicatorHistory = {};
@@ -236,86 +239,17 @@ export function runRegime(input: RawIndicatorHistory, opts: RunOptions = {}): Ru
       raw = cut;
     }
   } else {
-    const missing = missingOnDay(forDayRule, asof, indicators, version);
+    const missing = missingOnDay(forDayRule, asof, indicators, version, rules);
     if (missing.length > 0) return { kind: "incomplete", asof, missing };
   }
-  if (kept) return keptRun(raw, { start, asof, version, indicators, panels, factor: opts.factor === true, inSampleEnd, droppedRatios });
-  // The fill policy already masked `transformed`; passing `ages` keeps the
-  // global-cap mask too, which leaves a policy-masked series unchanged.
-  const { dateAxis, transformed, ages, carried } = prepareRegimeInputs(raw, { start, asof, indicators, version });
-  const result = computeRegime(transformed, dateAxis, [...panels], ages, undefined, version, undefined, indicators, undefined, carried);
-  const out: RunResult = { kind: "complete", version, dateAxis, result, droppedRatios };
-  if (opts.factor) out.factor = computeRegime(transformed, dateAxis, ALL_PANELS, ages, undefined, version, undefined, indicators, undefined, carried);
-  const spx: Point[] | undefined = raw[EXTRA_IDS.spx];
-  const eth: Point[] | undefined = raw[EXTRA_IDS.eth];
-  const tbill3m: Point[] | undefined = raw[EXTRA_IDS.tbill3m];
-  if (spx?.length && eth?.length) {
-    out.correlations = computeCorrelations(dateAxis, result, { spx, eth });
-    if (tbill3m?.length) out.backtest = stripDailyFromSnapshot(computeBacktest(dateAxis, result, { spx, eth, tbill3m }, backtestRules(version, inSampleEnd)));
-  }
-  return out;
-}
-
-// The reference backtest options of the version computed (REGIME_BACKTEST_RULES,
-// issue 1753). The v3 and v4 rows are computeBacktest's own defaults, the split
-// on the current version's adoption date. "computed-version" moves the split to
-// the adoption date of `version`.
-function backtestRules(version: RegimeVersion, inSampleEnd: InSampleEnd) {
-  const rules = REGIME_BACKTEST_RULES[version];
-  return inSampleEnd === "computed-version" ? { ...rules, splitDate: REGIME_RULES[version].adoptionDate } : rules;
-}
-
-// A run of a version that keeps its history (v5, issue 1753). An SDK run holds
-// no kept days, so it is a first run: every day from `start` is computed one by
-// one from this input, each fit on its own day (analyze/kept-regime.ts).
-function keptRun(
-  raw: RawIndicatorHistory,
-  o: { start: string; asof: string; version: RegimeVersion; indicators: readonly Indicator[]; panels: readonly Panel[]; factor: boolean; inSampleEnd: InSampleEnd; droppedRatios: string[] },
-): RunResult {
-  // With `factor` every panel is computed in the one walk; the composite stays the mean of `panels`.
-  const computed = o.factor ? ALL_PANELS : [...o.panels];
-  const run = computeKeptRegime(raw, { start: o.start, asof: o.asof, version: o.version, indicators: o.indicators, panels: computed, included: o.panels });
-  const result = keptResult(run, [...o.panels]);
-  const out: RunResult = { kind: "complete", version: o.version, dateAxis: run.dateAxis, result, droppedRatios: o.droppedRatios, ...(o.indicators === INDICATORS ? {} : { registry: o.indicators }) };
-  if (o.factor) out.factor = keptResult(run, ALL_PANELS);
-  const cut = (id: string): Point[] => cutAtAsof(raw[id] ?? [], o.asof);
-  const spx = cut(EXTRA_IDS.spx);
-  const eth = cut(EXTRA_IDS.eth);
-  const tbill3m = cut(EXTRA_IDS.tbill3m);
-  if (spx.length && eth.length) {
-    out.correlations = computeCorrelations(run.dateAxis, result, { spx, eth });
-    if (tbill3m.length) out.backtest = stripDailyFromSnapshot(computeBacktest(run.dateAxis, result, { spx, eth, tbill3m }, backtestRules(o.version, o.inSampleEnd)));
-  }
-  return out;
-}
-
-// A kept run in computeRegime's result shape, over `panels`. The composite is
-// the kept record's; no trailing percentile exists, so those series are NaN.
-function keptResult(run: KeptRegimeRun, panels: Panel[]): RegimeComputeResult {
-  const { record, scores, dateAxis } = run;
-  const none = (): number[] => new Array(dateAxis.length).fill(NaN);
-  const pick = <T>(by: Record<string, T>): Record<string, T> => Object.fromEntries(panels.map((p) => [p, by[p]!]));
-  const out: RegimeComputeResult = {
-    dateAxis,
-    panels,
-    ranks: scores.ranks,
-    signed: scores.signed,
-    weightsByPanel: pick(run.fit.weightsByPanel),
-    panelIndices: pick(record.panelIndices),
-    panelPercentiles: Object.fromEntries(panels.map((p) => [p, none()])),
-    panelRegimes: pick(record.panelRegimes),
-    composite: record.composite,
-    compositePercentile: none(),
-    regime: record.regime,
-    weightFitDate: dateAxis[dateAxis.length - 1] ?? null,
-    compositeMean: record.compositeMean,
-  };
-  for (const p of panels) {
-    out[`${p}Index`] = out.panelIndices[p];
-    out[`${p}Percentile`] = out.panelPercentiles[p];
-    out[`${p}Regime`] = out.panelRegimes[p];
-  }
-  return out;
+  // The engine (issue 1765): one runModel call. The composite averages `panels`;
+  // with `factor` every panel is computed too, in the same fit. A kept model
+  // holds no kept days in an SDK run, so it is a first run: every day from
+  // `start` is computed one by one from this input, each fit on its own day.
+  // The fill policy already masked `transformed`; scoring with the ages keeps
+  // the global-cap mask too, which leaves a policy-masked series unchanged.
+  const factor = opts.factor === true;
+  return runModel(model, raw, { asof, start, version, included: [...panels], panels: factor ? ALL_PANELS : [...panels], factor, inSampleEnd, droppedRatios });
 }
 
 function factorBlock(f: RegimeComputeResult, last: number, full: boolean) {

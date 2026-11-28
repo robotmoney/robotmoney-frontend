@@ -9,7 +9,7 @@ import { ALL_PANELS, PANELS, PANEL_MEMBERSHIP } from "../src/index.ts";
 const REPO = join(import.meta.dir, "..", "..", "..");
 const ROOTS = [join(REPO, "packages/analyst-sdk/src"), join(REPO, "backend/src/analytics")];
 // The published equal-weight comparison keeps its explicit base and eq lists.
-const ALLOWED = new Set(["packages/analyst-sdk/src/analyze/regime-eq-comparison.ts"]);
+const ALLOWED = new Set(["packages/analyst-sdk/src/research/legacy/regime-eq-comparison.ts"]);
 
 // An array literal of panel names, e.g. ["macro", "onchain"].
 const NAME = String.raw`["'](?:macro|onchain|factor)["']`;

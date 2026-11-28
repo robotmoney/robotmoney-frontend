@@ -6,8 +6,14 @@
 // The local copy is a clone of robotmoney/csv-backups (D72). Everything written
 // is data the public API already serves (D58, D73): each run's frozen vintage
 // (source value versions, exactly as stored) and the as-of row of its published
-// regime_snapshots artifact. It is read through the analyst SDK's one archive
-// reader (packages/analyst-sdk/bin/backups-dir.ts, the reader of `bun run inputs`).
+// regime artifact. It is read through the analyst SDK's one archive reader
+// (packages/analyst-sdk/bin/backups-dir.ts, the reader of `bun run inputs`), and
+// each run is replayed with the SDK's replayRun (issue 1765): under its own
+// methodology label, over the panels that version's published runs average
+// (REGIME_PUBLISHED_PANELS), its published rows read under its line's artifact
+// kind with their payload hash checked. Every sampled run so far is a v3 run, so
+// it replays under v3 over macro and onchain: the version and panels the
+// committed sample was recorded under (the test replays it with SAMPLE_VERSION).
 //
 // A production vintage holds about 129k values and consecutive runs share most
 // of them, so the inputs of the sampled runs are written once, as the union:
@@ -20,7 +26,7 @@ import { join, resolve } from "node:path";
 import { gzipSync } from "node:zlib";
 import { collectRunInputs, openBackupsDir } from "../../packages/analyst-sdk/bin/backups-dir.ts";
 import { serializeInputs } from "../../packages/analyst-sdk/src/archive/format1.ts";
-import { COMPARED_FIELDS, PRODUCTION_PANELS, publishedAsofRow, replayPublishedRun, type PublishedAsofRow } from "../tests/support/published-replay.ts";
+import { COMPARED_FIELDS, replayRun } from "../../packages/analyst-sdk/src/replay/index.ts";
 
 const argv = process.argv.slice(2);
 const opt = (name: string) => {
@@ -37,55 +43,50 @@ if (keys.length === 0) throw new Error("name at least one run_key");
 
 const sha256 = (s: string | Uint8Array) => new Bun.CryptoHasher("sha256").update(s).digest("hex");
 const copy = openBackupsDir(archive);
-const runs = keys.map((k) => {
-  const r = copy.table("analytics_ledger_runs").find((x) => x.run_key === k);
-  if (!r) throw new Error(`run ${k} is not in the copy`);
+
+// Each run replayed by the SDK: its published as-of row (verified) and the replay's outcome.
+const replays = keys.map((k) => {
+  const r = replayRun(copy, k);
+  if (r.problems.length > 0 || r.diff === null) throw new Error(`run ${k}: ${r.problems.join("; ") || "the SDK did not replay it"}`);
+  if (r.published.asof === null) throw new Error(`run ${k} published no as-of row`);
   return r;
 });
-const wanted = new Map(runs.map((r) => [r.id!, r]));
-const published = new Map<string, { sha256: string; asofRow: unknown }>();
-for (const f of copy.files("analytics_output_snapshots")) {
-  for (const o of copy.readRows(f)) {
-    if (o.artifact_kind !== "regime_snapshots" || !wanted.has(o.run_id!)) continue;
-    if (sha256(o.payload_json!) !== o.payload_sha256) throw new Error(`run ${o.run_id}: payload does not match its SHA-256`);
-    const row = publishedAsofRow(o.payload_json!, wanted.get(o.run_id!)!.asof!);
-    if (!row) throw new Error(`run ${o.run_id} published no as-of row`);
-    // Only the fields a replay compares (the rich per-indicator cards are
-    // display data and would make the fixture several times larger).
-    const kept = Object.fromEntries([["date", row.date], ...COMPARED_FIELDS.map((k) => [k, row[k]])]);
-    published.set(o.run_id!, { sha256: o.payload_sha256!, asofRow: kept });
-  }
-}
+// The stored payload_sha256 of each run's published artifact, read once.
+const artifactIds = new Set(replays.map((r) => r.published.artifactId!));
+const payloadSha = new Map<string, string>();
+for (const f of copy.files("analytics_output_snapshots")) for (const o of copy.scanRows(f)) if (artifactIds.has(o.id!)) payloadSha.set(o.id!, o.payload_sha256!);
 
 // Union of the sampled runs' input rows: (date, series, value, kind) -> sample indexes.
 const union = new Map<string, number[]>();
-const meta = runs.map((r, idx) => {
-  const inputs = collectRunInputs(copy, r.run_key!);
+const meta = replays.map((r, idx) => {
+  const inputs = collectRunInputs(copy, r.run.runKey);
   for (const row of inputs.rows) {
     const k = `${row.date},${row.series},${row.value},${row.kind}`;
     (union.get(k) ?? union.set(k, []).get(k)!).push(idx);
   }
-  const pub = published.get(r.id!);
-  if (!pub) throw new Error(`run ${r.run_key} has no published regime_snapshots artifact`);
+  const row = r.published.asof!;
+  // Only the fields a replay compares (the rich per-indicator cards are
+  // display data and would make the fixture several times larger).
+  const asofRow = Object.fromEntries([["date", row.date], ...COMPARED_FIELDS.map((k) => [k, (row as unknown as Record<string, unknown>)[k]])]);
   const text = serializeInputs(inputs.rows, "csv");
   // The replay's outcome on the full record, recorded so CI asserts it exactly:
   // a pre-1421 run's numbers can differ from what it published (fresh Yahoo
   // values, packages/analyst-sdk/README.md). The differing fields are pinned
   // here with a hash of the whole replayed row, never tolerated: any change in
   // any replayed value, or in which fields differ, fails the test.
-  const outcome = replayPublishedRun(text, r.asof!, pub.asofRow as PublishedAsofRow, undefined, PRODUCTION_PANELS);
+  const outcome = r.diff!;
   return {
     index: idx,
-    runKey: r.run_key!,
-    runId: r.id!,
-    asof: r.asof!,
-    createdAt: r.created_at!,
+    runKey: r.run.runKey,
+    runId: r.run.id,
+    asof: r.run.asof,
+    createdAt: copy.table("analytics_ledger_runs").find((x) => x.id === r.run.id)!.created_at!,
     vintageId: inputs.run.vintageId,
     memberCount: inputs.run.memberCount,
     inputRows: inputs.rows.length,
     inputSha256: sha256(text),
-    publishedPayloadSha256: pub.sha256,
-    publishedAsofRow: pub.asofRow,
+    publishedPayloadSha256: payloadSha.get(r.published.artifactId!)!,
+    publishedAsofRow: asofRow,
     replayDiffering: outcome.differing,
     replayFirstDiff: outcome.firstDiff,
     replaySha256: outcome.replaySha256,

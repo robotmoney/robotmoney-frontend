@@ -1,7 +1,8 @@
 # csvb tier (issue 1477): the archive tool's own tests (`bun test` inside
 # packages/csvb) against a real Postgres in Docker, and a typecheck. csvb writes
 # and reads format 1 through the analyst SDK's format module
-# (packages/analyst-sdk/src/archive), so a change there runs this suite too.
+# (packages/analyst-sdk/src/archive) and its audit replays through the SDK's
+# replay (issue 1765), so a change to the SDK code csvb reaches runs this suite too.
 # The byte parity between csvb and the public archive routes runs in backend.yml
 # (backend/tests/csvb-api-archive-parity.test.ts), against the backend schema.
 #
@@ -45,7 +46,22 @@ jobs:
           filters: |
             csvb:
               - 'packages/csvb/**'
-              - 'packages/analyst-sdk/src/archive/**'
+              # Issue 1765: csvb reaches far more of the SDK than its format
+              # module. Its deep imports resolve through the SDK's exports map
+              # (package.json), its audit replays each run through the SDK's
+              # src/replay (which reaches the engine, model, analyze, transform
+              # and report code) and opens the backups folder through
+              # bin/backups-dir.ts, a re-export of node/, and its audit fixture
+              # imports src/index.ts, which reaches the inventory and universe
+              # data, and builds its runs from the SDK's raw-history fixture.
+              # A change to any of these alone must run this suite.
+              - 'packages/analyst-sdk/package.json'
+              - 'packages/analyst-sdk/src/**'
+              - 'packages/analyst-sdk/node/**'
+              - 'packages/analyst-sdk/bin/backups-dir.ts'
+              - 'packages/analyst-sdk/inventory/**'
+              - 'packages/analyst-sdk/universe/**'
+              - 'packages/analyst-sdk/tests/fixtures/raw-indicator-history.csv'
               # The API source paces to the contract's public budgets and replays the SDK's recording (issue 1436).
               - 'contract/src/public-analytics.*'
               - 'packages/analyst-sdk/tests/fixtures/archive/api-recorded/**'
@@ -81,12 +97,14 @@ jobs:
       # the scheduled backup's suite (serve against Docker Postgres and a bare
       # git remote, the stale alarm, the credential refusals) ran its cases.
       # Issue 1436: the API source's suite (`csvb backup --source api` against
-      # the recorded archive) ran its cases.
+      # the recorded archive) ran its cases. Issue 1765: the audit suite's
+      # minimum is its count after the audit moved onto the SDK's replay
+      # ('replay from the frozen vintage' among them).
       - name: csvb suites ran (issues 1477, 1608)
         run: >-
           bun scripts/checks/assert-junit-suites.ts "$RUNNER_TEMP/csvb.junit.xml"
           tests/backup.test.ts:28
-          tests/audit.test.ts:9
+          tests/audit.test.ts:13
           tests/verify-legacy.test.ts:3
           tests/boundary.test.ts:2
           tests/serve.test.ts:25

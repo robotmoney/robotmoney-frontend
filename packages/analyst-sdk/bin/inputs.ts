@@ -13,8 +13,9 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { ArchiveError, serializeInputs } from "../src/archive/format1.ts";
 import { serializeManifest } from "../src/input/manifest.ts";
+import { collectRunInputs, openBackupsDir } from "../node/backups-dir.ts";
+import { sha256 } from "../node/hash.ts";
 import { parseArgs, resolveFromCaller, UsageError } from "./args.ts";
-import { collectRunInputs, openBackupsDir } from "./backups-dir.ts";
 
 const USAGE = "usage: bun run inputs --archive <local copy dir> --run <run_key> [--as-of <backup id>] [--out <dir>] [--json]";
 
@@ -32,8 +33,6 @@ try {
 } catch (e) {
   fail(e, 2);
 }
-
-const sha256 = (b: Uint8Array) => new Bun.CryptoHasher("sha256").update(b).digest("hex");
 
 try {
   const root = resolveFromCaller(args.values.get("--archive")!, "inputs");

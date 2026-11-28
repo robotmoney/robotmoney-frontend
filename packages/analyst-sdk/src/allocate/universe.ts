@@ -3,8 +3,8 @@
 // one lending protocol at most 35%, Morpho at most 30% with 12% per curator).
 //
 // Pure: no fs, env or network (scripts/tests/unit/analyst-sdk-purity.test.ts).
-// The shipped file is a static JSON import; a member's own file is read in bin/
-// and passed in as parsed JSON.
+// The shipped file is a static JSON import; a member's own file is read in
+// node/ (node/universe-file.ts) and passed in as parsed JSON.
 import shipped from "../../universe/base-universe.json" with { type: "json" };
 
 export type UniverseTier = "eligible" | "watchlist" | "speculative";

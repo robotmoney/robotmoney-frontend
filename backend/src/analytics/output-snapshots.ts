@@ -15,6 +15,7 @@ import { sha256Hex } from "./run-ledger.ts";
 import { canonicalArtifactBytes, canonicalStringify } from "../../../packages/analyst-sdk/src/report/canonical.ts";
 import type { RegimeSnapshotRow } from "./report/regime-projection.ts";
 import type { ResearchPayload } from "./analyze/research.ts";
+import { REGIME_ARTIFACT_KIND as SDK_REGIME_ARTIFACT_KIND } from "./analyze/regime-versions.ts";
 
 // `regime_beside_snapshots` (issue 1753, migration 0136): the regime rows of a
 // run whose methodology is published beside the main line (REGIME_LINE, v5).
@@ -23,8 +24,12 @@ import type { ResearchPayload } from "./analyze/research.ts";
 // are not written to the regime_snapshots table.
 export type OutputArtifactKind = "regime_snapshots" | "regime_beside_snapshots" | "research_signals" | "warnings" | "logs" | "exceptions";
 
-/** The artifact kind the regime rows of a methodology line are frozen under. */
-export const REGIME_ARTIFACT_KIND = { main: "regime_snapshots", beside: "regime_beside_snapshots" } as const satisfies Record<string, OutputArtifactKind>;
+/**
+ * The artifact kind the regime rows of a methodology line are frozen under.
+ * The SDK states it (analyze/regime-versions.ts, issue 1765); each kind must be
+ * an OutputArtifactKind.
+ */
+export const REGIME_ARTIFACT_KIND = SDK_REGIME_ARTIFACT_KIND satisfies Readonly<Record<string, OutputArtifactKind>>;
 
 // Issue 1753: the published line of a methodology that keeps its history
 // (REGIME_KEPT_HISTORY, v5), before a run's as-of day: each kept day's date and

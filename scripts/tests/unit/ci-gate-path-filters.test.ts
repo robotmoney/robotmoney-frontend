@@ -25,7 +25,7 @@ const read = (name: string) => readFileSync(join(wfDir, name), "utf8");
 // convention that sibling unit files stay independent of each other's
 // internals (see that file's own header comment).
 const E2E_WORKFLOWS = ["e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"];
-const PATH_GATED_WORKFLOWS = ["backend.yml", "contract.yml", "analyst-sdk.yml", "integration.yml", "web-client.yml", "research-pipeline.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"];
+const PATH_GATED_WORKFLOWS = ["backend.yml", "contract.yml", "analyst-sdk.yml", "csvb.yml", "integration.yml", "web-client.yml", "research-pipeline.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml", "e2e-onboarding.yml"];
 
 interface FilterStep {
   uses?: string;
@@ -140,7 +140,30 @@ describe("ci-gate path-filter classification (distributed dorny/paths-filter —
     // Issue #1095: the SDK is its own gated workflow AND the backend's, because
     // the backend re-exports it and copies it into its image. The domains that
     // take the whole backend take it too.
-    ["packages/analyst-sdk/src/run.ts", ["analyst-sdk.yml", "backend.yml", "research-pipeline.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml"]],
+    // Issue 1765: csvb reaches the SDK's exports map, src/ (its audit replays
+    // through src/replay, which reaches the engine and model code), node/
+    // through bin/backups-dir.ts, the inventory and universe data, and the
+    // raw-history fixture its audit builds runs from, so each selects csvb.yml.
+    ["packages/analyst-sdk/src/run.ts", ["analyst-sdk.yml", "backend.yml", "csvb.yml", "research-pipeline.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml"]],
+    ["packages/analyst-sdk/src/replay/replay.ts", ["analyst-sdk.yml", "backend.yml", "csvb.yml", "research-pipeline.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml"]],
+    ["packages/analyst-sdk/src/engine/run-model.ts", ["analyst-sdk.yml", "backend.yml", "csvb.yml", "research-pipeline.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml"]],
+    ["packages/analyst-sdk/node/backups-dir.ts", ["analyst-sdk.yml", "backend.yml", "csvb.yml", "research-pipeline.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml"]],
+    ["packages/analyst-sdk/bin/backups-dir.ts", ["analyst-sdk.yml", "backend.yml", "csvb.yml", "research-pipeline.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml"]],
+    ["packages/analyst-sdk/package.json", ["analyst-sdk.yml", "backend.yml", "csvb.yml", "research-pipeline.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml"]],
+    ["packages/analyst-sdk/inventory/research-series.json", ["analyst-sdk.yml", "backend.yml", "csvb.yml", "research-pipeline.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml"]],
+    ["packages/analyst-sdk/universe/base-universe.json", ["analyst-sdk.yml", "backend.yml", "csvb.yml", "research-pipeline.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml"]],
+    ["packages/analyst-sdk/tests/fixtures/raw-indicator-history.csv", ["analyst-sdk.yml", "backend.yml", "csvb.yml", "research-pipeline.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml"]],
+    // An SDK command csvb never loads, and an SDK test, do not select csvb.yml.
+    ["packages/analyst-sdk/bin/regime.ts", ["analyst-sdk.yml", "backend.yml", "research-pipeline.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml"]],
+    ["packages/analyst-sdk/tests/replay.test.ts", ["analyst-sdk.yml", "backend.yml", "research-pipeline.yml", "e2e-lifecycle.yml", "e2e-swarm.yml", "e2e-web.yml"]],
+    // csvb's own code: its suite, and the backend's (packages/**), which runs
+    // the csvb and archive route parity.
+    ["packages/csvb/src/audit/replay.ts", ["backend.yml", "csvb.yml"]],
+    // Issue 1765: backend tests import the operator and release tools they
+    // prove, so a change there alone selects backend.yml.
+    // scripts/release stays out of integration (see the directory guard below).
+    ["scripts/ops/analytics-storage-baseline.ts", ["backend.yml", "integration.yml"]],
+    ["scripts/release/analytics-load-check.ts", ["backend.yml"]],
     // A unit test cannot change what the integration suite or the live stack
     // sees, so a PR touching only unit tests selects neither (unit.yml, which
     // is not path-gated, still runs it).

@@ -477,14 +477,21 @@ are NEVER in the seed; they are fetched live per
   its `upstreamTotals`/`skipped`, confirm `generatedAt` moved forward, and treat
   any drop in `projectCount` as requiring an explanation in the PR body.
 
-The independent producer runs regime and research on **distinct timers**:
-`regime` daily at **22:30 UTC** (after US market close, so fetched raw data is
-settled end-of-day) and `research` (both research signals, never the regime
-tool) daily at **23:00 UTC**. These timers live in `analytics-producer`, not
-`job_schedules` or worker lanes. Each regime tick runs the main-line run first,
-then one run for each methodology published beside the main line (`v5`, issue
-1753, D96). The runs share one fetch memo, and a failed beside run never fails
-or changes the main-line run (`regime-engine.md` §13). The API exposes regime at `/api/dashboards/regime-snapshots?range=`
+The independent producer runs regime and research on **distinct timers**, two
+cron expressions it reads from `PRODUCER_REGIME_CRON` and
+`PRODUCER_RESEARCH_CRON`. Production runs `regime` at **`30 */3 * * *`** and
+`research` (both research signals, never the regime tool) at
+**`0 */3 * * *`** (D87; `REALISTIC` in `scripts/lib/smoke-cadence.ts`). The
+committed defaults in `backend/src/producer/index.ts` and `docker-compose.yml`
+are `30 22 * * *` for `regime` and `0 23 * * *` for `research`. A stage boot
+sets an hourly pair anchored to its own minute (D87). These timers live in
+`analytics-producer`, not `job_schedules` or worker lanes. Each regime tick
+begins every model's ledger run: the main line first, then each methodology
+published beside it (`v5`, issue 1753, D96). The tick then extracts once,
+reads the committed inputs once for the union of the models' storage keys, and
+freezes each model's vintage at that one shared cutoff (`regime-engine.md`
+§8.0, issue 1765). A failed beside run never fails or changes the main-line
+run (`regime-engine.md` §13). The API exposes regime at `/api/dashboards/regime-snapshots?range=`
 (`?view=summary` returns only today's composite/panel read — date, composite,
 compositePercentile, regime, the three panel indices and labels, and
 staleness — instead of the full `{ latest, history, staleness }` body, issue
@@ -572,8 +579,9 @@ flowchart TB
 
 ## 12. Analytics pipeline — producer executions
 
-The analytics suite runs as two independent-producer timers: `regime` daily at
-22:30 UTC and `research` daily at 23:00 UTC. Neither timer creates a consumer
+The analytics suite runs as two independent-producer timers. Production runs
+`regime` at `30 */3 * * *` and `research` at `0 */3 * * *` (D87). The committed
+defaults are `30 22 * * *` and `0 23 * * *`. Neither timer creates a consumer
 queue job; computed output is submitted through authenticated REST.
 It drives three compute pipelines through a shared 6-stage access → extract →
 transform → analyze → store → report flow:

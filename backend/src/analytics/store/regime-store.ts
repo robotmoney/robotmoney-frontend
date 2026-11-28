@@ -2,6 +2,13 @@
 // Upserts on the date primary key so re-running a slot overwrites rather than
 // duplicates. The only SQL write for the regime classifier.
 //
+// A row whose values are all unchanged is skipped (issue 1765 storage S1): the
+// DO UPDATE carries WHERE (old columns) IS DISTINCT FROM (EXCLUDED columns), so
+// a re-run that recomputes the same history writes no new row version for it.
+// The stored values are the same either way, and so is the overwrite evidence,
+// because the capture trigger (migration 0056) fires only WHEN (OLD IS DISTINCT
+// FROM NEW).
+//
 // The row carries the full computeRegime output: composite/percentile/regime,
 // per-panel indices + percentiles + regimes, the point-in-time
 // inverse-correlation panel weights, the methodology `version`, the
@@ -14,6 +21,8 @@ import { on, registerQuery } from "../../db/registry.ts";
 // mapper can import it without pulling in this Postgres client. Re-exported here
 // for the store's own long-standing consumers (analytics index, tests).
 import type { RegimeSnapshotRow } from "../report/regime-projection.ts";
+import { SNAPSHOT_COLUMNS } from "../report/published-rows.ts";
+import { toDbRow } from "../report/regime-eq-map.ts";
 export type { RegimeSnapshotRow };
 
 export async function saveRegimeSnapshots(
@@ -34,25 +43,21 @@ export async function saveRegimeSnapshots(
   }
 }
 
-// The columns the upsert writes, in the statement's order. The probe below is
-// built from this list, so it cannot drift from the column list it proves.
-const UPSERT_COLUMNS = [
-  "date", "composite", "composite_percentile", "regime",
-  "macro_regime", "onchain_regime", "factor_regime",
-  "macro_index", "onchain_index", "factor_index",
-  "macro_percentile", "onchain_percentile", "factor_percentile",
-  "panel_weights", "version", "source", "percentiles", "indicators",
-  "panels", "bucket_thresholds", "backtest", "correlations", "extras",
-] as const;
+// The columns the upsert writes, in the statement's order: every column of the
+// snapshot column table (SNAPSHOT_COLUMNS, issue 1765). The probe below is built
+// from this list, so it cannot drift from the column list it proves. Every
+// column but the `date` key is both SET and compared by the no-op guard.
+const UPSERT_COLUMNS: readonly string[] = SNAPSHOT_COLUMNS.map((c) => c.column);
 
-// The column definition list of the jsonb document: the column names are the document keys.
-// upsertSnapshots below spells the same list out, because a registered statement is a tagged template.
-const UPSERT_RECORD_TYPES = `date date, composite numeric, composite_percentile numeric, regime text,
-  macro_regime text, onchain_regime text, factor_regime text,
-  macro_index numeric, onchain_index numeric, factor_index numeric,
-  macro_percentile numeric, onchain_percentile numeric, factor_percentile numeric,
-  panel_weights jsonb, version text, source text, percentiles jsonb, indicators jsonb,
-  panels jsonb, bucket_thresholds jsonb, backtest jsonb, correlations jsonb, extras jsonb`;
+// The non-key columns, in UPSERT_COLUMNS order: the SET list and both sides of the guard.
+const UPDATED_COLUMNS = UPSERT_COLUMNS.filter((c) => c !== "date");
+
+// The column definition list of the jsonb document: the column names are the document keys,
+// each with its type in the table.
+// upsertSnapshots below spells the same lists out, because a registered statement is a tagged
+// template whose text cannot be generated. tests/snapshot-columns.test.ts holds each list in it
+// equal to SNAPSHOT_COLUMNS.
+const UPSERT_RECORD_TYPES = SNAPSHOT_COLUMNS.map((c) => `${c.column} ${c.sqlType}`).join(", ");
 
 const upsertRegime = registerQuery({
   role: "rm_app",
@@ -68,37 +73,16 @@ const upsertRegime = registerQuery({
     statement:
       `INSERT INTO regime_snapshots (${UPSERT_COLUMNS.join(", ")}) ` +
       `SELECT ${UPSERT_COLUMNS.join(", ")} FROM jsonb_to_recordset($1::text::jsonb) AS x(${UPSERT_RECORD_TYPES}) ` +
-      `ON CONFLICT (date) DO UPDATE SET ${UPSERT_COLUMNS.filter((c) => c !== "date").map((c) => `${c} = EXCLUDED.${c}`).join(", ")}`,
+      `ON CONFLICT (date) DO UPDATE SET ${UPDATED_COLUMNS.map((c) => `${c} = EXCLUDED.${c}`).join(", ")} ` +
+      `WHERE (${UPDATED_COLUMNS.map((c) => `regime_snapshots.${c}`).join(", ")}) ` +
+      `IS DISTINCT FROM (${UPDATED_COLUMNS.map((c) => `EXCLUDED.${c}`).join(", ")})`,
     params: ["[]"],
   },
 });
 
 async function upsertSnapshots(rows: RegimeSnapshotRow[], db: DbHandle): Promise<void> {
-  const documents = rows.map((s) => ({
-    date: s.date,
-    composite: s.composite,
-    composite_percentile: s.compositePercentile,
-    regime: s.regime,
-    macro_regime: s.macroRegime,
-    onchain_regime: s.onchainRegime,
-    factor_regime: s.factorRegime,
-    macro_index: s.macroIndex ?? null,
-    onchain_index: s.onchainIndex ?? null,
-    factor_index: s.factorIndex ?? null,
-    macro_percentile: s.macroPercentile ?? null,
-    onchain_percentile: s.onchainPercentile ?? null,
-    factor_percentile: s.factorPercentile ?? null,
-    panel_weights: s.panelWeights ?? null,
-    version: s.version ?? null,
-    source: s.source ?? null,
-    percentiles: s.percentiles,
-    indicators: s.indicators,
-    panels: s.panels ?? null,
-    bucket_thresholds: s.bucketThresholds ?? null,
-    backtest: s.backtest ?? null,
-    correlations: s.correlations ?? null,
-    extras: s.extras ?? null,
-  }));
+  // One document per row, keyed by column (toDbRow: one cell per SNAPSHOT_COLUMNS entry).
+  const documents = rows.map(toDbRow);
   await on(db, upsertRegime)`
       INSERT INTO regime_snapshots
         (date, composite, composite_percentile, regime,
@@ -141,5 +125,22 @@ async function upsertSnapshots(rows: RegimeSnapshotRow[], db: DbHandle): Promise
         bucket_thresholds = EXCLUDED.bucket_thresholds,
         backtest = EXCLUDED.backtest,
         correlations = EXCLUDED.correlations,
-        extras = EXCLUDED.extras`;
+        extras = EXCLUDED.extras
+      WHERE (regime_snapshots.composite, regime_snapshots.composite_percentile, regime_snapshots.regime,
+             regime_snapshots.macro_regime, regime_snapshots.onchain_regime, regime_snapshots.factor_regime,
+             regime_snapshots.macro_index, regime_snapshots.onchain_index, regime_snapshots.factor_index,
+             regime_snapshots.macro_percentile, regime_snapshots.onchain_percentile, regime_snapshots.factor_percentile,
+             regime_snapshots.panel_weights, regime_snapshots.version, regime_snapshots.source,
+             regime_snapshots.percentiles, regime_snapshots.indicators,
+             regime_snapshots.panels, regime_snapshots.bucket_thresholds, regime_snapshots.backtest,
+             regime_snapshots.correlations, regime_snapshots.extras)
+        IS DISTINCT FROM
+            (EXCLUDED.composite, EXCLUDED.composite_percentile, EXCLUDED.regime,
+             EXCLUDED.macro_regime, EXCLUDED.onchain_regime, EXCLUDED.factor_regime,
+             EXCLUDED.macro_index, EXCLUDED.onchain_index, EXCLUDED.factor_index,
+             EXCLUDED.macro_percentile, EXCLUDED.onchain_percentile, EXCLUDED.factor_percentile,
+             EXCLUDED.panel_weights, EXCLUDED.version, EXCLUDED.source,
+             EXCLUDED.percentiles, EXCLUDED.indicators,
+             EXCLUDED.panels, EXCLUDED.bucket_thresholds, EXCLUDED.backtest,
+             EXCLUDED.correlations, EXCLUDED.extras)`;
 }

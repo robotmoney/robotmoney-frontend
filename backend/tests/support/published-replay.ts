@@ -1,26 +1,31 @@
 // Issue 1431: replay one published production regime run from its frozen
 // inputs and compare it with the row the run published for its as-of day.
 //
-// The inputs are the run's vintage exactly as the analyst SDK's format 1
-// reader writes them (`bun run inputs`, src/archive/format1.ts): stored value
-// text, ratios as kind `calculated`. They are parsed with the replay contract
-// and run through the SDK's runRegime (the one calculation the backend also
-// runs) with factor figures on. No tolerance: every field is compared exactly,
-// in a fixed order, and the first field that differs is the run's result.
-// Decision D78 (compensated arithmetic) moves numbers in their last
-// bits, so a run published before it differs from its replay in those bits;
-// `beyondRounding` names the fields that differ by more than that
-// (packages/analyst-sdk/tests/support/numeric-diff.ts).
-import { INDICATORS, type Panel } from "../../src/analytics/analyze/indicators.ts";
-import { canonicalStringify } from "../../src/analytics/run-ledger.ts";
+// A thin adapter over the analyst SDK (issue 1765): the run is the SDK's
+// runRegime with factor figures on, its rows are the SDK's publishedRows (the
+// one row builder, the rows the producer freezes), and the comparison of the
+// as-of rows is the SDK's compareRows. No tolerance: every compared field is
+// compared exactly, in a fixed order, and the first field that differs is the
+// run's result. Decision D78 (compensated arithmetic) moves numbers in their
+// last bits, so a run published before it differs from its replay in those
+// bits; `beyondRounding` names the fields that differ by more than that.
+//
+// The inputs are the run's vintage exactly as the SDK's format 1 reader writes
+// them (`bun run inputs`, src/archive/format1.ts): stored value text, ratios as
+// kind `calculated`, parsed with the replay contract. A replay over an archive
+// copy reads the same vintage with the SDK's replayRun instead.
 import { parseInput } from "../../../packages/analyst-sdk/src/input/load.ts";
 import { requireComplete, runRegime } from "../../../packages/analyst-sdk/src/run.ts";
+import { compareRows, publishedRows } from "../../../packages/analyst-sdk/src/replay/index.ts";
+import { CURRENT_REGIME_VERSION, REGIME_PUBLISHED_PANELS, type RegimeVersion } from "../../../packages/analyst-sdk/src/analyze/regime-versions.ts";
+import type { Panel } from "../../../packages/analyst-sdk/src/analyze/indicators.ts";
 import type { RawIndicatorHistory } from "../../src/analytics/types.ts";
-import type { RegimeVersion } from "../../src/analytics/analyze/regime-versions.ts";
-import { numericDiff } from "../../../packages/analyst-sdk/tests/support/numeric-diff.ts";
 
-// The as-of row of a published regime_snapshots artifact (backend
-// buildSnapshotRows), the fields a replay recomputes.
+// The fields a replay compares, in order: the SDK's one list, re-exported here.
+export { COMPARED_FIELDS } from "../../../packages/analyst-sdk/src/replay/index.ts";
+
+// The as-of row of a published regime_snapshots artifact (the SDK's
+// publishedRows), the fields a replay recomputes.
 export interface PublishedAsofRow {
   date: string;
   regime: string | null;
@@ -40,25 +45,6 @@ export interface PublishedAsofRow {
   backtest: unknown;
 }
 
-// Compared in this order; the label first, since issue 1431 is about labels.
-export const COMPARED_FIELDS = [
-  "regime",
-  "composite",
-  "compositePercentile",
-  "macroRegime",
-  "onchainRegime",
-  "factorRegime",
-  "macroIndex",
-  "onchainIndex",
-  "factorIndex",
-  "macroPercentile",
-  "onchainPercentile",
-  "factorPercentile",
-  "percentiles",
-  "correlations",
-  "backtest",
-] as const;
-
 export interface ReplayOutcome {
   asof: string;
   match: boolean;
@@ -74,18 +60,11 @@ export interface ReplayOutcome {
   // of its size. A field missing here but in `differing` moved only by rounding.
   beyondRounding: string[];
   // SHA-256 of the canonical JSON of every compared replay field: pins the
-  // whole replayed row, so a recorded outcome can be asserted exactly.
-  replaySha256: string;
+  // whole replayed row, so a recorded outcome can be asserted exactly. Null
+  // when the replay labels no row for the as-of day.
+  replaySha256: string | null;
   // Each compared field of the replayed row, as canonical JSON.
   fields: Record<string, string>;
-}
-
-const nn = (v: number | undefined): number | null => (typeof v === "number" && Number.isFinite(v) ? v : null);
-
-/** The as-of row the published artifact holds, from its payload text. Null when the run published no row for its as-of day. */
-export function publishedAsofRow(payloadText: string, asof: string): PublishedAsofRow | null {
-  const rows = JSON.parse(payloadText) as PublishedAsofRow[];
-  return rows.find((r) => r.date === asof) ?? null;
 }
 
 /**
@@ -93,71 +72,37 @@ export function publishedAsofRow(payloadText: string, asof: string): PublishedAs
  * with its published as-of row. `version` is the methodology version the run
  * was stamped with (issue 1652); a run replays under its own version.
  */
-export function replayPublishedRun(inputText: string, asof: string, published: PublishedAsofRow | null, version?: RegimeVersion, panels?: Panel[]): ReplayOutcome {
+export function replayPublishedRun(inputText: string, asof: string, published: PublishedAsofRow | null, version?: RegimeVersion, panels?: readonly Panel[]): ReplayOutcome {
   return replayPublishedHistory(parseInput(inputText, { replay: true }).history, asof, published, version, panels);
 }
 
 // Every production run published before issue 1708 (D89) averaged macro and
-// onchain only. A replay of one of those passes this panel set; a run this code
-// publishes replays under the default (the SDK's PANELS).
-export const PRODUCTION_PANELS: Panel[] = ["macro", "onchain"];
+// onchain only: the SDK's REGIME_PUBLISHED_PANELS.v3, the default of a v3
+// replay. A caller that replays such a run under another version passes it.
+export const PRODUCTION_PANELS: Panel[] = [...REGIME_PUBLISHED_PANELS.v3];
 
-/** The same replay from an input history already in memory (the backend's vintage read through the D74 mapping). */
-export function replayPublishedHistory(history: RawIndicatorHistory, asof: string, published: PublishedAsofRow | null, version?: RegimeVersion, panels?: Panel[]): ReplayOutcome {
-  const run = requireComplete(runRegime(history, { asof, factor: true, ...(panels ? { panels } : {}), ...(version ? { version } : {}) }));
+/**
+ * The same replay from an input history already in memory (the backend's
+ * vintage read through the D74 mapping). `version` defaults to the current
+ * one, and `panels` to the panels that version's published runs average
+ * (REGIME_PUBLISHED_PANELS).
+ */
+export function replayPublishedHistory(history: RawIndicatorHistory, asof: string, published: PublishedAsofRow | null, version?: RegimeVersion, panels?: readonly Panel[]): ReplayOutcome {
+  const v = version ?? CURRENT_REGIME_VERSION;
+  const run = requireComplete(runRegime(history, { asof, factor: true, version: v, panels: panels ?? REGIME_PUBLISHED_PANELS[v] }));
   const last = run.dateAxis.length - 1;
   if (run.dateAxis[last] !== asof) throw new Error(`replay date axis ends ${run.dateAxis[last]}, not the run's as-of day ${asof}`);
-  const r2 = run.result;
-  const r3 = run.factor!;
-  const percentiles: Record<string, number> = {};
-  for (const ind of INDICATORS) {
-    const s = r2.signed[ind.id]?.[last];
-    if (typeof s === "number" && Number.isFinite(s)) percentiles[ind.id] = Number(s.toFixed(6));
-  }
-  const replay: Record<(typeof COMPARED_FIELDS)[number], unknown> = {
-    regime: r2.regime[last] ?? null,
-    composite: nn(r2.composite[last]),
-    compositePercentile: nn(r2.compositePercentile[last]),
-    macroRegime: r2.macroRegime?.[last] ?? null,
-    onchainRegime: r2.onchainRegime?.[last] ?? null,
-    factorRegime: r3.factorRegime?.[last] ?? null,
-    macroIndex: nn(r2.macroIndex?.[last]),
-    onchainIndex: nn(r2.onchainIndex?.[last]),
-    factorIndex: nn(r3.factorIndex?.[last]),
-    macroPercentile: nn(r2.macroPercentile?.[last]),
-    onchainPercentile: nn(r2.onchainPercentile?.[last]),
-    factorPercentile: nn(r3.factorPercentile?.[last]),
-    percentiles,
-    correlations: run.correlations ?? null,
-    backtest: run.backtest ?? null,
-  };
-  const differing: string[] = [];
-  const beyondRounding: string[] = [];
-  let firstDiff: ReplayOutcome["firstDiff"] = null;
-  if (published === null) {
-    // A published run always has a row for its as-of day; a missing one is a mismatch, never a pass.
-    differing.push("as-of row");
-    beyondRounding.push("as-of row");
-    firstDiff = { field: "as-of row", published: "absent", replay: canonicalStringify(replay.regime) };
-  } else {
-    for (const f of COMPARED_FIELDS) {
-      const a = canonicalStringify(published[f] ?? null);
-      const b = canonicalStringify(replay[f]);
-      if (a === b) continue;
-      differing.push(f);
-      if (numericDiff(a, b).differences.length > 0) beyondRounding.push(f);
-      firstDiff ??= { field: f, published: a, replay: b };
-    }
-  }
+  const replay = publishedRows(run).find((r) => r.date === asof) ?? null;
+  const c = compareRows(published, replay);
   return {
     asof,
-    match: differing.length === 0,
-    firstDiff,
+    match: c.match,
+    firstDiff: c.firstDiff,
     publishedLabel: published?.regime ?? null,
-    replayLabel: replay.regime as string | null,
-    differing,
-    beyondRounding,
-    replaySha256: new Bun.CryptoHasher("sha256").update(canonicalStringify(replay)).digest("hex"),
-    fields: Object.fromEntries(COMPARED_FIELDS.map((f) => [f, canonicalStringify(replay[f])])),
+    replayLabel: replay?.regime ?? null,
+    differing: c.differing,
+    beyondRounding: c.beyondRounding,
+    replaySha256: c.replaySha256,
+    fields: c.fields,
   };
 }

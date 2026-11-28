@@ -1,12 +1,19 @@
 // Derived series (issue 1751, gap 7). Pure: no fs, env, db or network.
 //
 // A DerivedSeries declares, as plain data, a series computed from
-// supplementary series, and deriveSeries computes it. The four ops reproduce
-// the downstream FISCAL, SKEW, VIX_TERM and UPVOL_SHARE series bit for bit, so
+// supplementary series, and deriveSeries computes it. The four data ops
+// reproduce the downstream FISCAL, SKEW, VIX_TERM and UPVOL_SHARE series bit for bit, so
 // the order of every addition and division below is part of the contract.
 //
-// Every op takes an optional publication rule: each output date is moved to
-// the day that value is published (publishedOn). Without one the dates stay.
+// Every op but custom takes an optional publication rule: each output date is
+// moved to the day that value is published (publishedOn). Without one the
+// dates stay.
+//
+// The custom op (issue 1765, phase 5) is a research indicator written as a
+// pure function with a declared publication lag, so a new indicator needs no
+// SDK release. deriveSeries calls it once per calendar day, and hands it each
+// input as a read-only view that ends at the day minus its lag, so the
+// function never reads a value dated after it.
 import type { Point } from "../types.ts";
 import { sum2 } from "./exact.ts";
 import { mergeRatioSeries } from "./grid.ts";
@@ -69,7 +76,45 @@ export interface DerivedUpVolumeShare {
   publication?: PublicationRule;
 }
 
-export type DerivedSeries = DerivedLevel | DerivedRatio | DerivedRollingSumOverKnownLevel | DerivedUpVolumeShare;
+/**
+ * A research indicator as a pure function (issue 1765, phase 5). On each
+ * calendar day `day`, `fn(inputs, day)` gives the value known on that day, or
+ * null for none. `lagDays` is the declared publication lag: `inputs` holds only
+ * the points of each named input dated on or before `day` minus `lagDays`.
+ * Each input is a read-only view of the known points, never a copy: no index,
+ * key, descriptor or iteration reaches a later point, so fn cannot read a
+ * later value. A view keeps its own length, so one kept from an earlier day
+ * never grows. Every write to a view (an index, the length, a new property, a
+ * delete, a sort) is a TypeError, and the points are frozen, so fn cannot
+ * change them either. A view is a Proxy, which Bun's console.log prints as its
+ * empty target (`[]`): log `[...view]` to see the points.
+ * structuredClone(view) and Object.freeze(view) throw, and
+ * Object.isFrozen(view) is false: copy a view with `[...view]` before either.
+ *
+ * The value is dated `day` itself: the lag is the publication rule, so a custom
+ * op takes no `publication`. The days run from the first day any input point is
+ * known (its date plus `lagDays`) through deriveSeries' `through` (default the
+ * newest input date plus `lagDays`). A null or a non-finite number gives no
+ * point.
+ *
+ * A function cannot be digested by value. The stage cache (engine/cache.ts)
+ * therefore names a custom op by its declared `id` and `version`, never by the
+ * body of `fn`. Bump `version` whenever `fn` changes: a cache that ran the old
+ * fn under the same id and version serves its stale stages.
+ */
+export interface DerivedCustom {
+  op: "custom";
+  id: string;
+  /** The version of `fn`. The stage cache keys a custom op by `id` and `version` only. */
+  version: string;
+  /** The input series ids `fn` reads, each given to it under its own id. */
+  inputs: readonly string[];
+  /** The publication lag in calendar days: on day d, fn sees points dated on or before d minus lagDays. */
+  lagDays: number;
+  fn: (inputs: Record<string, Point[]>, day: string) => number | null;
+}
+
+export type DerivedSeries = DerivedLevel | DerivedRatio | DerivedRollingSumOverKnownLevel | DerivedUpVolumeShare | DerivedCustom;
 
 // Raised when a declaration names an input series that was not supplied.
 export class DerivedSeriesError extends Error {
@@ -118,12 +163,31 @@ export function derivedInputIds(d: DerivedSeries): string[] {
       return [d.flow, d.level];
     case "up-volume-share":
       return [d.close, d.volume];
+    case "custom":
+      checkCustom(d);
+      return [...d.inputs];
     default:
       throw new RangeError(`derived series ${(d as { id?: unknown }).id}: unknown op ${JSON.stringify((d as { op?: unknown }).op)}`);
   }
 }
 
 const positiveInt = (n: unknown): boolean => typeof n === "number" && Number.isInteger(n) && n > 0;
+
+// A custom declaration's fields; a RangeError names the bad one.
+function checkCustom(d: DerivedCustom): void {
+  if (typeof d.id !== "string" || d.id === "") throw new RangeError(`derived series ${JSON.stringify(d.id)}: a custom op needs a non-empty string id`);
+  if (typeof d.version !== "string" || d.version === "") {
+    throw new RangeError(`derived series ${d.id}: version must be a non-empty string (the stage cache names fn by id and version), got ${JSON.stringify(d.version)}`);
+  }
+  if (!Array.isArray(d.inputs) || d.inputs.length === 0 || d.inputs.some((id) => typeof id !== "string" || id === "")) {
+    throw new RangeError(`derived series ${d.id}: inputs must be a non-empty list of input series ids, got ${JSON.stringify(d.inputs)}`);
+  }
+  if (new Set(d.inputs).size !== d.inputs.length) throw new RangeError(`derived series ${d.id}: inputs names a series twice: ${JSON.stringify(d.inputs)}`);
+  if (typeof d.lagDays !== "number" || !Number.isInteger(d.lagDays) || d.lagDays < 0) {
+    throw new RangeError(`derived series ${d.id}: lagDays must be an integer of 0 or more, got ${JSON.stringify(d.lagDays)}`);
+  }
+  if (typeof d.fn !== "function") throw new RangeError(`derived series ${d.id}: fn must be a function`);
+}
 
 // The named input, sorted by date (stable). The caller's array is not changed.
 function input(d: DerivedSeries, inputs: Readonly<Record<string, readonly Point[]>>, id: string): Point[] {
@@ -184,14 +248,125 @@ function upVolumeShare(d: DerivedUpVolumeShare, inputs: Readonly<Record<string, 
   return out;
 }
 
+const DAY_MS = 86_400_000;
+// The calendar day `n` days after `day` (YYYY-MM-DD, UTC). A bad date is a RangeError.
+const addDays = (day: string, n: number): string => new Date(Date.parse(`${day}T00:00:00Z`) + n * DAY_MS).toISOString().slice(0, 10);
+
+// The index a property key names on an array, or -1: a canonical non-negative integer string.
+function arrayIndex(key: string | symbol): number {
+  if (typeof key !== "string" || key.length === 0) return -1;
+  const c = key.charCodeAt(0);
+  if (c < 48 || c > 57) return -1;
+  const i = Number(key);
+  return Number.isSafeInteger(i) && String(i) === key ? i : -1;
+}
+
+/**
+ * A read-only view of the first `count` points of `points` (frozen points,
+ * sorted by date), for a custom op's fn: an array to every reader, of length
+ * `count`, which no index, key, descriptor or iteration can read past. Nothing
+ * is copied: a view costs one Proxy whatever its length (wave 5 review: a copy
+ * of the known prefix per day made a 13,000-point input take 25 s). The proxy
+ * target is an empty array that never changes, so the proxy invariants hold
+ * for any `count`. Every write is a TypeError.
+ */
+function knownView(points: readonly Point[], count: number, id: string): Point[] {
+  const refuse = (): never => {
+    throw new TypeError(`derived series ${id}: fn cannot change its inputs`);
+  };
+  return new Proxy([] as Point[], {
+    get(target, key, receiver) {
+      if (key === "length") return count;
+      const i = arrayIndex(key);
+      if (i >= 0) return i < count ? points[i] : undefined;
+      return Reflect.get(target, key, receiver);
+    },
+    has(target, key) {
+      const i = arrayIndex(key);
+      return i >= 0 ? i < count : Reflect.has(target, key);
+    },
+    ownKeys() {
+      const keys: string[] = [];
+      for (let i = 0; i < count; i++) keys.push(String(i));
+      keys.push("length");
+      return keys;
+    },
+    getOwnPropertyDescriptor(target, key) {
+      // The target's length is writable and not configurable, so the view's is
+      // reported the same way; the set trap still refuses every write.
+      if (key === "length") return { value: count, writable: true, enumerable: false, configurable: false };
+      const i = arrayIndex(key);
+      if (i >= 0) return i < count ? { value: points[i], writable: false, enumerable: true, configurable: true } : undefined;
+      return Reflect.getOwnPropertyDescriptor(target, key);
+    },
+    set: refuse,
+    defineProperty: refuse,
+    deleteProperty: refuse,
+    setPrototypeOf: refuse,
+    preventExtensions: refuse,
+  });
+}
+
+// The custom op: fn on every calendar day, each input a view that ends at the day minus the lag.
+function custom(d: DerivedCustom, inputs: Readonly<Record<string, readonly Point[]>>, through: string | undefined): Point[] {
+  checkCustom(d);
+  // Each input sorted by date, as one frozen array of frozen copies of its points.
+  const series = d.inputs.map((id) => Object.freeze(input(d, inputs, id).map((p) => Object.freeze({ date: p.date, value: p.value }))));
+  let first: string | undefined;
+  let last: string | undefined;
+  for (const s of series) {
+    if (s.length === 0) continue;
+    if (first === undefined || s[0]!.date < first) first = s[0]!.date;
+    if (last === undefined || s[s.length - 1]!.date > last) last = s[s.length - 1]!.date;
+  }
+  if (through !== undefined && (typeof through !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(through))) {
+    throw new RangeError(`derived series ${d.id}: through must be a YYYY-MM-DD day, got ${JSON.stringify(through)}`);
+  }
+  if (first === undefined || last === undefined) return [];
+  const end = through ?? addDays(last, d.lagDays);
+  // How many points of each input are known, and the view fn reads. A new view
+  // (one Proxy, no copy) is made only on a day a new point of that input is known.
+  const known = series.map(() => 0);
+  const cut: Point[][] = series.map((s) => knownView(s, 0, d.id));
+  let view: Record<string, Point[]> | undefined;
+  const out: Point[] = [];
+  for (let day = addDays(first, d.lagDays); day <= end; day = addDays(day, 1)) {
+    const cutoff = addDays(day, -d.lagDays);
+    let moved = view === undefined;
+    series.forEach((s, j) => {
+      let k = known[j]!;
+      while (k < s.length && s[k]!.date <= cutoff) k++;
+      if (k !== known[j]) {
+        known[j] = k;
+        cut[j] = knownView(s, k, d.id);
+        moved = true;
+      }
+    });
+    if (moved) view = Object.freeze(Object.fromEntries(d.inputs.map((id, j) => [id, cut[j]!])));
+    const value = d.fn(view!, day);
+    if (value === null) continue;
+    if (typeof value !== "number") throw new RangeError(`derived series ${d.id}: fn must return a number or null, got ${JSON.stringify(value)} on ${day}`);
+    if (Number.isFinite(value)) out.push({ date: day, value });
+  }
+  return out;
+}
+
+/** What deriveSeries reads besides the declaration and its inputs. */
+export interface DeriveOptions {
+  /** The last day a custom op is evaluated (default its newest input date plus its lag). The other ops ignore it. */
+  through?: string;
+}
+
 /**
  * The series `declaration` describes, computed from `inputs` (supplementary
  * series by id, in any date order). Throws DerivedSeriesError for a missing
  * input, RangeError for a malformed declaration and PublicationRuleError for a
  * malformed publication rule.
  */
-export function deriveSeries(declaration: DerivedSeries, inputs: Readonly<Record<string, readonly Point[]>>): Point[] {
+export function deriveSeries(declaration: DerivedSeries, inputs: Readonly<Record<string, readonly Point[]>>, opts: DeriveOptions = {}): Point[] {
   const d = declaration;
+  // A custom op dates each value on its own day: its lag is its publication rule.
+  if (d.op === "custom") return custom(d, inputs, opts.through);
   const rule: PublicationRule =
     d.publication === undefined ? { kind: "same-day" } : publicationRuleOf({ id: d.id, publication: d.publication });
   let points: Point[];

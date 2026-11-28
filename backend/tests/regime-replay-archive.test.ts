@@ -8,11 +8,15 @@
 // it SKIPS with the reason printed; the committed sample of published runs in
 // regime-replay-published.test.ts is what required CI executes.
 //
-// For each regime run with an as-of day on or after 2026-09-21 it takes the
-// run's frozen vintage through the analyst SDK's one archive reader
-// (packages/analyst-sdk/bin/backups-dir.ts, the reader `bun run inputs` uses),
-// replays it with the network poisoned and compares the as-of row field by
-// field, exactly, with the regime_snapshots artifact the run published. Every
+// For each regime run with an as-of day on or after 2026-09-21 it replays the
+// run with the analyst SDK's replayRun (issue 1765) over the copy opened with
+// the SDK's one archive reader (packages/analyst-sdk/bin/backups-dir.ts, the
+// reader `bun run inputs` uses), with the network poisoned: the run's frozen
+// vintage, under its own methodology label and the panels that version's
+// published runs average (REGIME_PUBLISHED_PANELS: macro and onchain for a v3
+// run, every panel for v4 and v5), against the rows it published under its
+// line's artifact kind (REGIME_ARTIFACT_KIND), their payload checked against
+// the stored SHA-256. The as-of row is compared field by field, exactly. Every
 // run is reported (match, or every differing field and the first one's
 // values). No tolerance anywhere.
 //
@@ -36,10 +40,10 @@
 import { describe, expect, test } from "bun:test";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { collectRunInputs, openBackupsDir } from "../../packages/analyst-sdk/bin/backups-dir.ts";
-import { serializeInputs, type Row } from "../../packages/analyst-sdk/src/archive/format1.ts";
+import { openBackupsDir } from "../../packages/analyst-sdk/bin/backups-dir.ts";
+import { replayRun } from "../../packages/analyst-sdk/src/replay/index.ts";
+import { REGIME_ARTIFACT_KIND } from "../../packages/analyst-sdk/src/analyze/regime-versions.ts";
 import { poisonNetwork } from "./support/network-poison.ts";
-import { PRODUCTION_PANELS, publishedAsofRow, replayPublishedRun, type PublishedAsofRow } from "./support/published-replay.ts";
 
 const LEDGER_START = "2026-09-21";
 // Issue 1421's fix (PR 1427) merged at 2026-10-23 18:32:15 UTC; a run created
@@ -47,7 +51,8 @@ const LEDGER_START = "2026-09-21";
 const POST_1421 = "2026-10-23 18:32:15+00";
 const ARCHIVE = process.env.RM_FORMAT1_ARCHIVE;
 const REPORT_DIR = process.env.RM_REPLAY_REPORT;
-const sha256 = (s: string) => new Bun.CryptoHasher("sha256").update(s).digest("hex");
+// The kinds a run's regime rows are frozen under, one per line.
+const REGIME_KINDS: ReadonlySet<string> = new Set(Object.values(REGIME_ARTIFACT_KIND));
 
 if (!ARCHIVE) {
   console.warn(
@@ -61,6 +66,8 @@ interface RunResult {
   runKey: string;
   asof: string;
   createdAt: string;
+  // The methodology label the run replayed under (null: none recorded, replayed under the current version).
+  methodology: string | null;
   status: "match" | "rounding" | "mismatch" | "not published";
   firstDiff: string | null;
   differing: string[];
@@ -69,9 +76,9 @@ interface RunResult {
 }
 
 function table(results: RunResult[]): string {
-  const lines = ["| run key | run id | as-of | published label | replay label | result | first differing field (or reason) | all differing fields |", "| --- | --- | --- | --- | --- | --- | --- | --- |"];
+  const lines = ["| run key | run id | as-of | methodology | published label | replay label | result | first differing field (or reason) | all differing fields |", "| --- | --- | --- | --- | --- | --- | --- | --- | --- |"];
   for (const r of results) {
-    lines.push(`| \`${r.runKey}\` | ${r.runId} | ${r.asof} | ${r.publishedLabel ?? "-"} | ${r.replayLabel ?? "-"} | ${r.status} | ${r.firstDiff ?? ""} | ${r.differing.join(", ")} |`);
+    lines.push(`| \`${r.runKey}\` | ${r.runId} | ${r.asof} | ${r.methodology ?? "-"} | ${r.publishedLabel ?? "-"} | ${r.replayLabel ?? "-"} | ${r.status} | ${r.firstDiff ?? ""} | ${r.differing.join(", ")} |`);
   }
   return lines.join("\n") + "\n";
 }
@@ -85,41 +92,48 @@ describe.skipIf(!ARCHIVE)("replay of every published production regime run from 
     expect(runs.length).toBeGreaterThan(0);
     const runIds = new Set(runs.map((r) => r.id!));
 
-    // Each run's published regime_snapshots artifact, as-of row only; its bytes
-    // are checked against the stored SHA-256 first.
-    // A failed run freezes warnings/logs/exceptions instead (output-snapshots.ts).
-    const published = new Map<string, PublishedAsofRow | null>();
+    // One pass over the artifacts: which runs froze a regime artifact (of
+    // either line) and which failed (a failed run freezes warnings/logs/
+    // exceptions instead, output-snapshots.ts). readRows keeps each file, so
+    // every replayRun below reads the artifacts from memory.
+    const hasRegimeArtifact = new Set<string>();
     const failed = new Set<string>();
     for (const f of copy.files("analytics_output_snapshots")) {
-      for (const o of copy.readRows(f) as Row[]) {
-        if (o.artifact_kind === "exceptions" && runIds.has(o.run_id!)) failed.add(o.run_id!);
-        if (o.artifact_kind !== "regime_snapshots" || !runIds.has(o.run_id!)) continue;
-        expect(published.has(o.run_id!), `run ${o.run_id} has two regime_snapshots artifacts`).toBe(false);
-        expect(sha256(o.payload_json!), `run ${o.run_id}: published payload does not match its stored SHA-256`).toBe(o.payload_sha256!);
-        const run = runs.find((r) => r.id === o.run_id)!;
-        published.set(o.run_id!, publishedAsofRow(o.payload_json!, run.asof!));
+      for (const o of copy.readRows(f)) {
+        if (!runIds.has(o.run_id!)) continue;
+        if (o.artifact_kind === "exceptions") failed.add(o.run_id!);
+        if (REGIME_KINDS.has(o.artifact_kind!)) hasRegimeArtifact.add(o.run_id!);
       }
     }
 
     const results: RunResult[] = [];
+    const problems: string[] = [];
     const poison = poisonNetwork("during the archive replay");
     try {
       for (const run of runs) {
         const base = { runId: run.id!, runKey: run.run_key!, asof: run.asof!, createdAt: run.created_at! };
-        if (!published.has(run.id!)) {
+        if (!hasRegimeArtifact.has(run.id!)) {
           const why = failed.has(run.id!) ? "failed run (froze exceptions, no report)" : "no output package in the copy";
-          results.push({ ...base, status: "not published", firstDiff: why, differing: [], publishedLabel: null, replayLabel: null });
+          results.push({ ...base, methodology: null, status: "not published", firstDiff: why, differing: [], publishedLabel: null, replayLabel: null });
           continue;
         }
-        const inputs = collectRunInputs(copy, run.run_key!);
-        const outcome = replayPublishedRun(serializeInputs(inputs.rows, "csv"), run.asof!, published.get(run.id!)!, undefined, PRODUCTION_PANELS);
+        // The run's own label and published panels; its rows under its line's kind.
+        const r = replayRun(copy, run.run_key!);
+        const methodology = r.run.methodology.label;
+        if (r.problems.length > 0 || r.diff === null) {
+          problems.push(`${run.run_key} ${run.asof}: ${r.problems.join("; ") || "not replayed"}`);
+          results.push({ ...base, methodology, status: "mismatch", firstDiff: r.problems.join("; ") || "not replayed", differing: r.diff?.differing ?? [], publishedLabel: r.published.asof?.regime ?? null, replayLabel: r.computed.asof?.regime ?? null });
+          continue;
+        }
+        const d = r.diff;
         results.push({
           ...base,
-          status: outcome.match ? "match" : outcome.beyondRounding.length === 0 ? "rounding" : "mismatch",
-          firstDiff: outcome.firstDiff ? `${outcome.firstDiff.field} (published ${outcome.firstDiff.published.slice(0, 80)}, replay ${outcome.firstDiff.replay.slice(0, 80)})` : null,
-          differing: outcome.differing,
-          publishedLabel: outcome.publishedLabel,
-          replayLabel: outcome.replayLabel,
+          methodology,
+          status: d.match ? "match" : d.beyondRounding.length === 0 ? "rounding" : "mismatch",
+          firstDiff: d.firstDiff ? `${d.firstDiff.field} (published ${d.firstDiff.published.slice(0, 80)}, replay ${d.firstDiff.replay.slice(0, 80)})` : null,
+          differing: d.differing,
+          publishedLabel: r.published.asof?.regime ?? null,
+          replayLabel: r.computed.asof?.regime ?? null,
         });
       }
     } finally {
@@ -131,7 +145,7 @@ describe.skipIf(!ARCHIVE)("replay of every published production regime run from 
     const labelMismatches = results.filter((r) => r.status !== "not published" && r.publishedLabel !== r.replayLabel);
     const summary =
       `backup ${copy.asOf.backup}: ${results.length} regime runs since ${LEDGER_START}; ${count("match")} match, ${count("rounding")} match up to rounding (D78), ${count("mismatch")} mismatch, ` +
-      `${count("not published")} not published (no regime_snapshots artifact); as-of label differs on ${labelMismatches.length}`;
+      `${count("not published")} not published (no regime artifact); as-of label differs on ${labelMismatches.length}`;
     console.log(summary);
     for (const r of results) if (r.status === "mismatch") console.log(`MISMATCH run ${r.runKey} (id ${r.runId}) as of ${r.asof}: first differing field ${r.firstDiff}`);
     if (REPORT_DIR) {
@@ -139,8 +153,9 @@ describe.skipIf(!ARCHIVE)("replay of every published production regime run from 
       writeFileSync(join(REPORT_DIR, "results.json"), JSON.stringify({ backup: copy.asOf.backup, summary, results }, null, 2) + "\n");
       writeFileSync(join(REPORT_DIR, "results.md"), `${summary}\n\n${table(results)}`);
     }
-    // Every published run was replayed, and every published label reproduced.
-    expect(count("match") + count("rounding") + count("mismatch")).toBe(published.size);
+    // Every published run was replayed, its artifact verified, and every published label reproduced.
+    expect(problems).toEqual([]);
+    expect(count("match") + count("rounding") + count("mismatch")).toBe(hasRegimeArtifact.size);
     expect(labelMismatches.map((r) => `${r.runKey} ${r.asof}: published ${r.publishedLabel}, replay ${r.replayLabel}`)).toEqual([]);
     // A post-1421 run reproduces every field up to rounding (D78; created_at is COPY text in UTC, so it sorts as text).
     expect(results.filter((r) => r.status === "mismatch" && r.createdAt >= POST_1421).map((r) => `${r.runKey} ${r.asof}: ${r.firstDiff}`)).toEqual([]);

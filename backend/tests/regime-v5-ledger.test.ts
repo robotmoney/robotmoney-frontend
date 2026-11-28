@@ -7,13 +7,17 @@
 // regime_snapshots table, the main-line response of GET
 // /api/dashboards/regime-snapshots and the swarm brief's report lookup are
 // byte-identical to their state before the v5 runs.
+//
+// A v5 run that fails inside a producer tick fails alone: the tick is the
+// production one (runRegimeTick, issue 1765), which begins both runs, extracts
+// once and reads the committed inputs once, and its main-line run still
+// publishes.
 import { describe, expect, test } from "bun:test";
 import { ROUTES } from "@robotmoney/contract";
 import { sql } from "../src/db/client.ts";
 import { getRegimeSnapshots } from "../src/api/routes/dashboards.ts";
 import { directAnalyticsPersistence } from "../src/analytics/store/direct.ts";
 import { findVintageByRunAndTool, resolveVintageMembers } from "../src/analytics/store/run-ledger-store.ts";
-import { runAnalytics } from "../src/analytics/index.ts";
 import { noopTelemetrySink } from "../src/analytics/telemetry.ts";
 import { runProducerOnce } from "../src/producer/index.ts";
 import { ledgerKeptRegimeDays, ledgerPublishedRegimeDays, besideRegimeLine } from "../src/analytics/cutover/ledger-current.ts";
@@ -182,25 +186,24 @@ describe("a failed v5 run (issue 1753)", () => {
     const obs = await v5Observations();
     await directAnalyticsPersistence.saveRawHistory({ MNA: obs.mna }, "fixture");
     const source = sourceFor(obs);
-    // The v5 run's kept-days read fails; nothing else of the persistence changes.
+    // The v5 run's kept-days read fails; nothing else of the persistence
+    // changes. Each run the tick begins is recorded by its methodology.
+    const started: string[] = [];
     const failing: AnalyticsPersistence = {
       ...directAnalyticsPersistence,
+      async beginRun(input) {
+        started.push(input.methodology.versionLabel);
+        return directAnalyticsPersistence.beginRun(input);
+      },
       loadKeptRegimeDays: async () => {
         throw new Error("kept days unavailable");
       },
     };
-    const started: string[] = [];
     try {
-      const out = await runProducerOnce("regime", ASOF, {
-        source,
-        persistence: failing,
-        runner: (date, tool, src, store, run) => {
-          started.push(run?.regimeVersion ?? "main");
-          return runAnalytics(date, tool, src, store, noopTelemetrySink, undefined, run?.regimeVersion, { ...liveOn(date), ...(run?.runSource ? { runSource: run.runSource } : {}) });
-        },
-      });
+      // The production tick (runRegimeTick): one extract and one committed read for both models.
+      const out = await runProducerOnce("regime", ASOF, { source, persistence: failing, tick: { telemetry: noopTelemetrySink, ...liveOn(ASOF) } });
       // The tick ran both, in order, and answers with the main-line run's result.
-      expect(started).toEqual(["main", "v5"]);
+      expect(started).toEqual(["v4", "v5"]);
       expect((out as any).regime.asof).toBe(ASOF);
       expect((out as any).regime.methodology).toBeUndefined();
     } finally {

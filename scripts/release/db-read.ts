@@ -25,6 +25,28 @@ export interface ReadOnlySession {
   close(): Promise<void>;
 }
 
+/** The one statement runner {@link proveReadOnly} needs: SQL text in, rows out. */
+export type ReadOnlyProbeQuery = (text: string) => Promise<readonly Record<string, unknown>[]>;
+
+/**
+ * Make the session read-only and PROVE it before anything else runs on it.
+ * It sets the session default to READ ONLY, then asks `SHOW
+ * transaction_read_only`. On any answer but `on` it closes the session and
+ * throws, so the caller never gets a handle to query with. Exported so a test
+ * can drive the refusal with a fake runner (issue 1765 storage S0).
+ *
+ * The session default is the first wall. The real wall is the role: rm_readonly
+ * holds SELECT-only grants, so a write fails even if this default were lifted.
+ */
+export async function proveReadOnly(query: ReadOnlyProbeQuery, close: () => Promise<void>, target = "the session"): Promise<void> {
+  await query("SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY");
+  const ro = await query("SHOW transaction_read_only");
+  if (ro[0]?.transaction_read_only !== "on") {
+    await close();
+    throw new Error(`the session to ${target} is not read-only; refusing to read`);
+  }
+}
+
 /** Open the proven read-only session, or throw naming what is missing. */
 export async function openReadOnly(env: Record<string, string | undefined> = process.env): Promise<ReadOnlySession> {
   const envPath = homeEnvFilePath(env.HOME);
@@ -34,13 +56,9 @@ export async function openReadOnly(env: Record<string, string | undefined> = pro
   const sql = new Bun.SQL(url, { max: 1 });
   const target = redactedTarget(url, "rm_readonly");
   const query = async <T>(text: string): Promise<T[]> => (await sql.unsafe(text)) as T[];
-  await query("SET SESSION CHARACTERISTICS AS TRANSACTION READ ONLY");
-  const ro = await query<{ transaction_read_only: string }>("SHOW transaction_read_only");
-  if (ro[0]?.transaction_read_only !== "on") {
-    await sql.close();
-    throw new Error(`the session to ${target} is not read-only; refusing to read`);
-  }
-  return { target, query, close: () => sql.close() };
+  const close = () => sql.close();
+  await proveReadOnly(query, close, target);
+  return { target, query, close };
 }
 
 /** Row counts of the baseline tables; a table that does not exist reads null. */

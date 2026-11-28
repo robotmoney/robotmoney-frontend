@@ -104,6 +104,13 @@ jobs:
               - 'rollout-evidence/**'
               # The suite guard the job runs (issue 1421).
               - 'scripts/checks/assert-junit-suites.ts'
+              # Backend tests import the operator and release tools they prove
+              # (issue 1765): analytics-storage-baseline.test.ts runs
+              # scripts/ops/analytics-storage-baseline.ts, and the query-plan,
+              # load and preflight suites import scripts/release/. A change
+              # there alone must run the backend suite.
+              - 'scripts/ops/**'
+              - 'scripts/release/**'
 
   backend:
     needs: [changes]
@@ -249,7 +256,7 @@ jobs:
           bun scripts/checks/assert-junit-suites.ts "$RUNNER_TEMP/backend.junit.xml"
           tests/regime-fidelity.test.ts:7
           tests/backtest-correlations-fidelity.test.ts:7
-          tests/regime-replay-published.test.ts:8
+          tests/regime-replay-published.test.ts:10
           tests/analytics-offline-replay.test.ts:3
           tests/analytics-source-tolerance.test.ts:8
           tests/analytics-compute-from-vintage.test.ts:7
@@ -292,6 +299,31 @@ jobs:
           tests/regime-beside-snapshots-migration.test.ts:4
           tests/api/regime-snapshots.test.ts:24
           tests/analytics-source-tolerance.test.ts:20
+      # Issue 1765: the analytics engine reorganization's backend proofs. The
+      # SDK and the platform agree day for day (v4 with the empty stored ratio
+      # fixture, and v5); the published replay holds; the routes serve the
+      # stored artifact bytes; an unchanged row writes no overwrite event; the
+      # storage baseline reads through a read-only session; one producer tick
+      # extracts once and reads the committed inputs once; the recorded
+      # model-runs fixture is reproduced unchanged (check mode, the only mode
+      # CI runs); the snapshot column table matches the rows; and every
+      # statement the new stages issue is a registered query (db-registry).
+      # Each minimum is the count measured on the branch that added it.
+      # Absent, short or skipped is red.
+      - name: Analytics engine proofs ran (issue 1765)
+        shell: bash
+        run: >-
+          bun scripts/checks/assert-junit-suites.ts "$RUNNER_TEMP/backend.junit.xml"
+          tests/regime-sdk-equivalence.test.ts:8
+          tests/regime-v5-sdk-equivalence.test.ts:1
+          tests/regime-replay-published.test.ts:10
+          tests/analytics-route-artifact-bytes.test.ts:5
+          tests/analytics-overwrite-events.test.ts:10
+          tests/analytics-storage-baseline.test.ts:8
+          tests/producer-tick-extract-once.test.ts:3
+          tests/analyst-sdk-model-runs-recording.test.ts:1
+          tests/snapshot-columns.test.ts:15
+          tests/db-registry.test.ts:35
       # Issue 1477: format 1 has one writer. csvb and the archive store write the
       # same day-cut backups byte for byte, the planted junction cases of the
       # archive routes ran, and the api-recorded fixture is reproduced unchanged.

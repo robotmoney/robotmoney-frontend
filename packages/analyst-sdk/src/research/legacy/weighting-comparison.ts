@@ -23,16 +23,16 @@
 // bit-for-bit. Do NOT "clean up" to v1's real-DTB3 backtest model.
 //
 // Pure and deterministic: same inputs, same outputs. No I/O, no Date.now().
-import { INDICATORS as DEFAULT_INDICATORS, PANELS, ROLLING_WINDOW_DAYS, type Indicator, type Panel } from "./indicators.ts";
-import { prepareRegimeInputs } from "../prepare.ts";
+import { INDICATORS as DEFAULT_INDICATORS, PANELS, ROLLING_WINDOW_DAYS, type Indicator, type Panel } from "../../analyze/indicators.ts";
+import { prepareRegimeInputs } from "../../prepare.ts";
 import {
   rollingPercentileRank,
   inverseCorrelationWeights,
-} from "../transform/math.ts";
-import { smoothRegimes, bucketFn } from "./compute.ts";
-import { annualizedGrowth, Compounder, ddDiv, ddValue, dotDD, meanAndSampleSd, periodicRate, sharpeDD, sumDD, twoSum } from "../transform/exact.ts";
-import type { Point } from "../types.ts";
-import { splitSamples, type SampleBlock } from "./backtest.ts";
+} from "../../transform/math.ts";
+import { smoothRegimes, bucketFn } from "../../analyze/compute.ts";
+import { annualizedGrowth, Compounder, ddDiv, ddValue, dotDD, meanAndSampleSd, periodicRate, sharpeDD, sumDD, twoSum } from "../../transform/exact.ts";
+import type { Point } from "../../types.ts";
+import { splitSamples, type SampleBlock } from "../../analyze/backtest.ts";
 
 export const CONSTANT_CASH_YR = 0.026;
 export const COST_PER_REBALANCE = 0.001;

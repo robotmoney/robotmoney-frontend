@@ -184,26 +184,134 @@ test("regime and research persistence paths each record exactly one material ove
   expect((researchAfter.payload as { spec: { window: number } }).spec.window).toBe(30);
 });
 
-test("identical upserts for all three current views append no evidence", async () => {
+// The xmin of each row in a key range, oldest date first. A row whose xmin is
+// unchanged was not rewritten: no new row version, not merely the same values
+// written back. xmin only: an ON CONFLICT DO UPDATE whose WHERE is false still
+// locks the row, which sets xmax but leaves xmin alone.
+async function regimeXmins(from: string, to: string): Promise<{ date: string; xmin: string }[]> {
+  return await fixtureDb<{ date: string; xmin: string }[]>`
+    SELECT date::text AS date, xmin::text AS xmin FROM regime_snapshots
+    WHERE date BETWEEN ${from} AND ${to} ORDER BY date`;
+}
+
+async function researchXmins(key: string): Promise<{ date: string; xmin: string }[]> {
+  return await fixtureDb<{ date: string; xmin: string }[]>`
+    SELECT date::text AS date, xmin::text AS xmin FROM research_signals
+    WHERE signal_key = ${key} ORDER BY date`;
+}
+
+async function rawXmins(indicator: string): Promise<{ date: string; xmin: string }[]> {
+  return await fixtureDb<{ date: string; xmin: string }[]>`
+    SELECT date::text AS date, xmin::text AS xmin FROM raw_indicator_history
+    WHERE indicator = ${indicator} ORDER BY date`;
+}
+
+async function eventCount(): Promise<number> {
+  const [{ n }] = await fixtureDb<{ n: number }[]>`SELECT count(*)::int AS n FROM analytics_overwrite_events`;
+  return n;
+}
+
+// Issue 1765 storage S1: the regime_snapshots and research_signals upserts skip
+// a row whose values are unchanged (ON CONFLICT DO UPDATE ... WHERE ... IS
+// DISTINCT FROM EXCLUDED ...), so an identical re-save writes no row version.
+// The evidence was already unchanged: the capture trigger fires only WHEN (OLD
+// IS DISTINCT FROM NEW).
+test("identical upserts for all three current views append no evidence and rewrite no row", async () => {
   const rawDate = "2041-01-05";
   const rawIndicator = "OVERWRITE_RAW_IDENTICAL";
   await saveRawIndicatorHistory({ [rawIndicator]: [{ date: rawDate, value: 7 }] }, undefined, "live");
+  const rawBefore = await rawXmins(rawIndicator);
   await saveRawIndicatorHistory({ [rawIndicator]: [{ date: rawDate, value: 7 }] }, undefined, "live");
+  expect(await rawXmins(rawIndicator)).toEqual(rawBefore);
 
-  const regimeDate = "2041-01-06";
-  const sameRegime = regime(regimeDate, 0.5, "live");
-  await saveRegimeSnapshots([sameRegime]);
-  await saveRegimeSnapshots([sameRegime]);
+  // Three regime rows saved twice through the production writer
+  // (saveRegimeSnapshots, which upserts them in one statement).
+  const regimeDates = ["2041-01-20", "2041-01-21", "2041-01-22"];
+  const sameRegime = regimeDates.map((date, i) => regime(date, 0.5 + i / 10, "live"));
+  await saveRegimeSnapshots(sameRegime);
+  const regimeBefore = await regimeXmins(regimeDates[0]!, regimeDates.at(-1)!);
+  expect(regimeBefore.map((r) => r.date)).toEqual(regimeDates);
+  await saveRegimeSnapshots(sameRegime);
+  expect(await regimeXmins(regimeDates[0]!, regimeDates.at(-1)!)).toEqual(regimeBefore);
 
-  const signalDate = "2041-01-07";
+  // Three research rows of one signal, each saved twice.
   const signalKey = "overwrite-research-identical";
-  const sameResearch = research(signalDate, 14);
-  await persistResearchSignal(signalKey, signalDate, sameResearch);
-  await persistResearchSignal(signalKey, signalDate, sameResearch);
+  const signalDates = ["2041-01-07", "2041-01-08", "2041-01-09"];
+  for (const date of signalDates) await persistResearchSignal(signalKey, date, research(date, 14));
+  const researchBefore = await researchXmins(signalKey);
+  expect(researchBefore.map((r) => r.date)).toEqual(signalDates);
+  for (const date of signalDates) await persistResearchSignal(signalKey, date, research(date, 14));
+  expect(await researchXmins(signalKey)).toEqual(researchBefore);
 
   expect(await events("raw_indicator_history", { date: rawDate, indicator: rawIndicator })).toHaveLength(0);
-  expect(await events("regime_snapshots", { date: regimeDate })).toHaveLength(0);
-  expect(await events("research_signals", { signal_key: signalKey, date: signalDate })).toHaveLength(0);
+  for (const date of regimeDates) expect(await events("regime_snapshots", { date })).toHaveLength(0);
+  for (const date of signalDates) expect(await events("research_signals", { signal_key: signalKey, date })).toHaveLength(0);
+});
+
+// The control for the test above: the guard does not pass because nothing can
+// write. One changed row in a batch is rewritten (a new xmin) and records
+// exactly one overwrite event; every unchanged row in the same batch keeps its
+// xmin.
+test("issue 1765 S1: a changed row gets a new xmin and one event, and its unchanged neighbours keep their xmin", async () => {
+  const regimeDates = ["2041-01-23", "2041-01-24", "2041-01-25"];
+  const rows = regimeDates.map((date, i) => regime(date, 0.3 + i / 10, "live"));
+  await saveRegimeSnapshots(rows);
+  const regimeBefore = await regimeXmins(regimeDates[0]!, regimeDates.at(-1)!);
+  const changedDate = regimeDates[1]!;
+  const changedBefore = await rowJson("regime_snapshots", `date = '${changedDate}'`);
+  const eventsBefore = await eventCount();
+
+  await saveRegimeSnapshots(rows.map((row) => (row.date === changedDate ? { ...row, composite: 0.95 } : row)));
+
+  const regimeAfter = await regimeXmins(regimeDates[0]!, regimeDates.at(-1)!);
+  for (const [i, date] of regimeDates.entries()) {
+    expect(regimeAfter[i]!.date).toBe(date);
+    if (date === changedDate) expect(regimeAfter[i]!.xmin).not.toBe(regimeBefore[i]!.xmin);
+    else expect(regimeAfter[i]!.xmin).toBe(regimeBefore[i]!.xmin);
+  }
+  const changedAfter = await rowJson("regime_snapshots", `date = '${changedDate}'`);
+  expect(Number(changedAfter.composite)).toBeCloseTo(0.95, 9);
+  const regimeEvents = await events("regime_snapshots", { date: changedDate });
+  expect(regimeEvents).toHaveLength(1);
+  expect(regimeEvents[0]).toMatchObject({
+    table_name: "regime_snapshots",
+    operation: "update",
+    natural_key: { date: changedDate },
+    previous_row: changedBefore,
+    replacement_row: changedAfter,
+  });
+  expect((await eventCount()) - eventsBefore).toBe(1);
+
+  const signalKey = "overwrite-research-one-changed";
+  const signalDates = ["2041-01-23", "2041-01-24", "2041-01-25"];
+  for (const date of signalDates) await persistResearchSignal(signalKey, date, research(date, 21));
+  const researchBefore = await researchXmins(signalKey);
+  const changedSignalDate = signalDates[2]!;
+  const signalBefore = await rowJson("research_signals", `signal_key = '${signalKey}' AND date = '${changedSignalDate}'`);
+  const signalEventsBefore = await eventCount();
+
+  for (const date of signalDates) {
+    await persistResearchSignal(signalKey, date, research(date, date === changedSignalDate ? 42 : 21));
+  }
+
+  const researchAfter = await researchXmins(signalKey);
+  for (const [i, date] of signalDates.entries()) {
+    expect(researchAfter[i]!.date).toBe(date);
+    if (date === changedSignalDate) expect(researchAfter[i]!.xmin).not.toBe(researchBefore[i]!.xmin);
+    else expect(researchAfter[i]!.xmin).toBe(researchBefore[i]!.xmin);
+  }
+  const signalAfter = await rowJson("research_signals", `signal_key = '${signalKey}' AND date = '${changedSignalDate}'`);
+  expect((signalAfter.payload as { spec: { window: number } }).spec.window).toBe(42);
+  const researchEvents = await events("research_signals", { signal_key: signalKey, date: changedSignalDate });
+  expect(researchEvents).toHaveLength(1);
+  expect(researchEvents[0]).toMatchObject({
+    table_name: "research_signals",
+    operation: "update",
+    natural_key: { signal_key: signalKey, date: changedSignalDate },
+    previous_row: signalBefore,
+    replacement_row: signalAfter,
+  });
+  expect((await eventCount()) - signalEventsBefore).toBe(1);
 });
 
 test("allowed deletes retain complete old rows while regime deletion stays refused", async () => {

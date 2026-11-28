@@ -224,6 +224,33 @@ jobs:
           tests/collected-series.test.ts:15
           tests/exports.test.ts:9
           tests/regime-rules.test.ts:11
+      # Issue 1765: the analytics engine reorganization. The replay suites run
+      # over the committed v4 and v5 model-runs fixture, each with a
+      # tampered-field negative control; the staged engine equals the old
+      # computation for every model; the research driver screens variants
+      # through it; the snapshot column table and the building blocks hold; and
+      # the suites the same issue extended ran their added cases. Each minimum
+      # is the count measured on the branch that added it. A suite that runs
+      # fewer cases, or skips one, is red.
+      - name: Analytics engine suites ran (issue 1765)
+        run: >-
+          bun scripts/checks/assert-junit-suites.ts "$RUNNER_TEMP/analyst-sdk.junit.xml"
+          tests/replay.test.ts:20
+          tests/replay-cli.test.ts:5
+          tests/model-equivalence.test.ts:39
+          tests/research-driver.test.ts:12
+          tests/snapshot-columns.test.ts:6
+          tests/building-blocks.test.ts:23
+          tests/archive-reader.test.ts:46
+          tests/engine.test.ts:25
+          tests/regime-rules.test.ts:21
+          tests/exports.test.ts:16
+          tests/derived-series.test.ts:22
+          tests/research-comparison-samples.test.ts:6
+          tests/regime-v5.test.ts:25
+          tests/regime-v5-golden.test.ts:10
+          tests/collected-series.test.ts:16
+          tests/backtest-cli.test.ts:10
       # Export ONLY the package's tracked files (no node_modules from the install
       # above) into a fresh directory, install from the lockfile, and diff the CLI
       # output against the committed golden. Fails if the SDK reaches outside

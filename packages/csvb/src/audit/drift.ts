@@ -1,8 +1,10 @@
 // How the published regime figures moved after they were published.
 //
 // `regime_snapshots` is a current view: every run recomputes the whole history and overwrites it. The only record of
-// what was published is the frozen output of each run (`analytics_output_snapshots`, kind regime_snapshots). This
-// compares those frozen outputs, run by run, with each other and with the table as it stands now.
+// what was published is the frozen output of each run (`analytics_output_snapshots`, the main line's kind
+// REGIME_ARTIFACT_KIND.main, the analyst SDK's name for it). This compares those frozen outputs, run by run, with each
+// other and with the table as it stands now.
+import { REGIME_ARTIFACT_KIND } from "@robotmoney/analyst-sdk/src/analyze/regime-versions.ts";
 import { loadRuns } from "./runs.ts";
 import { loadTable, num, scanTable, type Ctx } from "./data.ts";
 
@@ -69,7 +71,7 @@ export async function analyseDrift(ctx: Ctx, tool = "regime"): Promise<DriftAnal
   let compared = 0;
 
   await scanTable(ctx, "analytics_output_snapshots", (s) => {
-    if (s.artifact_kind !== "regime_snapshots") return;
+    if (s.artifact_kind !== REGIME_ARTIFACT_KIND.main) return;
     const run = runs.get(Number(s.run_id));
     if (!run || !s.payload_json || s.payload_json === "[]") return;
     const rows = JSON.parse(s.payload_json) as { date: string; composite: number | null; regime: string | null }[];

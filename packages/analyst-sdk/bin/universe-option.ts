@@ -1,9 +1,10 @@
 // The CLI side of the universe check (issue 1400): `--universe <path>` and
 // `--allow-outside-universe`. The `universe:check` command (bin/check-universe.ts)
 // calls universeFromArgs, then universeGate on the holdings by state,
-// and exits with the gate's code. The file read lives here, in bin/,
-// because src/ may not touch the filesystem.
+// and exits with the gate's code. The file read lives in the node edge
+// (node/universe-file.ts), because src/ may not touch the filesystem.
 import { checkHoldings, loadUniverse, type HoldingFinding, type HoldingsByState, type Universe } from "../src/allocate/universe.ts";
+import { universeFromFile } from "../node/universe-file.ts";
 
 export const UNIVERSE_FLAG = "--universe";
 export const ALLOW_OUTSIDE_FLAG = "--allow-outside-universe";
@@ -14,7 +15,7 @@ export async function universeFromArgs(args: readonly string[]): Promise<Univers
   if (i < 0) return loadUniverse();
   const path = args[i + 1];
   if (path === undefined || path.startsWith("--")) throw new RangeError(`${UNIVERSE_FLAG} needs a path`);
-  return loadUniverse(JSON.parse(await Bun.file(path).text()));
+  return universeFromFile(path);
 }
 
 export interface UniverseGateResult {

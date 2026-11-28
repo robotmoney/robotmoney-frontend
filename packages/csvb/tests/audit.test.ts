@@ -4,16 +4,17 @@
 // chosen by hand: a change to the analysis code that alters a finding fails here. The replay runs the analyst SDK
 // beside this package (packages/analyst-sdk), so it is never skipped.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { cpSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { openCtx } from "../src/audit/data.ts";
 import { analyseDrift } from "../src/audit/drift.ts";
 import { writeReport } from "../src/audit/report.ts";
-import { replayRun } from "../src/audit/replay.ts";
+import { replayRun, SDK_TOO_OLD } from "../src/audit/replay.ts";
+import { CURRENT_REGIME_VERSION, REGIME_PUBLISHED_PANELS } from "@robotmoney/analyst-sdk/src/analyze/regime-versions.ts";
 import { analyseRevisions } from "../src/audit/revisions.ts";
 import { analyseRuns, loadRuns } from "../src/audit/runs.ts";
-import { LEDGER_BACKUP, ledgerRepo, PUBLISHED_DAYS, REPLAY_RUNS, replayRepo } from "./support/audit-fixture.ts";
+import { LEDGER_BACKUP, ledgerRepo, PUBLISHED_DAYS, putAppendTable, readAppendTable, REPLAY_BACKUP, REPLAY_RUNS, replayRepo } from "./support/audit-fixture.ts";
 
 const PKG = join(import.meta.dir, "..");
 const SDK = resolve(PKG, "..", "analyst-sdk");
@@ -110,8 +111,9 @@ describe("the report", () => {
   });
 });
 
-// The replay runs the analyst SDK in packages/analyst-sdk over each run's frozen vintage and compares the payload the
-// fixture published (computed by that SDK from exactly that vintage).
+// The replay runs the analyst SDK's replay module in packages/analyst-sdk over each run's frozen vintage (the repo
+// opened with that SDK's archive reader) and compares the payload the fixture published (the SDK's publishedRows from
+// exactly that vintage, with its payload_sha256) day by day with the rows the SDK computes.
 describe("replay from the frozen vintage", () => {
   const REPLAY = join(tempDir("csvb-audit-replay-"), "repo");
   let members: Record<number, number> = {};
@@ -124,23 +126,108 @@ describe("replay from the frozen vintage", () => {
   test("rebuilds the run's exact inputs and reproduces what was published", async () => {
     const r = await replayRun(rctx, { sdkDir: SDK });
     expect(r.run).toMatchObject({ id: REPLAY_RUNS.newest.id, asof: REPLAY_RUNS.newest.asof });
-    expect(r.inputs.sourceValueVersions).toBe(r.vintage.memberCount); // every member of the vintage was found
+    // Every member of the vintage was read: the SDK refuses a copy that lacks one (the red control below).
     expect(r.vintage.memberCount).toBe(members[REPLAY_RUNS.newest.id]!);
     expect(r.daysCompared).toBe(PUBLISHED_DAYS);
     expect(r.inputs.extras).toMatchObject({ SPX: expect.any(Number), ETH: expect.any(Number), TBILL3M: expect.any(Number) });
     for (const m of r.metrics) expect({ metric: m.metric, exact: m.exact }).toEqual({ metric: m.metric, exact: m.compared });
     expect(r.backtestCorrelations!.leaves).toBeGreaterThan(0);
     expect(r.backtestCorrelations).toMatchObject({ exact: r.backtestCorrelations!.leaves, different: 0 });
+    // The SDK's own comparison of the as-of rows (every compared field, exactly).
+    expect(r.asofDiff).toEqual({ match: true, differing: [], beyondRounding: [] });
+    // No methodology table: the run is on the main line and replays under the current version and its published panels.
+    expect(r.methodology).toEqual({ label: null, version: CURRENT_REGIME_VERSION, line: "main", panels: [...REGIME_PUBLISHED_PANELS[CURRENT_REGIME_VERSION]] });
   }, 180_000);
 
   test("a run that failed has no vintage, and is refused with a clear message", async () => {
     await expect(replayRun(rctx, { sdkDir: SDK, runId: REPLAY_RUNS.failed.id })).rejects.toThrow("not a succeeded regime run with a vintage");
   }, 60_000);
 
+  type Table = { header: string[]; rows: (string | number | null)[][] };
+  /** A copy of the replay repo with append-only tables edited (a function of the table's rows) or added (a whole table). */
+  const editedCopy = (prefix: string, edits: Record<string, Table | ((t: Table) => Table["rows"])>): string => {
+    const dir = join(tempDir(prefix), "repo");
+    cpSync(REPLAY, dir, { recursive: true });
+    for (const [table, edit] of Object.entries(edits)) {
+      if (typeof edit !== "function") putAppendTable(dir, REPLAY_BACKUP, table, edit);
+      else {
+        const t = readAppendTable(dir, REPLAY_BACKUP, table);
+        putAppendTable(dir, REPLAY_BACKUP, table, { header: t.header, rows: edit(t) });
+      }
+    }
+    return dir;
+  };
+  const col = (t: { header: string[] }, name: string): number => {
+    const i = t.header.indexOf(name);
+    if (i < 0) throw new Error(`no ${name} column`);
+    return i;
+  };
+
+  test("red control: a published payload whose bytes do not match its payload_sha256 is refused, never compared", async () => {
+    const tampered = editedCopy("csvb-audit-tampered-", {
+      analytics_output_snapshots: (t) => t.rows.map((r) => (Number(r[col(t, "run_id")]) === REPLAY_RUNS.newest.id ? r.map((c, i) => (i === col(t, "payload_sha256") ? "0".repeat(64) : c)) : r)),
+    });
+    await expect(replayRun(openCtx(tampered), { sdkDir: SDK })).rejects.toThrow("does not match its stored payload_sha256");
+  }, 120_000);
+
+  test("red control: a copy that lacks one member of the vintage is refused (incomplete local copy), never replayed from part of it", async () => {
+    let removed: string | null = null;
+    const partial = editedCopy("csvb-audit-partial-", {
+      // The first version dated on or before the newest run's as-of day: a member of that run's vintage.
+      source_value_versions: (t) => {
+        const at = t.rows.findIndex((r) => String(r[col(t, "market_date")]) <= REPLAY_RUNS.newest.asof);
+        removed = String(t.rows[at]![col(t, "id")]);
+        return t.rows.filter((_, i) => i !== at);
+      },
+    });
+    expect(removed).not.toBeNull();
+    await expect(replayRun(openCtx(partial), { sdkDir: SDK })).rejects.toThrow(`incomplete local copy: vintage ${100 + REPLAY_RUNS.newest.id}`);
+    await expect(replayRun(openCtx(partial), { sdkDir: SDK })).rejects.toThrow(`first missing ids ${removed}`);
+  }, 120_000);
+
+  test("issue 1765 D-c: without --run the newest main-line run is replayed, and a newer beside run (v5) is never chosen", async () => {
+    // A methodology table: run 1 is v4, and the newest run (2) is under methodology 2 with the label given.
+    const labelled = (label2: string): string =>
+      editedCopy("csvb-audit-lines-", {
+        analytics_ledger_methodology_versions: {
+          header: ["id", "tool_id", "version_label", "config", "config_digest", "created_at"],
+          rows: [
+            ["1", "regime", "v4", "{}", "d".repeat(64), "2026-06-01 00:00:00+00"],
+            ["2", "regime", label2, "{}", "e".repeat(64), "2026-06-01 00:00:00+00"],
+          ],
+        },
+        analytics_ledger_runs: (t) => t.rows.map((r) => (Number(r[col(t, "id")]) === REPLAY_RUNS.newest.id ? r.map((c, i) => (i === col(t, "methodology_version_id") ? "2" : c)) : r)),
+      });
+    const beside = await replayRun(openCtx(labelled("v5")), { sdkDir: SDK });
+    expect(beside.run.id).toBe(REPLAY_RUNS.oldest.id);
+    expect(beside.methodology).toEqual({ label: "v4", version: "v4", line: "main", panels: [...REGIME_PUBLISHED_PANELS.v4] });
+    for (const m of beside.metrics) expect({ metric: m.metric, exact: m.exact }).toEqual({ metric: m.metric, exact: m.compared });
+    // RED CONTROL: the same newest run labelled v4 is a main-line run, and it is the one chosen.
+    const main = await replayRun(openCtx(labelled("v4")), { sdkDir: SDK });
+    expect(main.run.id).toBe(REPLAY_RUNS.newest.id);
+    // A label this SDK does not compute is the main line too: that run is chosen, and the SDK names its label.
+    await expect(replayRun(openCtx(labelled("regime-v3")), { sdkDir: SDK })).rejects.toThrow(`could not replay run ${REPLAY_RUNS.newest.id}: methodology regime-v3 is not one this SDK computes`);
+  }, 300_000);
+
+  test("an --sdk dir without src/replay/index.ts (an SDK before issue 1765) is refused with the named message", async () => {
+    // The SDK's src/ and bin/ without the replay module, as a commit before issue 1765 has them.
+    const old = join(tempDir("csvb-audit-old-sdk-"), "analyst-sdk");
+    cpSync(join(SDK, "src"), join(old, "src"), { recursive: true, filter: (p) => p !== join(SDK, "src", "replay") });
+    cpSync(join(SDK, "bin"), join(old, "bin"), { recursive: true });
+    expect(existsSync(join(old, "src", "index.ts"))).toBe(true);
+    expect(existsSync(join(old, "src", "replay", "index.ts"))).toBe(false);
+    await expect(replayRun(rctx, { sdkDir: old })).rejects.toThrow(SDK_TOO_OLD);
+    // The command refuses it the same way, before it writes a report.
+    const out = join(tempDir("csvb-audit-old-sdk-report-"), "r");
+    const p = Bun.spawnSync(["bun", "run", "src/cli.ts", "audit", "replay", "--repo", REPLAY, "--sdk", old, "--out", out], { cwd: PKG, stdout: "pipe", stderr: "pipe" });
+    expect(p.exitCode).toBe(1);
+    expect(p.stderr.toString()).toContain(SDK_TOO_OLD);
+    expect(existsSync(out)).toBe(false);
+  }, 60_000);
+
   test("the oldest run replays from its own frozen vintage too (every member of that vintage is found)", async () => {
     const r = await replayRun(rctx, { sdkDir: SDK, runId: REPLAY_RUNS.oldest.id });
     expect(r.run).toMatchObject({ id: REPLAY_RUNS.oldest.id, asof: REPLAY_RUNS.oldest.asof });
-    expect(r.inputs.sourceValueVersions).toBe(r.vintage.memberCount);
     expect(r.vintage.memberCount).toBe(members[REPLAY_RUNS.oldest.id]!);
     expect(r.vintage.memberCount).toBeLessThan(members[REPLAY_RUNS.newest.id]!);
     expect(r.daysCompared).toBe(PUBLISHED_DAYS);

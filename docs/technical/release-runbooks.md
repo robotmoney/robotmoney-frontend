@@ -510,7 +510,7 @@ A post-release gate always names the release it grades: `prod:gate` refuses `--m
 without `--release`, and every template step passes `--release {release}` (issue 1684). The
 full-row replay of a run made by the release is likewise a post-seal report, because the archive seals a
 UTC day at a time: `bun scripts/release/sdk-check.ts --check post-seal --target stage|prod` (not a cutover
-step) fills the whole archive, replays the newest archived run, and fails until the newest archived run was made by the fixed producer (a commit build identity, not a `pkg:` label). Q36 and C24 replay nothing: they are a contract smoke that fetches one backup (issue 1566).
+step) fills the whole archive, replays the newest main-line run in the archive (never a v5 beside run) against its line's published regime artifact, and fails until that run was made by the fixed producer (a commit build identity, not a `pkg:` label). Q36 and C24 replay nothing: they are a contract smoke that fetches one backup (issue 1566).
 
 **A boot or a rolling boot is uneventful (issue 1378).** The services hold this
 contract, so a runbook needs no step to drain or clean the queue by hand:

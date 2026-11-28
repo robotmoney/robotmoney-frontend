@@ -25,7 +25,9 @@
 // is finished before it runs, and the SDK has no download client (analyst SDK
 // requirements section 2).
 import { gunzipSync } from "node:zlib";
-import { SERIES_MAPPING, STORED_UNDER } from "../series-ids.ts";
+import { SERIES_MAPPING, STORED_UNDER, V5_SERIES_MAPPING, type SeriesMapping } from "../series-ids.ts";
+// The storage half of the presets, never model/presets.ts: this module must reach no calculation code (see inputIdsOfLabel).
+import { seriesMappingFor } from "../model/preset-series.ts";
 import { CALCULATED_SERIES, REPLAY_CSV_HEADER, SOURCE_CSV_HEADER, type InputKind } from "../input/load.ts";
 
 export interface FileRecord {
@@ -636,11 +638,40 @@ export function verifyFile(f: FileRecord, got: { sha256_raw: string | null; rows
 // amendment hold history no consumer reads now. Their rows are kept in the
 // generated input under the storage key itself, an unread series, so a
 // vintage's every member still reaches the input and none is relabelled.
-const INPUT_ID_OF_KEY = new Map<string, string>();
-for (const m of SERIES_MAPPING) if (!INPUT_ID_OF_KEY.has(m.storageKey)) INPUT_ID_OF_KEY.set(m.storageKey, m.inputId);
-for (const id of Object.keys(STORED_UNDER)) INPUT_ID_OF_KEY.set(`raw_indicator_history:${id}`, `raw_indicator_history:${id}`);
+//
+// Issue 1765 (D-a): the key-to-id map is built per storage mapping. The global
+// one, behind seriesForStorageKey, is built from V5_SERIES_MAPPING, so every key
+// any methodology reads has an id (the five keys only a v5 run reads among
+// them). V5_SERIES_MAPPING starts with SERIES_MAPPING, so under first-id-wins a
+// main-line key keeps its main-line id (raw_indicator_history:VIX stays VIX). A
+// run's inputs are collected through its own methodology's map instead
+// (RunInputCollector): a v4 run keeps counting the five v5 keys in `skipped`,
+// so its generated input bytes do not change.
+const INPUT_IDS = new Map<readonly SeriesMapping[], ReadonlyMap<string, string>>();
+function inputIdsOf(mapping: readonly SeriesMapping[]): ReadonlyMap<string, string> {
+  let ids = INPUT_IDS.get(mapping);
+  if (ids) return ids;
+  const out = new Map<string, string>();
+  for (const m of mapping) if (!out.has(m.storageKey)) out.set(m.storageKey, m.inputId);
+  for (const id of Object.keys(STORED_UNDER)) out.set(`raw_indicator_history:${id}`, `raw_indicator_history:${id}`);
+  INPUT_IDS.set(mapping, (ids = out));
+  return ids;
+}
+const INPUT_ID_OF_KEY = inputIdsOf(V5_SERIES_MAPPING);
 export function seriesForStorageKey(key: string): string | null {
   return INPUT_ID_OF_KEY.get(key) ?? null;
+}
+
+// The key-to-id map a run of methodology `label` reads its vintage through: its
+// version's storage mapping (seriesMappingFor, the storage half of the presets
+// in model/preset-series.ts). A label that names no preset (the synthetic
+// fixtures' label regime-v3) gets the main-line mapping. The label stays a
+// string here, never checked against analyze/regime-versions.ts, and this
+// module imports model/preset-series.ts, never model/presets.ts: the public
+// analytics routes import this module and must reach no calculation code
+// (backend/tests/api/public-analytics-archives.test.ts).
+function inputIdsOfLabel(label: string | null): ReadonlyMap<string, string> {
+  return inputIdsOf(label === null ? SERIES_MAPPING : seriesMappingFor(label));
 }
 
 // One source_value_versions row as the database allows it (migration 0057): an
@@ -693,6 +724,8 @@ export class RunInputCollector {
   private seen = new Set<number>();
   private best = new Map<string, { id: number; row: GeneratedRow }>();
   private skipped: Record<string, number> = {};
+  // The run's own key-to-id map, by its methodology label (issue 1765, D-a).
+  private readonly inputIds: ReadonlyMap<string, string>;
 
   constructor(runKey: string, tables: { runs: Row[]; methodologies: Row[]; vintages: Row[]; members: Row[] }) {
     const runs = tables.runs.filter((r) => r.run_key === runKey);
@@ -713,6 +746,7 @@ export class RunInputCollector {
       methodology: { id: run.methodology_version_id!, label: meth?.version_label ?? null, config_digest: meth?.config_digest ?? null },
       codeRevision: run.build_identity!,
     };
+    this.inputIds = inputIdsOfLabel(this.run.methodology.label);
     let covered = 0;
     for (const m of tables.members) {
       if (m.vintage_id !== vin.id) continue;
@@ -751,7 +785,7 @@ export class RunInputCollector {
       if (r.source_key !== range.key) throw new ArchiveError(`vintage ${this.run.vintageId}: version ${r.id} is ${r.source_key}, but the vintage lists it under ${range.key}`);
       if (this.seen.has(id)) throw new ArchiveError(`source_value_versions id ${r.id} appears twice in the local copy`);
       this.seen.add(id);
-      const series = seriesForStorageKey(r.source_key!);
+      const series = this.inputIds.get(r.source_key!) ?? null;
       if (series === null || kind === "instant") {
         this.skipped[r.source_key!] = (this.skipped[r.source_key!] ?? 0) + 1;
         continue;

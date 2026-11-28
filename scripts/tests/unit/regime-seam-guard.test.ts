@@ -21,8 +21,28 @@
 //
 // RED CONTROL: the scanner is also run against planted violations and must flag
 // every one, so a scanner that matches nothing cannot pass for a clean tree.
+// Each rule also finds a file planted on disk by the same walk, and reports a
+// violation's line in the file even after a multi-line comment.
+//
+// Issue 1765 (AC 11): a methodology is one model value, and the version tag
+// names its preset (packages/analyst-sdk/src/model/presets.ts). No other file
+// under packages/analyst-sdk/src, and no file under backend/src/analytics,
+// compares with or switches on the literals 'v3', 'v4' or 'v5', or tests a
+// list of them with includes, indexOf or a Set's has: the engine reads the
+// model, never the tag. The prepare stage of the SDK's regime engine
+// (src/engine/prepare.ts) is the seam's caller for runRegime, runModel and the
+// kept record; run.ts reaches it through runModel.
+//
+// Issue 1765 (AC 11, phase 3): backend/src/analytics computes a regime only
+// through the SDK's engine and row builder. No file there calls
+// computeRegime, computeKeptRegime, keptRegimeRows, buildSnapshotRows or
+// buildRichIndicators: the backend's compute stage (backend/src/analytics/
+// compute.ts) makes one runModel call and one publishedRows call per model,
+// so the backend reaches the seam through runModel's prepare stage, and the
+// backtest extras are cut at the as-of day in its extract stage (extract.ts).
 import { describe, expect, test } from "bun:test";
-import { readdirSync, readFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 
 const root = join(import.meta.dir, "../../..");
@@ -34,14 +54,18 @@ const ALLOWED = new Set([
   "packages/analyst-sdk/src/analyze/research-signals.ts",
   "backend/scripts/regime-independent-reference-regenerate.ts",
 ]);
-// Every caller D59 and regime-engine.md section 8.1 name. Each must import the seam.
+// Every caller D59 and regime-engine.md section 8.1 name. Each must import the
+// seam. The backend job reaches it through the SDK's runModel (issue 1765,
+// phase 3): BACKEND_ENGINE_CALLER below.
 const REQUIRED_CALLERS = [
-  "backend/src/analytics/index.ts",
-  "packages/analyst-sdk/src/run.ts",
-  "packages/analyst-sdk/src/analyze/regime-eq-comparison.ts",
-  "packages/analyst-sdk/src/analyze/weighting-comparison.ts",
+  "packages/analyst-sdk/src/engine/prepare.ts",
+  "packages/analyst-sdk/src/research/legacy/regime-eq-comparison.ts",
+  "packages/analyst-sdk/src/research/legacy/weighting-comparison.ts",
   "backend/scripts/regime-goldens-regenerate.ts",
 ];
+// The backend's compute stage (one runModel and one publishedRows call per model) and extract stage.
+const BACKEND_ENGINE_CALLER = "backend/src/analytics/compute.ts";
+const BACKEND_EXTRACT = "backend/src/analytics/extract.ts";
 const PRIMITIVE_CALL = /\b(buildDateAxis|alignDailyForwardFill|alignDailyZeroFill|forwardFillAge)\s*\(/;
 // An inline as-of cut on a dated row set, the shape `cutAtAsof` replaced.
 const INLINE_ASOF_CUT = /\.filter\(\s*\(?\s*\w+\s*\)?\s*=>\s*\w+\.date\s*<=\s*asof\s*\)/;
@@ -55,9 +79,11 @@ function tsFiles(dir: string, out: string[] = []): string[] {
   return out;
 }
 
-// Strip line and block comments so a mention in prose is not a call.
+// Strip line and block comments so a mention in prose is not a call. A block
+// comment keeps its newlines (every other character becomes a space), so a
+// violation after a multi-line JSDoc block reports its line in the file.
 function code(src: string): string {
-  return src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+  return src.replace(/\/\*[\s\S]*?\*\//g, (c) => c.replace(/[^\n]/g, " ")).replace(/(^|[^:])\/\/.*$/gm, "$1");
 }
 
 type Violation = { file: string; line: number; text: string };
@@ -73,10 +99,52 @@ export function scan(files: Record<string, string>): Violation[] {
   return out;
 }
 
-function tree(): Record<string, string> {
+function tree(base: string = root, roots: readonly string[] = SCAN_ROOTS): Record<string, string> {
   const files: Record<string, string> = {};
-  for (const r of SCAN_ROOTS) for (const f of tsFiles(join(root, r))) files[relative(root, f)] = readFileSync(f, "utf8");
+  for (const r of roots) for (const f of tsFiles(join(base, r))) files[relative(base, f)] = readFileSync(f, "utf8");
   return files;
+}
+
+// ── AC 11: no version-literal branch outside the presets ─────────────────────
+const VERSION_ROOTS = ["packages/analyst-sdk/src", "backend/src/analytics"];
+// The MODELS preset module: the one place a tag is written as the id of its preset.
+const PRESET_MODULE = "packages/analyst-sdk/src/model/presets.ts";
+// A list holding a version literal: `["v5"]`, `['v3', 'v4']`.
+const VERSION_LIST = String.raw`\[[^\]]*['"]v[345]['"][^\]]*\]`;
+const VERSION_BRANCH = [
+  /[!=]==?\s*['"]v[345]['"]/,
+  /['"]v[345]['"]\s*[!=]==?/,
+  /case\s+['"]v[345]['"]/,
+  // `["v5"].includes(x)`, `["v3", "v4"].indexOf(x)` (wave 5 review).
+  new RegExp(String.raw`${VERSION_LIST}\s*\.\s*(?:includes|indexOf|lastIndexOf)\s*\(`),
+  // `new Set(["v5"]).has(x)` (wave 5 review).
+  new RegExp(String.raw`new\s+Set\s*\(\s*${VERSION_LIST}\s*\)\s*\.\s*has\s*\(`),
+];
+
+export function versionBranches(files: Record<string, string>): Violation[] {
+  const out: Violation[] = [];
+  for (const [file, src] of Object.entries(files)) {
+    if (file === PRESET_MODULE) continue;
+    code(src).split("\n").forEach((text, i) => {
+      if (VERSION_BRANCH.some((re) => re.test(text))) out.push({ file, line: i + 1, text: text.trim() });
+    });
+  }
+  return out;
+}
+
+// ── AC 11: no direct engine or row-building call in backend/src/analytics ────
+const DIRECT_ROOTS = ["backend/src/analytics"];
+const DIRECT_CALL = /\b(computeRegime|computeKeptRegime|keptRegimeRows|buildSnapshotRows|buildRichIndicators)\s*\(/;
+
+export function directCalls(files: Record<string, string>): Violation[] {
+  const out: Violation[] = [];
+  for (const [file, src] of Object.entries(files)) {
+    if (!DIRECT_ROOTS.some((r) => file.startsWith(`${r}/`))) continue;
+    code(src).split("\n").forEach((text, i) => {
+      if (DIRECT_CALL.test(text)) out.push({ file, line: i + 1, text: text.trim() });
+    });
+  }
+  return out;
 }
 
 describe("D59 seam guard: regime inputs are built only by prepareRegimeInputs", () => {
@@ -97,11 +165,21 @@ describe("D59 seam guard: regime inputs are built only by prepareRegimeInputs", 
     expect(files[SEAM]).toMatch(/export function cutAtAsof</);
   });
 
-  test("the backend job cuts extras through the seam, not inline", () => {
-    const src = code(tree()["backend/src/analytics/index.ts"]!);
+  test("the backend job cuts extras through the seam, not inline, in its extract stage", () => {
+    const src = code(tree()[BACKEND_EXTRACT]!);
     expect(src).toMatch(/cutAtAsof\(fetchedExtras\.spx,\s*asof\)/);
     expect(src).toMatch(/cutAtAsof\(fetchedExtras\.eth,\s*asof\)/);
     expect(src).toMatch(/cutAtAsof\(fetchedExtras\.tbill3m,\s*asof\)/);
+  });
+
+  test("the backend job reaches the seam through the SDK's runModel: one runModel and one publishedRows call", () => {
+    const src = code(tree()[BACKEND_ENGINE_CALLER]!);
+    expect(src).toMatch(/import\s*\{[^}]*\brunModel\b[^}]*\}\s*from\s*"(?:\.\.\/)+packages\/analyst-sdk\/src\/engine\/run-model\.ts"/);
+    expect(src.match(/\brunModel\s*\(/g)?.length).toBe(1);
+    expect(src.match(/\bpublishedRows\s*\(/g)?.length).toBe(1);
+    // The index is the thin wrapper: it calls neither the seam nor the engine itself.
+    const index = code(tree()["backend/src/analytics/index.ts"]!);
+    expect(index).not.toMatch(/\b(prepareRegimeInputs|runModel|publishedRows)\s*\(/);
   });
 
   test("red control: planted violations are flagged, comments are not", () => {
@@ -120,5 +198,136 @@ describe("D59 seam guard: regime inputs are built only by prepareRegimeInputs", 
       "backend/src/analytics/z.ts:1",
       "packages/analyst-sdk/src/analyze/x.ts:2",
     ]);
+  });
+
+  test("red control on disk: a planted primitive call in a real tree is found by the same walk; an exception file and a test file are not", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "regime-seam-primitive-"));
+    try {
+      for (const r of SCAN_ROOTS) mkdirSync(join(tmp, r, "analyze"), { recursive: true });
+      mkdirSync(join(tmp, "packages/analyst-sdk/src/transform"), { recursive: true });
+      writeFileSync(join(tmp, "backend/src/analyze/planted.ts"), "export const axis = (s: string, a: string) => buildDateAxis(s, a);\n");
+      writeFileSync(join(tmp, "backend/scripts/analyze/clean.ts"), "export const p = (raw: any, o: any) => prepareRegimeInputs(raw, o);\n");
+      // An exception file defines the primitives; a test file is not walked.
+      writeFileSync(join(tmp, "packages/analyst-sdk/src/transform/math.ts"), "export function buildDateAxis(s: string, a: string) { return buildDateAxis(s, a); }\n");
+      writeFileSync(join(tmp, "packages/analyst-sdk/src/analyze/planted.test.ts"), "buildDateAxis(start, asof);\n");
+      const files = tree(tmp, SCAN_ROOTS);
+      expect(Object.keys(files).sort()).toEqual(["backend/scripts/analyze/clean.ts", "backend/src/analyze/planted.ts", "packages/analyst-sdk/src/transform/math.ts"]);
+      expect(scan(files).map((x) => `${x.file}:${x.line}`)).toEqual(["backend/src/analyze/planted.ts:1"]);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("a violation reports its true line after a multi-line comment (wave 5 review)", () => {
+  // A JSDoc block of four lines, then the call on line 6.
+  const DOC = "/**\n * What this does.\n * And why.\n */\nexport function f() {\n  return CALL;\n}\n";
+  test("each rule reports the line in the file, not the line after the comment is dropped", () => {
+    expect(directCalls({ "backend/src/analytics/doc.ts": DOC.replace("CALL", "computeRegime(t, d, p)") }).map((x) => `${x.file}:${x.line}`)).toEqual(["backend/src/analytics/doc.ts:6"]);
+    expect(scan({ "backend/src/doc.ts": DOC.replace("CALL", "buildDateAxis(start, asof)") }).map((x) => `${x.file}:${x.line}`)).toEqual(["backend/src/doc.ts:6"]);
+    expect(versionBranches({ "backend/src/analytics/doc.ts": DOC.replace("CALL", 'v === "v5"') }).map((x) => `${x.file}:${x.line}`)).toEqual(["backend/src/analytics/doc.ts:6"]);
+    // Two block comments on one line, and one that closes mid-line, keep the count too.
+    const mixed = "/* a */ const x = 1; /* b */\n/* c\n d */ const y = computeRegime(t, d, p);\nconst z = 2;\nconst w = keptRegimeRows(r, o);\n";
+    expect(directCalls({ "backend/src/analytics/mixed.ts": mixed }).map((x) => `${x.file}:${x.line}: ${x.text}`)).toEqual([
+      "backend/src/analytics/mixed.ts:3: const y = computeRegime(t, d, p);",
+      "backend/src/analytics/mixed.ts:5: const w = keptRegimeRows(r, o);",
+    ]);
+  });
+});
+
+describe("no version-literal branch outside the model presets (issue 1765, AC 11)", () => {
+  test("no file under packages/analyst-sdk/src (but the preset module) or backend/src/analytics compares with or switches on 'v3', 'v4' or 'v5'", () => {
+    const files = tree(root, VERSION_ROOTS);
+    // The walk read each root, and the preset module is in it (and exempt).
+    for (const r of VERSION_ROOTS) expect(Object.keys(files).filter((f) => f.startsWith(`${r}/`)).length, r).toBeGreaterThan(10);
+    expect(files[PRESET_MODULE]).toMatch(/id: "v4"/);
+    expect(versionBranches(files).map((x) => `${x.file}:${x.line}: ${x.text}`)).toEqual([]);
+  });
+
+  test("red control: planted branches are flagged with file and line in either order, as a case and with no spaces; prose and the preset module are not", () => {
+    const planted: Record<string, string> = {
+      "packages/analyst-sdk/src/engine/x.ts": 'const a = 1;\nif (version==="v5") return kept;\n',
+      "packages/analyst-sdk/src/run.ts": "// version === \"v5\" in prose is fine\nif ('v4' !== v) throw e;\n",
+      "backend/src/analytics/y.ts": 'switch (v) {\n  case "v3":\n    break;\n}\n',
+      "backend/src/analytics/z.ts": "const keep = REGIME_LINE[v] === \"beside\";\nconst w = v === 'v6';\n",
+      [PRESET_MODULE]: 'export const CURRENT: RegimeVersion = "v4";\nif (x === "v4") y();\n',
+    };
+    expect(versionBranches(planted).map((x) => `${x.file}:${x.line}`).sort()).toEqual([
+      "backend/src/analytics/y.ts:2",
+      "packages/analyst-sdk/src/engine/x.ts:2",
+      "packages/analyst-sdk/src/run.ts:2",
+    ]);
+  });
+
+  test("red control: a version list tested with includes, indexOf or a Set's has is a branch too; a list that is not tested is not", () => {
+    const planted: Record<string, string> = {
+      "packages/analyst-sdk/src/engine/a.ts": 'const kept = ["v5"].includes(version);\n',
+      "packages/analyst-sdk/src/engine/b.ts": "const a = 1;\nif (['v3', 'v4'].indexOf(v) >= 0) return;\n",
+      "backend/src/analytics/c.ts": 'const beside = new Set(["v5"]).has(x);\n',
+      "backend/src/analytics/d.ts": "if (new Set([ 'v4', \"v5\" ]) .has(v)) y();\n",
+      "backend/src/analytics/e.ts": 'export const VERSIONS = ["v3", "v4", "v5"];\nconst ok = VERSIONS.includes(v);\nconst ids = new Set(["v5"]);\n',
+    };
+    expect(versionBranches(planted).map((x) => `${x.file}:${x.line}`).sort()).toEqual([
+      "backend/src/analytics/c.ts:1",
+      "backend/src/analytics/d.ts:1",
+      "packages/analyst-sdk/src/engine/a.ts:1",
+      "packages/analyst-sdk/src/engine/b.ts:2",
+    ]);
+  });
+
+  test("red control on disk: a planted file in a real tree is found by the same walk", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "regime-version-branch-"));
+    try {
+      for (const r of VERSION_ROOTS) mkdirSync(join(tmp, r, "analyze"), { recursive: true });
+      writeFileSync(join(tmp, VERSION_ROOTS[0]!, "analyze", "planted.ts"), 'export const pick = (v: string) => (v === "v5" ? 1 : 0);\n');
+      writeFileSync(join(tmp, VERSION_ROOTS[1]!, "analyze", "clean.ts"), "export const pick = (v: string) => v;\n");
+      const files = tree(tmp, VERSION_ROOTS);
+      expect(Object.keys(files).length).toBe(2);
+      expect(versionBranches(files).map((x) => `${x.file}:${x.line}`)).toEqual([`${VERSION_ROOTS[0]}/analyze/planted.ts:1`]);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("no direct engine or row-building call in backend/src/analytics (issue 1765, AC 11)", () => {
+  test("no file under backend/src/analytics calls computeRegime, computeKeptRegime, keptRegimeRows, buildSnapshotRows or buildRichIndicators", () => {
+    const files = tree(root, DIRECT_ROOTS);
+    // The walk reached the backend root, and the files that compute are in it.
+    expect(Object.keys(files).filter((f) => f.startsWith(`${DIRECT_ROOTS[0]}/`)).length).toBeGreaterThan(10);
+    for (const f of ["backend/src/analytics/index.ts", BACKEND_ENGINE_CALLER, BACKEND_EXTRACT]) expect(files[f], f).toBeDefined();
+    expect(directCalls(files).map((x) => `${x.file}:${x.line}: ${x.text}`)).toEqual([]);
+  });
+
+  test("red control: planted calls are flagged with file and line; prose, other names and files outside the backend are not", () => {
+    const planted: Record<string, string> = {
+      "backend/src/analytics/index.ts": "const a = 1;\nconst r2 = computeRegime(transformed, dateAxis, included);\n",
+      "backend/src/analytics/compute.ts": "// computeKeptRegime(raw, opts) in prose is fine\nconst run = computeKeptRegime (raw, opts);\n",
+      "backend/src/analytics/report/x.ts": "const rows = keptRegimeRows(run, row);\nconst b = buildSnapshotRows(dateAxis, r2, r3);\nconst c = buildRichIndicators(i, r2, r3);\n",
+      "backend/src/analytics/clean.ts": "/* computeRegime( */ const m = runModel(model, input, opts);\nconst computeRegimeOptions = {};\n",
+      "packages/analyst-sdk/src/engine/x.ts": "return computeRegime(transformed, dateAxis, panels);\n",
+      "backend/src/api/y.ts": "const r = computeRegime(t, d, p);\n",
+    };
+    expect(directCalls(planted).map((x) => `${x.file}:${x.line}`).sort()).toEqual([
+      "backend/src/analytics/compute.ts:2",
+      "backend/src/analytics/index.ts:2",
+      "backend/src/analytics/report/x.ts:1",
+      "backend/src/analytics/report/x.ts:2",
+      "backend/src/analytics/report/x.ts:3",
+    ]);
+  });
+
+  test("red control on disk: a planted call in a real tree is found by the same walk", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "regime-direct-call-"));
+    try {
+      mkdirSync(join(tmp, DIRECT_ROOTS[0]!, "report"), { recursive: true });
+      writeFileSync(join(tmp, DIRECT_ROOTS[0]!, "report", "planted.ts"), "export const rows = (run: any) => keptRegimeRows(run, {});\n");
+      writeFileSync(join(tmp, DIRECT_ROOTS[0]!, "clean.ts"), "export const rows = (run: any) => publishedRows(run);\n");
+      const files = tree(tmp, DIRECT_ROOTS);
+      expect(Object.keys(files).length).toBe(2);
+      expect(directCalls(files).map((x) => `${x.file}:${x.line}`)).toEqual([`${DIRECT_ROOTS[0]}/report/planted.ts:1`]);
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
   });
 });

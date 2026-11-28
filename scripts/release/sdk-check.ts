@@ -15,9 +15,9 @@
 //   that fails. It fetches one backup and replays nothing. A target with no published run FAILS.
 // post-seal (not a cutover step; run on its own after the day a fixed-release run ran in is sealed):
 //   bun scripts/release/sdk-check.ts --check post-seal --target stage|prod [--commit <sha>]
-//   the full-archive replay: the README quickstart fills the whole archive, reruns the newest archived run,
-//   and its as-of row must equal the as-of row of the run's published regime_snapshots artifact (field by field
-//   and by sha256; scripts/release/replay-row.ts). The run must be from the fixed producer.
+//   the full-archive replay: the README quickstart fills the whole archive, reruns the newest main-line run in the
+//   archive (never a v5 beside run), and its as-of row must equal the as-of row of its line's published regime
+//   artifact (field by field and by sha256; scripts/release/replay-row.ts). The run must be from the fixed producer.
 // Q37-sdk-tests/C25-sdk-tests: the SDK package's tests pass at the release commit.
 //
 // The clone comes from this checkout's `origin` (override: --repo-url). Exit 0

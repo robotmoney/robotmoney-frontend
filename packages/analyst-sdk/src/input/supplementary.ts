@@ -2,7 +2,7 @@
 // data an analyst collects outside the platform, for an asset or a date range the
 // platform does not carry. They live in the supplementary directory, never in the
 // local copy. This module is the format, and it is pure: the command line reads
-// and writes the files (bin/supplementary-dir.ts) and hands their text here.
+// and writes the files (node/supplementary-dir.ts) and hands their text here.
 //
 // One series per file. `yahoo:GC=F` is `yahoo/GC%3DF.csv`: the provider is the
 // folder, the symbol is the file name, percent-encoded so `^`, `=` and `/` are
@@ -13,6 +13,7 @@
 // A Yahoo field other than the adjusted close is its own series (issue 1751):
 // `yahoo:^GSPC.volume` is `yahoo/%5EGSPC.volume.csv`, the naming of the ratio legs.
 
+import { sha256 } from "../hash.ts";
 import type { Point } from "../types.ts";
 import { InputRowError, parseSourceCsv, SOURCE_CSV_HEADER } from "./load.ts";
 
@@ -182,8 +183,6 @@ export interface SupplementaryReader {
   read(id: string): SupplementarySeries;
 }
 
-const sha256Hex = (b: Uint8Array): string => new Bun.CryptoHasher("sha256").update(b).digest("hex");
-
 /** The pure reader of a supplementary directory: no filesystem, the files come through `files`. */
 export function openSupplementary(files: SupplementaryFiles): SupplementaryReader {
   const dir = files.label ?? "<dir>";
@@ -204,7 +203,7 @@ export function openSupplementary(files: SupplementaryFiles): SupplementaryReade
       if (manifestBytes === null) throw new SupplementaryError(`${id}: ${paths.file} has no ${paths.manifest}`);
       const points = parseSupplementaryCsv(id, new TextDecoder("utf-8", { fatal: true }).decode(bytes));
       const text = new TextDecoder("utf-8", { fatal: true }).decode(manifestBytes);
-      const manifest = validateSupplementaryManifest(text, { series: id, sha256: sha256Hex(bytes), points });
+      const manifest = validateSupplementaryManifest(text, { series: id, sha256: sha256(bytes), points });
       return { id, points, manifest };
     },
   };
