@@ -51,7 +51,8 @@
     "credentials": "bun scripts/gitops-credentials.ts",
     "credentials:check": "bun scripts/gitops-credentials.ts --check",
     "smoke:twin": "bun --no-env-file scripts/smoke-twin.ts",
-    "smoke:twin:once": "bun --no-env-file scripts/smoke-twin-rehearse.ts"
+    "smoke:twin:once": "bun --no-env-file scripts/smoke-twin-rehearse.ts",
+    "test:deposit-fork": "playwright test --config playwright.fork.config.ts"
   },
   "dependencies": {
     "@simplewebauthn/browser": "13.3.0",
@@ -64,6 +65,7 @@
     "alpinejs": "3.14.9",
     "chart.js": "4.5.1",
     "p5": "1.11.2",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "viem": "2.57.13"
   }
 }

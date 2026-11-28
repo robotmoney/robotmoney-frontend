@@ -317,10 +317,10 @@ describe("split CI workflows retain taxonomy declarations and guard wiring", () 
         const wf = parse(file);
         const jobs = Object.entries(wf.jobs ?? {});
         expect(jobs.length, `${file} declares at least a changes + main job`).toBeGreaterThanOrEqual(2);
+        // web-client.yml also runs the deposit fork job (issue 1778), gated the same way.
         const mainJobs = jobs.filter(([name]) => name !== "changes");
-        expect(mainJobs.length, `${file} declares exactly one non-"changes" job`).toBe(1);
-        const [, mainJob] = mainJobs[0]!;
-        expect(mainJob.if, `${file}'s main job has an if: guard`).toBeTruthy();
+        expect(mainJobs.length, `${file} declares exactly one non-"changes" job`).toBe(file === "web-client.yml" ? 2 : 1);
+        for (const [name, mainJob] of mainJobs) expect(mainJob.if, `${file}'s ${name} job has an if: guard`).toBeTruthy();
       });
     }
 
@@ -335,13 +335,14 @@ describe("split CI workflows retain taxonomy declarations and guard wiring", () 
       test(`${file}'s path-conditional if: is guarded so push-to-main always runs in full`, () => {
         const wf = parse(file);
         const jobs = Object.entries(wf.jobs ?? {});
-        const [, mainJob] = jobs.find(([name]) => name !== "changes")!;
-        const condition = mainJob.if ?? "";
-        expect(condition, `${file}'s main job if: references needs.changes.outputs`).toMatch(/needs\.changes\.outputs\./);
-        expect(
-          condition,
-          `${file}'s main job if: is guarded by github.event_name != 'pull_request' ahead of the path check, so push events short-circuit past it`,
-        ).toMatch(/github\.event_name\s*!=\s*'pull_request'/);
+        for (const [name, mainJob] of jobs.filter(([n]) => n !== "changes")) {
+          const condition = mainJob.if ?? "";
+          expect(condition, `${file}'s ${name} job if: references needs.changes.outputs`).toMatch(/needs\.changes\.outputs\./);
+          expect(
+            condition,
+            `${file}'s ${name} job if: is guarded by github.event_name != 'pull_request' ahead of the path check, so push events short-circuit past it`,
+          ).toMatch(/github\.event_name\s*!=\s*'pull_request'/);
+        }
       });
     }
 

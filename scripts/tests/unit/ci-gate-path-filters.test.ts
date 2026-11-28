@@ -206,6 +206,10 @@ describe("ci-gate path-filter classification (distributed dorny/paths-filter —
     ["frontend/public/assets/js/app.js", ["web-client.yml", "e2e-web.yml"]],
     ["frontend/public/assets/css/x.css", ["web-client.yml", "e2e-web.yml"]],
     ["playwright.config.ts", ["web-client.yml", "e2e-web.yml"]],
+    // The deposit fork spec and its own config (issue 1778): web-client's
+    // deposit-fork job runs them; e2e-web takes the spec with all of frontend/.
+    ["playwright.fork.config.ts", ["web-client.yml"]],
+    ["frontend/test/deposit-fork/deposit-fork.spec.ts", ["web-client.yml", "e2e-web.yml"]],
     ["frontend/public/views/home.html", ["web-client.yml", "e2e-web.yml"]],
     ["frontend/public/data/deposit/vaults.json", ["web-client.yml", "e2e-web.yml"]],
     ["frontend/public/skills/deposit/SKILL.md", ["web-client.yml", "e2e-web.yml"]],
