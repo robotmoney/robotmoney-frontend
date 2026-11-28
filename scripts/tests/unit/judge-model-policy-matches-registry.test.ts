@@ -5,10 +5,10 @@
 // `contract/` and nothing else (docker-compose.yml builds the api and every
 // worker lane from it), so an `import` of scripts/lib/model-registry.ts inside
 // backend/src would type-check on this host and then fail at container start —
-// the worst possible place to discover it. The ids are therefore written twice,
-// and this test is the price: it reads BOTH files and fails when they disagree,
-// so the copy cannot rot into a second, older opinion about which models are
-// keyless.
+// the worst possible place to discover it. The cutoff ids are therefore written
+// twice, and this test is the price: it reads BOTH files and fails when they
+// disagree. The two keyless predicates are pure name checks since the registry's
+// `free` family was retired (D22, 2026-11-28); this test holds them identical.
 //
 // It also pins the ACCEPTANCE model itself: AC-MODEL-01 names exactly
 // `opencode/deepseek-v4.1-flash`, the registry's default resolves to it, and the
@@ -20,15 +20,33 @@ import {
   DEFAULT_AGENT_MODEL,
   isKeylessModel,
   MODEL_FAMILIES,
+  resolveAgentModel,
   ZEN_PREFIX,
 } from "../../lib/model-registry.ts";
+import * as judgePolicy from "../../../backend/src/swarm/judge-model-policy.ts";
 import {
   assertJudgeModelAllowed,
-  FREE_FAMILY_JUDGE_MODELS,
   isKeylessJudgeModel,
   MODEL_CUTOFF_DATES,
   PINNED_JUDGE_MODEL,
 } from "../../../backend/src/swarm/judge-model-policy.ts";
+
+// Ids no registry family lists, each of which must read as keyless: the retired
+// free family's ids, a made-up `-free` id with and without the prefix, and
+// `big-pickle`, the one keyless id without the suffix.
+const KEYLESS_PROBES = [
+  "nemotron-3-ultra-free",
+  "opencode/nemotron-3-ultra-free",
+  "ling-3.0-flash-free",
+  "opencode/ling-3.0-flash-free",
+  "north-mini-code-free",
+  "foo-free",
+  "opencode/foo-free",
+  "big-pickle",
+  "opencode/big-pickle",
+];
+// Ids that must NOT read as keyless though they look close.
+const PAID_PROBES = ["free", "freeform-model", "opencode/free-model", "big-pickle-pro", "test/judge-model"];
 
 describe("the judge's model policy agrees with the pinned registry", () => {
   test("PINNED_JUDGE_MODEL is the registry's default, in wire form", () => {
@@ -38,23 +56,42 @@ describe("the judge's model policy agrees with the pinned registry", () => {
     expect(PINNED_JUDGE_MODEL.startsWith(ZEN_PREFIX)).toBe(false);
   });
 
-  test("the backend's free-family list is exactly the registry's keyless ids", () => {
-    const registryKeyless = Object.values(MODEL_FAMILIES)
-      .filter((f) => f.keyless)
-      .flatMap((f) => Object.values(f.models))
-      .sort();
-    expect([...FREE_FAMILY_JUDGE_MODELS].sort()).toEqual(registryKeyless);
-    // Non-vacuous, and specifically covering the suffix-less one.
-    expect(registryKeyless.length).toBeGreaterThan(1);
-    expect(registryKeyless).toContain("big-pickle");
+  test("no registry family is keyless, and the retired free family is an unknown family", () => {
+    for (const [name, f] of Object.entries(MODEL_FAMILIES)) {
+      expect("keyless" in f, name).toBe(false);
+      for (const id of Object.values(f.models)) {
+        expect(id.endsWith("-free"), id).toBe(false);
+        expect(id, id).not.toBe("big-pickle");
+      }
+    }
+    expect(Object.keys(MODEL_FAMILIES)).not.toContain("free");
+    expect(() => resolveAgentModel({ AGENT_MODEL: "free" })).toThrow(/unknown model family/);
+    expect(() => resolveAgentModel({ AGENT_MODEL: "free/nemotron-3-ultra" })).toThrow(/unknown model family/);
+  });
+
+  test("the backend exports no free-family mirror list any more", () => {
+    expect("FREE_FAMILY_JUDGE_MODELS" in judgePolicy).toBe(false);
+  });
+
+  test("both keyless predicates are true for every keyless probe and false for every paid probe", () => {
+    for (const id of KEYLESS_PROBES) {
+      expect(isKeylessModel(id), id).toBe(true);
+      expect(isKeylessJudgeModel(id), id).toBe(true);
+    }
+    for (const id of PAID_PROBES) {
+      expect(isKeylessModel(id), id).toBe(false);
+      expect(isKeylessJudgeModel(id), id).toBe(false);
+    }
   });
 
   test("both keyless predicates answer identically for every registry id", () => {
     const everyId = Object.values(MODEL_FAMILIES).flatMap((f) => Object.values(f.models));
     expect(everyId.length).toBeGreaterThan(20);
     for (const id of everyId) {
-      expect(isKeylessJudgeModel(id), id).toBe(isKeylessModel(id));
-      expect(isKeylessJudgeModel(`${ZEN_PREFIX}${id}`), `${ZEN_PREFIX}${id}`).toBe(isKeylessModel(id));
+      expect(isKeylessModel(id), id).toBe(false);
+      expect(isKeylessJudgeModel(id), id).toBe(false);
+      expect(isKeylessModel(`${ZEN_PREFIX}${id}`), `${ZEN_PREFIX}${id}`).toBe(false);
+      expect(isKeylessJudgeModel(`${ZEN_PREFIX}${id}`), `${ZEN_PREFIX}${id}`).toBe(false);
     }
   });
 });
@@ -66,11 +103,11 @@ describe("assertJudgeModelAllowed refuses what AC-MODEL-01 disqualifies", () => 
   const staging = { standingStack: true };
   const dev = { path: "development" as const };
 
-  test("the free family is refused on EVERY path, acceptance or not", () => {
-    for (const id of FREE_FAMILY_JUDGE_MODELS) {
+  test("every keyless id is refused on EVERY path, acceptance or not", () => {
+    for (const id of KEYLESS_PROBES) {
       expect(() => assertJudgeModelAllowed(id, acceptance)).toThrow(/keyless free family|DISQUALIFIED/);
+      expect(() => assertJudgeModelAllowed(id, staging)).toThrow(/keyless free family|DISQUALIFIED/);
       expect(() => assertJudgeModelAllowed(id, dev)).toThrow(/keyless free family|DISQUALIFIED/);
-      expect(() => assertJudgeModelAllowed(`${ZEN_PREFIX}${id}`, dev)).toThrow(/DISQUALIFIED/);
     }
   });
 

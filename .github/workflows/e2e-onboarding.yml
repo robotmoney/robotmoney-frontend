@@ -67,7 +67,7 @@
 #
 # The funded model is `opencode/deepseek-v4.1-flash`, billed to the
 # `OPENCODE_API_KEY` repo secret. Which model runs is selected by `AGENT_MODEL`
-# against scripts/lib/model-registry.ts; `AGENT_MODEL=free` runs keyless. The key
+# against scripts/lib/model-registry.ts; there is no keyless option. The key
 # only resolves in a trusted context: any non-pull_request event, or a
 # `real-eval`-labelled PR from a branch in THIS repo. A labelled fork PR resolves
 # no key and fails loudly instead of degrading.
@@ -205,7 +205,7 @@ jobs:
             if [ "$TRUSTED_CONTEXT" = "true" ] && [ "$HAS_ZEN_KEY" = "true" ]; then
               MSG="§11 R8 real-inference onboarding eval: RUNNING on the configured paid default model (trusted context, OPENCODE_API_KEY configured) in the onboarding sweep step below. Credential presence does not attest provider balance: Zen must retain pay-as-you-go credit. A typed cause=exhausted-credits is an external billing prerequisite — top up that workspace, then re-run; do not substitute a fixture or disable this live gate. Requested by: the nightly schedule mirror, the 'real-eval' pull-request label, or workflow_dispatch with real_eval=true — whichever triggered this run."
             else
-              MSG="§11 R8 real-inference onboarding eval: **CANNOT RUN** — the eval was requested for this run, but no OPENCODE_API_KEY is available in this context (fork PR, or the secret is unset). The default model is paid, so the eval will fail loudly rather than silently degrade. Configure a Zen credential with pay-as-you-go credit, or set AGENT_MODEL=free to run keyless."
+              MSG="§11 R8 real-inference onboarding eval: **CANNOT RUN** — the eval was requested for this run, but no OPENCODE_API_KEY is available in this context (fork PR, or the secret is unset). The default model is paid, so the eval will fail loudly rather than silently degrade. Configure a Zen credential with pay-as-you-go credit; there is no keyless model to fall back to."
             fi
           else
             echo "requested=false" >> "$GITHUB_OUTPUT"

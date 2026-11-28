@@ -50,7 +50,7 @@ beforeAll(() => {
   chmodSync(fakeCli, 0o755);
   for (const k of ["OPENCODE_BIN", "AGENT_MODEL", "OPENCODE_TIMEOUT_MS"]) saved[k] = process.env[k];
   process.env.OPENCODE_BIN = fakeCli;
-  process.env.AGENT_MODEL = "free"; // resolves to opencode/nemotron-3-ultra-free — the id in the line
+  process.env.AGENT_MODEL = "opencode/nemotron-3-ultra-free"; // raw id: the one in the recorded line
   process.env.OPENCODE_TIMEOUT_MS = String(TIMEOUT_MS);
 });
 afterAll(() => {

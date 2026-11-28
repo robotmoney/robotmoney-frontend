@@ -149,7 +149,7 @@ describe("parseClientLine — the RM_* stdout protocol", () => {
 
 describe("railFromEnv — the standalone session driver's rail resolution", () => {
   test("throws loudly when SMOKE_PROJECT is missing", () => {
-    expect(() => railFromEnv({ AGENT_MODEL: "free" })).toThrow(/SMOKE_PROJECT is required/);
+    expect(() => railFromEnv({ AGENT_MODEL: "deepseek", OPENCODE_API_KEY: "sk-not-real" })).toThrow(/SMOKE_PROJECT is required/);
   });
 
   test("resolves project, compose files, and a defined-only spawn env", () => {
@@ -188,11 +188,13 @@ describe("railFromEnv — the standalone session driver's rail resolution", () =
   // NO SIGNAL IS READ HERE (issue 1326): railFromEnv() is a child process
   // handed the stack's compose env, cannot see the `--static-port` flag, and
   // states no path, so it is always the acceptance path.
-  test("an acceptance path REFUSES a keyless/free-family model", () => {
+  test("an acceptance path REFUSES a keyless model, and the retired free selector is unknown", () => {
+    expect(() => railFromEnv({ SMOKE_PROJECT: "p", AGENT_MODEL: "opencode/nemotron-3-ultra-free" }))
+      .toThrow(/disqualified for acceptance/i);
     expect(() => railFromEnv({ SMOKE_PROJECT: "p", AGENT_MODEL: "free" }))
-      .toThrow(/disqualified for acceptance/i);
+      .toThrow(/unknown model family/i);
     expect(() => railFromEnv({ SMOKE_PROJECT: "p", AGENT_MODEL: "free/nemotron-3-ultra" }))
-      .toThrow(/disqualified for acceptance/i);
+      .toThrow(/unknown model family/i);
   });
 
   test("an acceptance path with the pinned model and NO credential fails closed", () => {
@@ -217,7 +219,7 @@ describe("railFromEnv — the standalone session driver's rail resolution", () =
   // so that boundary is closed on every host.
   test("RM_ENV=smoke opens nothing: a keyless model is still refused", () => {
     for (const RM_ENV of ["smoke", "stage", "ephemeral"]) {
-      expect(() => railFromEnv({ SMOKE_PROJECT: "p", AGENT_MODEL: "free", RM_ENV })).toThrow(/disqualified for acceptance/i);
+      expect(() => railFromEnv({ SMOKE_PROJECT: "p", AGENT_MODEL: "opencode/foo-free", RM_ENV })).toThrow(/disqualified for acceptance/i);
     }
   });
 });

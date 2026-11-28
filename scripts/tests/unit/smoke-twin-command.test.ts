@@ -144,7 +144,8 @@ describe("resolveZenKey — the process environment only; ~/.env holds no model 
 
   test("it refuses rather than substituting a keyless model", () => {
     const r = resolveZenKey({ HOME: "/nowhere" });
-    if ("error" in r) expect(r.error).toMatch(/AGENT_MODEL=free/);
+    expect("error" in r).toBe(true);
+    if ("error" in r) expect(r.error).toMatch(/no keyless fallback/);
   });
 });
 

@@ -2,7 +2,7 @@
 // (scripts/lib/onboarding-eval.ts, scripts/agent/member-agent.ts) — identity
 // and prompt building, the REGISTRY-BASED model/credential resolution (D22
 // rule 1 as amended 2026-07-28: AGENT_MODEL → scripts/lib/model-registry.ts,
-// funded via OPENCODE_API_KEY, `free` still available), step-state derivation,
+// funded via OPENCODE_API_KEY; the `free` family retired 2026-11-28), step-state derivation,
 // the GOLDEN member-agent argv for both the funded and the keyless case, and
 // runOnboardingEvalWithRetry's retry DECISION via its injectable `runOnce`
 // seam.
@@ -175,10 +175,14 @@ describe("onboarding-eval pure helpers", () => {
     expect(() => resolveModelConfig({})).toThrow(/OPENCODE_API_KEY is not set/);
   });
 
-  test("resolveModelConfig keeps a `free` selection genuinely keyless, even with a key present", () => {
-    // A key set for an unrelated reason must never get pulled into a keyless run.
-    const cfg = resolveModelConfig({ AGENT_MODEL: "free", OPENCODE_API_KEY: "sk-zen" }, { path: "development" });
-    expect(cfg).toEqual({ model: "opencode/nemotron-3-ultra-free", apiKeyEnv: null, apiKey: null, keyless: true });
+  test("the retired `free` family is an unknown family, naming the paid default — never a keyless run", () => {
+    // Retired 2026-11-28 (D22): Zen removed every id it listed.
+    for (const AGENT_MODEL of ["free", "free/nemotron-3-ultra"]) {
+      expect(() => resolveAgentModel({ AGENT_MODEL })).toThrow(/unknown model family/);
+      expect(() => resolveAgentModel({ AGENT_MODEL })).toThrow(/opencode\/deepseek-v4\.1-flash/);
+      expect(() => resolveModelConfig({ AGENT_MODEL, OPENCODE_API_KEY: "sk-zen" }, { path: "development" }))
+        .toThrow(/unknown model family/);
+    }
   });
 
   test("resolveModelConfig switches family by name and pins an exact member with family/model", () => {
@@ -206,11 +210,13 @@ describe("onboarding-eval pure helpers", () => {
     }
   });
 
-  test("isKeylessModel is derived from the registry, and big-pickle stays reachable but is not the default", () => {
+  test("isKeylessModel is a name check: any -free id or big-pickle, never a registry member", () => {
     expect(isKeylessModel("opencode/nemotron-3-ultra-free")).toBe(true);
     expect(isKeylessModel("opencode/big-pickle")).toBe(true);
     expect(isKeylessModel("opencode/deepseek-v4.1-flash")).toBe(false);
-    // Saturated upstream with no paid tier — deliberately no longer the default.
+    for (const family of Object.values(MODEL_FAMILIES)) {
+      for (const id of Object.values(family.models)) expect(isKeylessModel(id), id).toBe(false);
+    }
     expect(DEFAULT_INFERENCE_MODEL).not.toBe("opencode/big-pickle");
   });
 
@@ -443,7 +449,7 @@ describe("member-agent container primitive", () => {
     );
   });
 
-  test("KEYLESS: the SAME argv minus the -e pair — AGENT_MODEL=free is still a real, key-free path", () => {
+  test("KEYLESS: the SAME argv minus the -e pair — a null apiKeyEnv injects no credential", () => {
     const keyless = buildMemberAgentArgv({ ...base, modelConfig: KEYLESS });
     expect(keyless).not.toContain("-e");
     expect(keyless.join(" ")).not.toMatch(/_API_KEY/);
@@ -550,10 +556,8 @@ describe("member-agent container primitive", () => {
 // re-proving the eval.
 describe("runOnboardingEvalWithRetry", () => {
   const FUNDED_ENV = { OPENCODE_API_KEY: "sk-zen" };
-  // THE PATH IS STATED. A caller that states none is the acceptance path, where
-  // a keyless model is refused outright; these cases are about the DEVELOPMENT
-  // retry rules, so each run states that path (issue 1326).
-  const KEYLESS_ENV = { AGENT_MODEL: "free" };
+  // THE PATH IS STATED. These cases are about the DEVELOPMENT retry rules, so
+  // each run that needs it states that path (issue 1326).
   const DEV_PATH = { path: "development" as const };
 
   function fakeResult(overrides: Partial<OnboardingEvalResult> = {}): OnboardingEvalResult {
@@ -685,9 +689,9 @@ describe("runOnboardingEvalWithRetry", () => {
   // The bar is not softened, and the pair of cases below is what proves it: a
   // timeout is an ABSENCE of signal, while a genuine navigation failure
   // presents as a container EXIT (CI run 30395466780: exit 0, every step
-  // pending) — and that is never retried, on either tier.
+  // pending) — and that is never retried. (The keyless tier these cases also
+  // covered was retired with the free family, D22 2026-11-28.)
   for (const [tier, env] of [
-    ["keyless", KEYLESS_ENV],
     ["funded", FUNDED_ENV],
   ] as const) {
     test(`a bare timeout IS retried on a ${tier} model — a timeout is an absence of signal, not a result`, async () => {
@@ -783,7 +787,7 @@ describe("runOnboardingEvalWithRetry", () => {
       composeProject: "p",
       backendUrl: "http://x",
       automationToken: "t",
-      env: KEYLESS_ENV, // a tier whose bare timeouts ARE retried — this still is not
+      env: FUNDED_ENV, // a tier whose bare timeouts ARE retried — this still is not
       modelPath: DEV_PATH,
       backoffMsSchedule: [0],
       runOnce: async () => {

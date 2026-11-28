@@ -32,10 +32,10 @@
 // What survives from that invariant, and is enforced here: AT MOST ONE MODEL
 // CREDENTIAL `-e` flag, carrying exactly the env NAME the registry chose
 // (`apiKeyEnv`), and ONLY when the resolved model actually needs credit. A
-// keyless selection (`AGENT_MODEL=free`, `isKeylessModel(model) === true`)
-// yields `apiKeyEnv: null` and the argv carries no credential `-e` at all — the
-// keyless path is still a real, fully-supported path, it is simply no longer
-// the only one.
+// config with `apiKeyEnv: null` carries no credential `-e` at all. No AGENT_MODEL
+// selection produces one any more: the registry's keyless `free` family was
+// retired on 2026-11-28 (D22) and resolveModelConfig() refuses a keyless id on
+// every path. The null form remains for callers that hand in a stub model.
 //
 // The ONE other source of `-e` flags is the caller's explicit `ownerEnv`: the
 // half of the session environment a real applicant's HUMAN would have exported

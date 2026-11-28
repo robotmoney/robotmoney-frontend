@@ -7,14 +7,14 @@
 // column, and until this file existed the ONLY thing asserted about that column
 // was that it is non-empty (migration 0056's CHECK, and setJudgeConfig()'s own
 // length test). So `setJudgeConfig({ mode: "enforce", model:
-// "nemotron-3-ultra-free" })` was accepted, stored, and posted verbatim to Zen
+// "<id>-free" })` was accepted, stored, and posted verbatim to Zen
 // by resolveJudgeTransport — a keyless free-tier judge passing every gate the
 // 0.5.0 rollout adds, and disqualifying the whole run under AC-MODEL-01's "a run
 // in which any agent used a free-tier model is not evidence".
 //
 // TWO RULES, DELIBERATELY DIFFERENT IN STRENGTH.
 //
-//   1. THE FREE FAMILY IS REFUSED EVERYWHERE. A keyless model needs no
+//   1. A KEYLESS MODEL IS REFUSED EVERYWHERE. A keyless model needs no
 //      credential, which is exactly why it degrades silently instead of failing
 //      closed: it is the one selection that can look healthy while producing
 //      nothing usable. No environment has a reason to judge on one, so this rule
@@ -26,6 +26,10 @@
 //      participant judge apply the pin on every deployed stack. Only the armed
 //      test harness keeps every id, because its judgements are not evidence and
 //      its fixtures legitimately use stub ids like `test/judge-model`.
+//
+// The registry no longer lists a keyless family (retired 2026-11-28, D22), so
+// rule 1 is a name check: any `-free` id, or `big-pickle`. It still has work to
+// do because the judge column takes any id an admin writes.
 //
 // WHY THE IDS ARE DUPLICATED HERE. backend/Dockerfile copies `backend/` and
 // `contract/` and nothing else, so `scripts/lib/model-registry.ts` — the pinned
@@ -80,29 +84,17 @@ export const MODEL_CUTOFF_DATES: Readonly<Record<string, string>> = Object.freez
   "gemini-3-flash": VERIFIED_ON,
   "gemini-3.6-flash": VERIFIED_ON,
   "gemini-3.1-pro": VERIFIED_ON,
-  "nemotron-3-ultra-free": VERIFIED_ON,
-  "ling-3.0-flash-free": VERIFIED_ON,
-  "north-mini-code-free": VERIFIED_ON,
-  "big-pickle": VERIFIED_ON,
 });
 
 /**
- * Zen's keyless family, mirrored from scripts/lib/model-registry.ts's `free`
- * family. Note `big-pickle`: the registry's own comment records that it is the
- * one keyless id with no `-free` suffix, which is exactly why a suffix rule
- * alone would not have caught it.
+ * True when this id is a Zen keyless free-tier id: any `-free` id, or
+ * `big-pickle`, the one keyless id Zen shipped without the suffix (a suffix rule
+ * alone would not catch it). Matches scripts/lib/model-registry.ts's
+ * isKeylessModel exactly (judge-model-policy-matches-registry.test.ts).
  */
-export const FREE_FAMILY_JUDGE_MODELS: readonly string[] = Object.freeze([
-  "nemotron-3-ultra-free",
-  "ling-3.0-flash-free",
-  "north-mini-code-free",
-  "big-pickle",
-]);
-
-/** True when this id is served by Zen's no-credential free tier. */
 export function isKeylessJudgeModel(model: string): boolean {
   const id = model.trim().replace(/^opencode\//, "").toLowerCase();
-  return FREE_FAMILY_JUDGE_MODELS.includes(id) || id.endsWith("-free");
+  return id === "big-pickle" || id.endsWith("-free");
 }
 
 // The acceptance predicate is NOT defined here. It is one rule, owned by

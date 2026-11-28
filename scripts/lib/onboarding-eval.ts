@@ -20,7 +20,8 @@
 // instant) and, having zero cost across every field with no paid sibling in
 // Zen's catalogue, there is no funded tier to escape to. A keyless default that
 // returns 429 is not a keyless default; it is an outage with a rationale. The
-// `free` family in the registry remains available for genuinely unfunded runs.
+// registry's `free` family that once remained for unfunded runs was retired on
+// 2026-11-28 (D22): Zen removed its ids, so every run is funded.
 //
 // resolveModelConfig() throws loudly when a paid model is selected with no
 // funded key — it never silently substitutes a different model behind the
@@ -267,21 +268,26 @@ export interface ModelConfig {
   model: string;
   apiKeyEnv: typeof ZEN_KEY_ENV | null;
   apiKey: string | null;
-  /** True when the resolved model needs no credit (the `free` family). */
+  /**
+   * True when the resolved model needs no credit. Always false now: the free
+   * family is retired (D22, 2026-11-28) and resolveModelConfig() refuses a
+   * keyless id on every path.
+   */
   keyless: boolean;
 }
 
 // ── Which environment is selecting a model (AC-MODEL-01) ────────────────────
 //
-// The keyless `free` family and the raw `opencode/<id>` escape hatch are both
-// LEGITIMATE on a developer's own machine: D22 rule 1 as amended keeps
-// `AGENT_MODEL=free` available so a contributor can run the whole eval with no
-// credential, and the escape hatch exists because Zen ships models faster than
-// this repo reviews them.
+// The raw `opencode/<id>` escape hatch is LEGITIMATE on a developer's own
+// machine: it exists because Zen ships models faster than this repo reviews
+// them. A keyless model is legitimate nowhere: the registry's `free` family
+// that D22 rule 1 as amended once kept for credential-free local runs was
+// retired on 2026-11-28 (Zen removed its ids), so a keyless id reached through
+// the escape hatch is refused on every path, development included.
 //
-// Neither is legitimate on a STAGING or PRODUCTION path, and on 2026-09-13 the
+// The escape hatch is not legitimate on a STAGING or PRODUCTION path, and on 2026-09-13 the
 // cost of that being unenforced was measured: the standing stage stack ran
-// `AGENT_MODEL=free` (`nemotron-3-ultra-free`) with an EMPTY OPENCODE_API_KEY,
+// the keyless free family (`nemotron-3-ultra-free`) with an EMPTY OPENCODE_API_KEY,
 // resolveModelConfig() accepted it silently because keyless needs no key, and
 // every swarm session it produced was worthless as evidence — a free-tier model
 // authoring takes nobody paid for, and a judge that could never be reached.
@@ -290,8 +296,8 @@ export interface ModelConfig {
 // unfunded credential fails closed rather than degrading, and the environment
 // carries only the `deepseek` SELECTOR, never a raw id.
 //
-// So the refusal is scoped to the paths where it is true, not applied globally
-// (which would break every keyless local eval and be reverted within a week).
+// So the raw-id refusal is scoped to the paths where it is true; the keyless
+// refusal applies everywhere.
 // The predicate itself lives in backend/src/acceptance-path.ts and is shared
 // with the judge half verbatim. No environment value decides it (issue 1326):
 // `bun smoke` states the kind of boot (`standingStack`), and a caller that
@@ -308,10 +314,9 @@ export {
 //
 // A paid model with no funded key THROWS here rather than at the far end of a
 // container boot: the failure is a configuration mistake, and it costs ~20
-// minutes of stack bring-up to discover it any later. Selecting a `free/…`
-// model is the supported way to run with no key at all — ON A DEVELOPMENT PATH.
-// On a staging or production path it is refused outright, along with a raw-id
-// `AGENT_MODEL` override, per AC-MODEL-01 and D22 rule 1 (see above).
+// minutes of stack bring-up to discover it any later. A keyless model is
+// refused on every path. On a staging or production path a raw-id
+// `AGENT_MODEL` override is refused too, per AC-MODEL-01 and D22 rule 1 (see above).
 export function resolveModelConfig(
   env: Record<string, string | undefined> = process.env,
   opts: ModelPathOptions = {},
@@ -319,8 +324,18 @@ export function resolveModelConfig(
   const path = resolveInferencePath(opts);
   const selector = env[AGENT_MODEL_ENV]?.trim() ?? "";
   const model = resolveAgentModel(env); // throws loudly on an unknown family/model
-  const keyless = isKeylessModel(model);
   const apiKey = zenApiKey(env);
+
+  // A keyless model is disqualified for acceptance (AC-MODEL-01) and has no
+  // development use either: the free family is retired (D22, 2026-11-28).
+  if (isKeylessModel(model)) {
+    throw new Error(
+      `${AGENT_MODEL_ENV} resolved to ${model}, a keyless free-tier model, and this is a ${path} path. ` +
+        "The free family is retired (D22) and disqualified for acceptance (AC-MODEL-01): a run in which any agent used " +
+        `a free-tier model is not evidence. Select the funded default (${AGENT_MODEL_ENV}=deepseek) and ` +
+        `set ${ZEN_KEY_ENV}. Refusing to degrade to a keyless model.`,
+    );
+  }
 
   if (isAcceptancePath(path)) {
     // D22 rule 1. The escape hatch is "deliberately the only form that bypasses
@@ -335,15 +350,6 @@ export function resolveModelConfig(
           "review away. The raw form is a development escape hatch and is refused here.",
       );
     }
-    // The free family is disqualified for acceptance, whatever else it proves.
-    if (keyless) {
-      throw new Error(
-        `${AGENT_MODEL_ENV} resolved to ${model}, a keyless free-tier model, and this is a ${path} path. ` +
-          "The free family is disqualified for acceptance (AC-MODEL-01): a run in which any agent used " +
-          `a free-tier model is not evidence. Select the funded default (${AGENT_MODEL_ENV}=deepseek) and ` +
-          `set ${ZEN_KEY_ENV}. Refusing to degrade to a keyless model.`,
-      );
-    }
     // Fail closed, never degrade: this is the state staging was found in.
     if (!apiKey) {
       throw new Error(
@@ -353,19 +359,17 @@ export function resolveModelConfig(
           "failure AC-MODEL-01 forbids, not a fallback.",
       );
     }
-    return { model, apiKeyEnv: ZEN_KEY_ENV, apiKey, keyless };
+    return { model, apiKeyEnv: ZEN_KEY_ENV, apiKey, keyless: false };
   }
-
-  if (keyless) return { model, apiKeyEnv: null, apiKey: null, keyless };
 
   if (!apiKey) {
     throw new Error(
       `${AGENT_MODEL_ENV} resolved to ${model}, which is a paid OpenCode Zen model, but ${ZEN_KEY_ENV} is not set. ` +
-        `Set ${ZEN_KEY_ENV} (CI: repository secret; Stage/local: .env), or select a keyless model ` +
-        `(${AGENT_MODEL_ENV}=free, or free/<model>). Refusing to silently substitute a different model.`,
+        `Set ${ZEN_KEY_ENV} (CI: repository secret; Stage/local: .env) with pay-as-you-go credit. ` +
+        "Refusing to silently substitute a different model.",
     );
   }
-  return { model, apiKeyEnv: ZEN_KEY_ENV, apiKey, keyless };
+  return { model, apiKeyEnv: ZEN_KEY_ENV, apiKey, keyless: false };
 }
 
 // `buildAgentOpencodeConfig(model)` moved to the shared primitive

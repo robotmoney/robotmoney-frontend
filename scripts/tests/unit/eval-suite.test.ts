@@ -63,8 +63,12 @@ describe("generic eval definitions", () => {
 
   test("requires keyed access before the admission executor can reach Docker", () => {
     expect(() => resolveAdmissionEvalModelConfig({})).toThrow(/No free-model probe or fallback/);
-    expect(() => resolveAdmissionEvalModelConfig({ AGENT_MODEL: "free", OPENCODE_API_KEY: "unused-key" }))
+    expect(() => resolveAdmissionEvalModelConfig({ AGENT_MODEL: "opencode/nemotron-3-ultra-free", OPENCODE_API_KEY: "unused-key" }))
       .toThrow(/no-credential models are not an eval fallback/);
+    expect(() => resolveAdmissionEvalModelConfig({ AGENT_MODEL: "opencode/big-pickle", OPENCODE_API_KEY: "unused-key" }))
+      .toThrow(/no-credential models are not an eval fallback/);
+    expect(() => resolveAdmissionEvalModelConfig({ AGENT_MODEL: "free", OPENCODE_API_KEY: "unused-key" }))
+      .toThrow(/unknown model family/);
   });
 });
 

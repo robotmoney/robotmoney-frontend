@@ -1,7 +1,7 @@
 // AC-MODEL-01, graded at the two places a model and a credential are chosen.
 //
 // THE RUN THIS FILE EXISTS BECAUSE OF. On 2026-09-13 the standing stage stack
-// was found running `AGENT_MODEL=free` (`nemotron-3-ultra-free`) with an EMPTY
+// was found running the keyless free family (`nemotron-3-ultra-free`) with an EMPTY
 // `OPENCODE_API_KEY`. Nothing failed. `resolveModelConfig()` accepted it
 // silently — a keyless model needs no key, so the "paid model with no key"
 // refusal never fired — and the swarm produced a hundred published sessions
@@ -15,22 +15,23 @@
 // selector, never a raw id (D22 rule 1); and an absent or unfunded credential
 // FAILS CLOSED rather than degrading.
 //
-// The refusals are scoped to staging and production ON PURPOSE. D22 rule 1 as
-// amended keeps `AGENT_MODEL=free` available so a contributor with no
-// credential can run the whole eval locally, and the raw `opencode/<id>` escape
-// hatch exists because Zen ships models faster than this repo reviews them.
-// Both remain legal on a development path, and the first two tests below pin
-// that — a guard that broke every local eval would be reverted within a week,
-// and then nothing would guard staging either.
+// The raw-id refusal is scoped to staging and production ON PURPOSE: the raw
+// `opencode/<id>` escape hatch exists because Zen ships models faster than this
+// repo reviews them, and it stays legal on a development path. The keyless
+// refusal is not scoped: the registry's `free` family was retired on 2026-11-28
+// (D22), so the `free` selector is an unknown family and a keyless id reached
+// through the escape hatch is refused on every path, development included.
 import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { DEFAULT_AGENT_MODEL, resolveAgentModel } from "../../lib/model-registry.ts";
+import { DEFAULT_AGENT_MODEL } from "../../lib/model-registry.ts";
 import { isAcceptancePath, resolveInferencePath, resolveModelConfig } from "../../lib/onboarding-eval.ts";
 import { ENV_FILE, READONLY_ENV_FILE, resolveStackZenKey, ZEN_KEY_ENV } from "../../lib/opencode-key.ts";
 
 const FUNDED = { [ZEN_KEY_ENV]: "sk-funded-test-value" };
+// A keyless id no registry family lists, reachable only through the raw escape hatch.
+const KEYLESS_RAW = "opencode/foo-free";
 
 // ── Which environment is asking ─────────────────────────────────────────────
 
@@ -58,12 +59,12 @@ describe("resolveInferencePath — the caller states it, and no environment valu
     // The env record is still resolveModelConfig()'s source of AGENT_MODEL and
     // the key, so a stray RM_ENV there is the realistic shape of the old bug.
     for (const RM_ENV of ["smoke", "stage", "ephemeral", "prod", ""]) {
-      expect(() => resolveModelConfig({ RM_ENV, AGENT_MODEL: "free" })).toThrow(/keyless free-tier model/);
+      expect(() => resolveModelConfig({ RM_ENV, AGENT_MODEL: KEYLESS_RAW })).toThrow(/keyless free-tier model/);
     }
   });
 
   test("a keyless model is refused when no path is stated — the default has teeth", () => {
-    expect(() => resolveModelConfig({ AGENT_MODEL: "free" })).toThrow(/keyless free-tier model/);
+    expect(() => resolveModelConfig({ AGENT_MODEL: KEYLESS_RAW })).toThrow(/keyless free-tier model/);
   });
 
   test("an explicit path wins over the standing-stack flag", () => {
@@ -72,24 +73,32 @@ describe("resolveInferencePath — the caller states it, and no environment valu
   });
 });
 
-// ── The development path is unchanged ───────────────────────────────────────
+// ── The development path keeps the raw-id hatch, never a keyless model ─────
 
-// A DEVELOPMENT BOOT SAYS SO. The escape hatches are exercised on the path an
-// operator's own `bun smoke` boot states (`standingStack: false`). The hatches
-// themselves are untouched.
-describe("development keeps every escape hatch D22 deliberately left open", () => {
+// A DEVELOPMENT BOOT SAYS SO. The raw-id escape hatch is exercised on the path
+// an operator's own `bun smoke` boot states (`standingStack: false`).
+describe("development keeps the raw-id escape hatch, and refuses every keyless model", () => {
   const DEV = { standingStack: false };
+  const DEV_PATH = { path: "development" as const };
 
-  test("a keyless free-family model still resolves with no credential at all", () => {
-    const cfg = resolveModelConfig({ AGENT_MODEL: "free" }, DEV);
-    expect(cfg.keyless).toBe(true);
-    expect(cfg.apiKey).toBeNull();
-    expect(cfg.apiKeyEnv).toBeNull();
+  test("the retired free selector is an unknown family on every path", () => {
+    for (const opts of [DEV, DEV_PATH, {}]) {
+      expect(() => resolveModelConfig({ ...FUNDED, AGENT_MODEL: "free" }, opts)).toThrow(/unknown model family/);
+      expect(() => resolveModelConfig({ ...FUNDED, AGENT_MODEL: "free/nemotron-3-ultra" }, opts)).toThrow(/unknown model family/);
+    }
   });
 
-  test("the raw-id escape hatch still goes straight through", () => {
-    const raw = resolveAgentModel({ AGENT_MODEL: "free" });
-    expect(resolveModelConfig({ AGENT_MODEL: raw }, DEV).model).toBe(raw);
+  test("a raw keyless id is refused on a development path, with no key and with a key", () => {
+    expect(() => resolveModelConfig({ AGENT_MODEL: KEYLESS_RAW }, DEV_PATH)).toThrow(/keyless/);
+    expect(() => resolveModelConfig({ ...FUNDED, AGENT_MODEL: KEYLESS_RAW }, DEV_PATH)).toThrow(/keyless/);
+    expect(() => resolveModelConfig({ AGENT_MODEL: "opencode/big-pickle" }, DEV)).toThrow(/keyless/);
+  });
+
+  test("the raw-id escape hatch still goes straight through for a paid id", () => {
+    const raw = "opencode/some-new-paid-model";
+    const cfg = resolveModelConfig({ ...FUNDED, AGENT_MODEL: raw }, DEV);
+    expect(cfg.model).toBe(raw);
+    expect(cfg.keyless).toBe(false);
   });
 
   test("a paid model with no key still fails with the long-standing message", () => {
@@ -101,29 +110,25 @@ describe("development keeps every escape hatch D22 deliberately left open", () =
 
 describe("AC-MODEL-01: staging and production refuse a keyless model", () => {
   for (const path of ["staging", "production"] as const) {
-    test(`${path} refuses the free family by selector`, () => {
-      expect(() => resolveModelConfig({ ...FUNDED, AGENT_MODEL: "free" }, { path }))
+    test(`${path} refuses a keyless model that arrives as a raw id`, () => {
+      expect(() => resolveModelConfig({ ...FUNDED, AGENT_MODEL: KEYLESS_RAW }, { path }))
         .toThrow(/disqualified for acceptance/);
-    });
-
-    test(`${path} refuses a specific free-family member too — the family name is not the only way in`, () => {
-      expect(() => resolveModelConfig({ ...FUNDED, AGENT_MODEL: "free/ling-3.0-flash" }, { path }))
+      expect(() => resolveModelConfig({ ...FUNDED, AGENT_MODEL: "opencode/nemotron-3-ultra-free" }, { path }))
         .toThrow(/disqualified for acceptance/);
-    });
-
-    test(`${path} refuses a keyless model even when it arrives as a raw id`, () => {
-      // Two refusals apply; the raw-id one fires first, and either is correct.
-      expect(() => resolveModelConfig({ ...FUNDED, AGENT_MODEL: resolveAgentModel({ AGENT_MODEL: "free" }) }, { path })).toThrow();
     });
   }
 
   test("the exact staging misconfiguration of 2026-09-13 is refused, credential and all", () => {
-    // `AGENT_MODEL=free` + an empty key: previously accepted in silence.
-    expect(() => resolveModelConfig({ AGENT_MODEL: "free", [ZEN_KEY_ENV]: "" }, { path: "staging" }))
+    // The free family's id + an empty key: previously accepted in silence. The
+    // selector that produced it is now an unknown family, so the raw id is the
+    // only way left to name it.
+    expect(() => resolveModelConfig({ AGENT_MODEL: "opencode/nemotron-3-ultra-free", [ZEN_KEY_ENV]: "" }, { path: "staging" }))
       .toThrow(/disqualified for acceptance/);
+    expect(() => resolveModelConfig({ AGENT_MODEL: "free", [ZEN_KEY_ENV]: "" }, { path: "staging" }))
+      .toThrow(/unknown model family/);
     // And through the standing-stack signal rather than an explicit path, which
     // is how the real boot reaches it.
-    expect(() => resolveModelConfig({ AGENT_MODEL: "free" }, { standingStack: true }))
+    expect(() => resolveModelConfig({ AGENT_MODEL: KEYLESS_RAW }, { standingStack: true }))
       .toThrow(/disqualified for acceptance/);
   });
 });
@@ -224,7 +229,7 @@ describe("resolveStackZenKey: the standing stack reads .env / .env.readonly, or 
     cleanup();
   });
 
-  test("with none of the three, the refusal NAMES all three and forbids the free workaround", () => {
+  test("with none of the three, the refusal NAMES all three and offers no keyless workaround", () => {
     const dir = root({});
     const got = resolveStackZenKey(dir, {});
     expect("error" in got).toBe(true);
@@ -232,7 +237,8 @@ describe("resolveStackZenKey: the standing stack reads .env / .env.readonly, or 
     expect(message).toContain(ZEN_KEY_ENV);
     expect(message).toContain(`./${ENV_FILE}`);
     expect(message).toContain(`./${READONLY_ENV_FILE}`);
-    expect(message).toContain("AGENT_MODEL=free");
+    expect(message).toContain("no keyless fallback");
+    expect(message).not.toContain("AGENT_MODEL=free");
     cleanup();
   });
 

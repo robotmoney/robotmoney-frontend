@@ -366,3 +366,57 @@ describe("scripts/checks/check-model-selection.sh survives this diff", () => {
     ]);
   });
 });
+
+// ---------------------------------------------------------------------------
+// 5. THE RETIRED FREE FAMILY IS SUGGESTED NOWHERE (issue 1776).
+//    The registry's keyless `free` family was retired on 2026-11-28 (D22): Zen
+//    removed its ids, so `AGENT_MODEL=free` is an unknown family. No message,
+//    comment, workflow, env example or eval doc may still offer it, and the
+//    judge policy's mirror list is gone. Comments count here: a comment that
+//    recommends a dead option is exactly what an operator copies. Tests are
+//    excluded because the refusal tests must name the selector they refuse.
+// ---------------------------------------------------------------------------
+const RETIRED_FREE_ROOTS = ["scripts", "backend", ".github", "evals", ".env.example"];
+const RETIRED_FREE_RE = /AGENT_MODEL=free\b|AGENT_MODEL:\s*["']free["']|FREE_FAMILY_JUDGE_MODELS/;
+const RETIRED_FREE_SKIP = new Set(["node_modules", ".git", "tests", "dist"]);
+
+export function retiredFreeMentions(root: string): string[] {
+  const hits: string[] = [];
+  const visit = (abs: string): void => {
+    if (statSync(abs).isDirectory()) {
+      for (const entry of readdirSync(abs)) if (!RETIRED_FREE_SKIP.has(entry)) visit(join(abs, entry));
+      return;
+    }
+    readFileSync(abs, "utf8").split("\n").forEach((text, i) => {
+      if (RETIRED_FREE_RE.test(text)) hits.push(`${relative(root, abs)}:${i + 1}: ${text.trim()}`);
+    });
+  };
+  for (const rel of RETIRED_FREE_ROOTS) {
+    const abs = join(root, rel);
+    if (existsSync(abs)) visit(abs);
+  }
+  return hits;
+}
+
+describe("the retired free family is suggested nowhere outside tests", () => {
+  test("the real tree names no AGENT_MODEL=free and no FREE_FAMILY_JUDGE_MODELS", () => {
+    expect(existsSync(join(repoRoot, "backend", "src", "swarm", "judge-model-policy.ts"))).toBe(true);
+    expect(retiredFreeMentions(repoRoot)).toEqual([]);
+  });
+
+  test("red control: each retired form is caught, comment or code", () => {
+    const root = tree({
+      "scripts/lib/a.ts": "// or set AGENT_MODEL=free to run keyless\n",
+      ".github/workflows/x.yml": '        AGENT_MODEL: "free"\n',
+      "backend/src/b.ts": "export const FREE_FAMILY_JUDGE_MODELS = [];\n",
+      ".env.example": "# AGENT_MODEL=free/nemotron-3-ultra\n",
+      [["scripts", "tests", "unit", "ok.test.ts"].join("/")]: 'expect(() => f({ AGENT_MODEL: "free" })).toThrow();\n',
+    });
+    expect(retiredFreeMentions(root).map((h) => h.split(":")[0]).sort()).toEqual([
+      ".env.example",
+      ".github/workflows/x.yml",
+      "backend/src/b.ts",
+      "scripts/lib/a.ts",
+    ]);
+  });
+});

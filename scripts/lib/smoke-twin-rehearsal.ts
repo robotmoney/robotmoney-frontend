@@ -111,10 +111,11 @@ export const READONLY_ENV_FILE = homeEnvFilePath();
  *
  * A rehearsal exists to run what production runs. AGENT_MODEL unset resolves to
  * DEFAULT_AGENT_MODEL — production's model — and that needs OPENCODE_API_KEY. An
- * earlier version pinned AGENT_MODEL=free to avoid spending the key, which
+ * earlier version pinned the keyless free family to avoid spending the key, which
  * quietly rehearsed a DIFFERENT system: scripts/lib/swarm/inference.ts documents
  * that model choice is not neutral for swarm authorship (some families refuse
- * the persona task outright), so a green `free` run does not predict production.
+ * the persona task outright), so a green keyless run did not predict production.
+ * That family is now retired (D22, 2026-11-28).
  *
  * FROM THE PROCESS ENVIRONMENT, AND NOWHERE ELSE. It used to be read from
  * $HOME/.env as a fallback. Spec §3 (as amended by D52) makes that file hold
@@ -140,8 +141,8 @@ export function resolveZenKey(
       "OPENCODE_API_KEY is not set in this command's environment. Export it in the shell that runs the " +
       `rehearsal; it is never read from ${READONLY_ENV_FILE}, which holds only the §3 keys (spec §3, preflight ` +
       "check 4), nor from a repo-root .env. " +
-      "Do NOT work around this with AGENT_MODEL=free: that rehearses a different model than production, " +
-      "and model choice materially changes swarm authorship (scripts/lib/swarm/inference.ts).",
+      "There is no keyless fallback: a rehearsal must run production's model, and model choice " +
+      "materially changes swarm authorship (scripts/lib/swarm/inference.ts).",
   };
 }
 

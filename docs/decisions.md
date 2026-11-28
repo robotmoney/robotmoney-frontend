@@ -1014,6 +1014,18 @@ constant" was actually protecting.
   with an eligible PR failed, and it had posted no comment since 2026-10-22.
   `check-model-selection.sh` now enforces the raw-id, retired-knob and `evals/`
   properties only. The `free` family and `AGENT_MODEL=free` are unchanged.
+- **Retired 2026-11-28 (lucky, issue #1776):** the registry's keyless `free`
+  family and `AGENT_MODEL=free` are removed. Zen dropped all three `-free` ids
+  it listed (a keyless probe with the pinned OpenCode CLI failed on the
+  default), `big-pickle` is saturated with no paid tier, and nothing ran the
+  option any more. `AGENT_MODEL=free` and `free/<model>` now fail as an unknown
+  family. `isKeylessModel()` and the judge policy's `isKeylessJudgeModel()` are
+  a name check (any `-free` id, or `big-pickle`), so a keyless id reached
+  through the raw `opencode/<id>` escape hatch is refused on every path,
+  development included. The statements above that call the keyless path
+  available, supported or fork-safe are historical. Every paid family, the
+  default `opencode/deepseek-v4.1-flash` and the pinned judge model are
+  unchanged.
 
 ### Amendment: E6 (2026-07-28) — the per-PR eval is opt-in, not unreachable
 
