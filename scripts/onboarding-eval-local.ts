@@ -207,7 +207,7 @@ try {
     identity,
     env,
     // An operator's own throwaway stack: its admissions are not evidence, so
-    // D22's development escape hatches (`AGENT_MODEL=free`) stay open here.
+    // D22's development escape hatch (a raw `opencode/<id>`) stays open here.
     modelPath: { path: "development" },
     telemetry,
     onEvent: (message) => console.log(`[eval] ${message}`),

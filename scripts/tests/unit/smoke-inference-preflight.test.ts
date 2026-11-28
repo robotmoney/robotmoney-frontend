@@ -9,7 +9,7 @@
 // deleting the write-back, or the returned compose fragment, or the
 // preflightInferenceOrExit call itself, left every other test in the repo green
 // and silently reproduced the 2026-09-13 staging state: a standing stack running
-// `AGENT_MODEL=free` with an empty `OPENCODE_API_KEY`, every judgement
+// the keyless free family with an empty `OPENCODE_API_KEY`, every judgement
 // `model_unconfigured`, and nothing anywhere saying so.
 //
 // Everything here is driven against a FIXTURE repo root and a PLAIN env object,
@@ -114,14 +114,20 @@ describe("the standing stack refuses to boot rather than produce nothing", () =>
     expect(message).toContain(ZEN_KEY_ENV);
     expect(message).toContain(`./${ENV_FILE}`);
     expect(message).toContain(`./${READONLY_ENV_FILE}`);
-    // And it forecloses the workaround that caused the incident.
-    expect(message).toMatch(/AGENT_MODEL=free/);
+    // And it offers no keyless workaround, the one that caused the incident.
+    expect(message).toMatch(/no keyless fallback/);
   });
 
-  test("AGENT_MODEL=free with a credential present is still refused — the free family is disqualified", () => {
+  test("a keyless id with a credential present is still refused — a keyless model is disqualified", () => {
+    let thrown: unknown;
+    try { run({ [ZEN_KEY_ENV]: FAKE_KEY, AGENT_MODEL: "opencode/nemotron-3-ultra-free", RM_ENV: "prod" }); } catch (err) { thrown = err; }
+    expect(String((thrown as Error)?.message ?? "")).toMatch(/disqualified for acceptance/i);
+  });
+
+  test("the retired free selector is an unknown family on the standing stack", () => {
     let thrown: unknown;
     try { run({ [ZEN_KEY_ENV]: FAKE_KEY, AGENT_MODEL: "free", RM_ENV: "prod" }); } catch (err) { thrown = err; }
-    expect(String((thrown as Error)?.message ?? "")).toMatch(/disqualified for acceptance/i);
+    expect(String((thrown as Error)?.message ?? "")).toMatch(/unknown model family/i);
   });
 
   test("a raw opencode/<id> override is refused on the standing stack (D22 rule 1)", () => {
@@ -132,12 +138,12 @@ describe("the standing stack refuses to boot rather than produce nothing", () =>
 });
 
 describe("a NON-standing boot is left exactly as it was", () => {
-  test("no credential is resolved, no env is touched, and AGENT_MODEL=free still runs", () => {
-    const env: Record<string, string | undefined> = { AGENT_MODEL: "free", CI: "1" };
+  test("no credential is resolved and no env is touched in CI", () => {
+    const env: Record<string, string | undefined> = { AGENT_MODEL: "deepseek", CI: "1" };
     const composeEnv = preflightInference({ standingStack: false, repoRoot: root, env, log: () => {} });
     expect(composeEnv).toEqual({});
     expect(env[ZEN_KEY_ENV]).toBeUndefined();
-    // The local `bun run smoke` keeps every escape hatch D22-as-amended left open.
+    // CI's non-standing boot resolves no model here at all.
   });
 });
 

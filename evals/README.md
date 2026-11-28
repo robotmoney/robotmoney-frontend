@@ -46,7 +46,7 @@ remain shared machinery outside this directory:
 | Piece | Where |
 |---|---|
 | Member-agent container primitive (`runMemberAgent`) | `scripts/agent/member-agent.ts` |
-| Model + credential registry (`resolveAgentModel` / `isKeylessModel`) | `scripts/lib/model-registry.ts` |
+| Model registry and keyless-id check (`resolveAgentModel` / `isKeylessModel`) | `scripts/lib/model-registry.ts` |
 | Model/credential resolution for the eval (`resolveModelConfig`) | `scripts/lib/onboarding-eval.ts` |
 | Outcome classifier (`classifyOutcome` / `explainOutcome`) | `scripts/agent/classify-outcome.ts` |
 | `opencode run --format json` transcript parser | `scripts/agent/transcript.ts` |
@@ -140,7 +140,9 @@ vacuously green.
 exceptions": the model was an in-code constant and no key could reach any eval
 path. That mandate did not survive contact with the free tier —
 `opencode/big-pickle`, the model it pinned, is saturated upstream with no paid
-sibling to escape to, so enforcing it would have enforced an outage.)*
+sibling to escape to, so enforcing it would have enforced an outage. On
+2026-11-28 the registry's keyless `free` family was retired too: Zen removed its
+ids, so the `free` selector now throws as an unknown family and every eval is funded.)*
 
 An eval selects its model through `AGENT_MODEL`, resolved against
 `scripts/lib/model-registry.ts`. Model **ids** live in that one versioned file;

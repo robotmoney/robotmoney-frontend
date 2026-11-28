@@ -5,10 +5,10 @@
 // ── Why a registry instead of a raw model-id env var ────────────────────────
 // Zen's catalogue churns: ids get version-bumped (`kimi-k2.6` → `kimi-k2.7-code`),
 // models are retired upstream while still listed (`claude-sonnet-4` answers
-// "not supported on the full model list"), and the free tier's naming is
-// inconsistent (every keyless model carries a `-free` suffix EXCEPT
-// `big-pickle`). Spreading raw ids across workflows, compose files, and four
-// call sites means each one rots independently and silently.
+// "not supported on the full model list"), and ids are removed outright (the
+// whole keyless `-free` tier this registry once listed is gone). Spreading raw
+// ids across workflows, compose files, and four call sites means each one rots
+// independently and silently.
 //
 // So the values live HERE, in versioned source, and the environment carries
 // only a selector — one signal, not a knob per property. A CI workflow or a
@@ -39,8 +39,6 @@ export interface ModelFamily {
   default: string;
   /** Short member name → Zen model id (without the `opencode/` prefix). */
   models: Record<string, string>;
-  /** True when every member is served by Zen's no-credential free tier. */
-  keyless?: boolean;
   /**
    * Training cutoff (YYYY-MM-DD) every member of the family is treated as having.
    * A session dated before it is refused (issue 1742). No provider's published
@@ -92,21 +90,6 @@ export const MODEL_FAMILIES: Record<string, ModelFamily> = {
     cutoff: VERIFIED_ON,
     note: "Works through the opencode CLI only — Zen's OpenAI-compatible REST endpoint wants native Gemini `contents` and 400s otherwise.",
   },
-  // Cross-vendor by construction: this family groups by BILLING, not by maker —
-  // "give me something that needs no credit". That is the property a caller
-  // actually selects on when it must run unfunded.
-  free: {
-    default: "nemotron-3-ultra",
-    models: {
-      "nemotron-3-ultra": "nemotron-3-ultra-free",
-      "ling-3.0-flash": "ling-3.0-flash-free",
-      "north-mini-code": "north-mini-code-free",
-      "big-pickle": "big-pickle",
-    },
-    keyless: true,
-    cutoff: VERIFIED_ON,
-    note: "No credential, no credit. AVOID big-pickle: it is saturated upstream (429 on 5/5 and 3/3 probes from this host while sibling free models returned 200 at the same instant) and has no paid tier to escape to — its cost is 0 across every field with no paid sibling in Zen's catalogue.",
-  },
 };
 
 /** The family used when AGENT_MODEL is unset. */
@@ -157,12 +140,18 @@ export function resolveAgentModel(env: Record<string, string | undefined> = proc
 }
 
 /**
- * True when `model` is served by Zen's free tier and so needs no credit.
- * Derived from the registry, never a second hand-maintained list.
+ * True when `model` is a Zen keyless free-tier id: any id ending in `-free`, or
+ * `big-pickle` (the one keyless id Zen ever shipped without the suffix).
+ *
+ * The registry lists no keyless family any more (the `free` family was retired
+ * 2026-11-28, D22), so this is a pure name check rather than a registry lookup.
+ * It still matters: the raw `opencode/<id>` escape hatch can name a keyless id,
+ * and every caller refuses one. It matches backend/src/swarm/judge-model-policy.ts's
+ * isKeylessJudgeModel exactly (judge-model-policy-matches-registry.test.ts).
  */
 export function isKeylessModel(model: string): boolean {
-  const id = model.startsWith(ZEN_PREFIX) ? model.slice(ZEN_PREFIX.length) : model;
-  return Object.values(MODEL_FAMILIES).some((f) => f.keyless && Object.values(f.models).includes(id));
+  const id = model.trim().replace(/^opencode\//, "").toLowerCase();
+  return id === "big-pickle" || id.endsWith("-free");
 }
 
 /** Human-readable catalogue, for `--help`-style output and error messages. */

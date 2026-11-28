@@ -137,7 +137,7 @@ export async function startRemoteDb(label: string): Promise<RemoteDb> {
       );
       const roster = join(work, `roster-${name}-${operators}.json`);
       writeFileSync(roster, JSON.stringify({ agents: {}, judges: {} }));
-      const env: Record<string, string> = { PATH: process.env.PATH ?? "", HOME: home, RM_SMOKE_STATE_ROOT: root, TERM: "dumb", AGENT_MODEL: "free" };
+      const env: Record<string, string> = { PATH: process.env.PATH ?? "", HOME: home, RM_SMOKE_STATE_ROOT: root, TERM: "dumb", AGENT_MODEL: "deepseek", OPENCODE_API_KEY: "sk-placeholder-never-forwarded" };
       // A prod-policy boot refuses without PROJECTS_SOURCE=live (issue #1113, refuseProdWithoutProjectsSource).
       // Set once here for every operator; the test that proves the refusal deletes it per boot.
       env.PROJECTS_SOURCE = "live";

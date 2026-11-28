@@ -184,7 +184,7 @@ export async function setJudgeConfig(
   if (patch.model !== undefined && patch.model !== null && (typeof patch.model !== "string" || patch.model.trim() === "" || patch.model.length > 200)) {
     throw new Error("invalid judge model — expected a non-empty model id, or null to unset it");
   }
-  // WHICH model, not merely SOME model (AC-MODEL-01). The free family is
+  // WHICH model, not merely SOME model (AC-MODEL-01). A keyless model is
   // refused everywhere; on an acceptance path only the pinned model is
   // accepted. See judge-model-policy.ts for why the two rules differ in
   // strength.

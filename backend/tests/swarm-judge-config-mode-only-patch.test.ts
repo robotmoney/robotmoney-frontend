@@ -139,6 +139,8 @@ test("a mode-only patch adopts a model written concurrently INSIDE its own write
 // this has to hold for are the ones whose history nobody watched (a restored
 // backup, a psql session, a migration, or a release of this code older than
 // the policy).
+// The retired free family's default id: the registry no longer lists it, and the
+// policy still refuses it by its `-free` suffix.
 const FREE = "nemotron-3-ultra-free";
 
 async function seedRawJudgeRow(mode: string, model: string): Promise<void> {

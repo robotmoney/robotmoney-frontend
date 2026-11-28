@@ -2,7 +2,7 @@
 //
 // `bun smoke --static-port` — the boot a tunnel points at — IS the
 // staging deployment. On 2026-09-13 it had been running for weeks on
-// `AGENT_MODEL=free` (`nemotron-3-ultra-free`) with an EMPTY
+// the keyless free family (`nemotron-3-ultra-free`, retired 2026-11-28) with an EMPTY
 // `OPENCODE_API_KEY`: every analyst take and every judgement it produced was
 // unusable as evidence, and nothing anywhere said so. Two separate gaps made
 // that possible, and this module closes both at the one point where the stack
@@ -79,10 +79,10 @@ export interface InferencePreflightOptions {
  * enough on its own.
  *
  * A NON-STANDING boot is left exactly as it was: the local `bun run smoke` and
- * CI paths keep every escape hatch D22 rule 1 as amended left open, including
- * `AGENT_MODEL=free` with no credential at all — including the fragment, which
- * stays empty so compose's own `./.env` interpolation keeps deciding, exactly as
- * it does today.
+ * CI paths keep the raw-id escape hatch D22 rule 1 as amended left open (a
+ * keyless model is refused everywhere since the free family's retirement) —
+ * including the fragment, which stays empty so compose's own `./.env`
+ * interpolation keeps deciding, exactly as it does today.
  */
 export function preflightInference(opts: InferencePreflightOptions): Record<string, string> {
   const log = opts.log ?? ((m: string) => console.log(m));
@@ -95,9 +95,9 @@ export function preflightInference(opts: InferencePreflightOptions): Record<stri
     opts.env[ZEN_KEY_ENV] = zen.key;
     composeEnv[ZEN_KEY_ENV] = zen.key;
   }
-  // On the standing stack this refuses a keyless/free-family model and a raw-id
-  // AGENT_MODEL override outright (D22 rule 1); everywhere else it is the
-  // long-standing development resolution, unchanged.
+  // This refuses a keyless model on every path. On the standing stack it also
+  // refuses a raw-id AGENT_MODEL override outright (D22 rule 1); everywhere else
+  // it is the long-standing development resolution.
   if (opts.standingStack || !opts.env.CI || opts.env.ONBOARDING_REAL_EVAL === "1") {
     resolveModelConfig(opts.env, { standingStack: opts.standingStack });
   }

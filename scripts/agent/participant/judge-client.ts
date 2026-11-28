@@ -260,7 +260,7 @@ export async function judgeOne(
     return { kind: "refused", sessionId: pending.sessionId, reason: "model_unconfigured", detail: "swarm_judge_config.model is not set" };
   }
   try {
-    // WHICH model, not merely some model (AC-MODEL-01): the keyless free family
+    // WHICH model, not merely some model (AC-MODEL-01): a keyless model
     // everywhere, and anything but the pinned model on an acceptance path.
     assertJudgeModelAllowed(model, deps.modelPath ?? {});
   } catch (err) {

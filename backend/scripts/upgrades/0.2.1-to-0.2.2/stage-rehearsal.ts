@@ -88,10 +88,11 @@ function readEnvKey(file: string, key: string): string | null {
  * A rehearsal exists to run what production runs. AGENT_MODEL unset resolves
  * to DEFAULT_AGENT_MODEL (`opencode/deepseek-v4.1-flash`) — production's model —
  * and that needs OPENCODE_API_KEY. An earlier version of this script pinned
- * AGENT_MODEL=free to avoid spending the key, which quietly rehearsed a
+ * the keyless free family to avoid spending the key, which quietly rehearsed a
  * DIFFERENT system: scripts/lib/swarm/inference.ts documents that model choice
  * is not neutral for swarm authorship (some families refuse the persona task
- * outright), so a green `free` run does not predict a production boot.
+ * outright), so a green keyless run did not predict a production boot. That
+ * family is now retired (D22, 2026-11-28).
  *
  * Resolution order — process env first (CI/shell), then the two dotenv files a
  * staging host actually keeps. Never falls back to a keyless model: the same
@@ -109,8 +110,8 @@ function resolveZenKey(): { key: string; source: string } | { error: string } {
     error:
       "OPENCODE_API_KEY is not set (checked the process environment, ./.env and ./.env.readonly). " +
       "This rehearsal boots the production model (AGENT_MODEL unset -> opencode/deepseek-v4.1-flash), " +
-      "which requires a funded Zen key. Set it and re-run. Do NOT work around this with AGENT_MODEL=free: " +
-      "that rehearses a different model than production, and model choice materially changes swarm " +
+      "which requires a funded Zen key. Set it and re-run. There is no keyless fallback: a rehearsal " +
+      "must run production's model, and model choice materially changes swarm " +
       "authorship (scripts/lib/swarm/inference.ts).",
   };
 }

@@ -510,7 +510,8 @@ describe("the boot entry refuses an unconfigured roster while participants run, 
       HOME: home,
       RM_SMOKE_STATE_ROOT: join(root, "state"),
       RM_ENV: "stage",
-      AGENT_MODEL: "free",
+      AGENT_MODEL: "deepseek",
+      OPENCODE_API_KEY: "sk-placeholder-never-forwarded",
     };
     return { root, log, env, project, calls: () => (existsSync(log) ? readFileSync(log, "utf8").split("\n").filter(Boolean) : []) };
   }

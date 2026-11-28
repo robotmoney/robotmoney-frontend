@@ -119,8 +119,8 @@ export function resolveStackZenKey(
       `${ZEN_KEY_ENV} is not set, so this stack cannot reach a funded model. It is read from the ` +
       `process environment, then ./${ENV_FILE}, then ./${READONLY_ENV_FILE}, then a participant's modelKey in ` +
       `the credential file (RM_CREDENTIALS) — add it to one of them ` +
-      "and boot again. Do NOT work around this with AGENT_MODEL=free: the keyless free family is " +
-      "disqualified for acceptance (AC-MODEL-01), and a stack that publishes free-tier or " +
-      "model_unconfigured judgements produces no evidence at all.",
+      "and boot again. There is no keyless fallback: a keyless model is disqualified for acceptance " +
+      "(AC-MODEL-01), and a stack that publishes free-tier or model_unconfigured judgements produces " +
+      "no evidence at all.",
   };
 }
