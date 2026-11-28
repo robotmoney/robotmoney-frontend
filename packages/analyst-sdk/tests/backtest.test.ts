@@ -858,3 +858,22 @@ describe("cash basis, Sharpe basis and reference backtest options (issue 1751)",
     });
   });
 });
+
+// Issue 1766: the simulators' daily cash rate, exported unchanged.
+describe("dailyCashRate (issue 1766)", () => {
+  test("discount converts the quote with discountToYield, yield does not, both over 365 days", async () => {
+    const { dailyCashRate, discountToYield: toYield, simulateDrift: drift } = await import("../src/analyze/backtest.ts");
+    const { periodicRate } = await import("../src/transform/exact.ts");
+    for (const q of [0, -0.02, 4.05, 5.25]) {
+      expect(dailyCashRate(q, "discount")).toBe(periodicRate(toYield(q) / 100, 365));
+      expect(dailyCashRate(q, "yield")).toBe(periodicRate(q / 100, 365));
+    }
+    const axis = Array.from({ length: 40 }, (_, i) => new Date(Date.UTC(2024, 0, 1 + i)).toISOString().slice(0, 10));
+    const q = 4.05;
+    for (const basis of ["discount", "yield"] as const) {
+      const sim = drift(axis, axis.map(() => ({ cash: 1 })), {}, axis.map((date) => ({ date, value: q })), { lagSessions: 0, cashBasis: basis });
+      const want = (1 + dailyCashRate(q, basis)) ** (axis.length - 1);
+      expect(Math.abs(sim.values.at(-1)!.value - want)).toBeLessThanOrEqual(1e-14 * want);
+    }
+  });
+});

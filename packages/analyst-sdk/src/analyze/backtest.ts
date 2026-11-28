@@ -93,8 +93,13 @@ function cashBasisOf(v: unknown): CashBasis {
   return v as CashBasis;
 }
 
-/** The daily cash rate of a percent quote under a cash basis. */
-function dailyCashRate(quotePercent: number, basis: CashBasis): number {
+/**
+ * The daily cash rate of a percent quote under a cash basis: periodicRate over
+ * 365 days of the quote (basis "yield") or of discountToYield(quote) (basis
+ * "discount"). Both simulators call it with the previous day's quote, 0 where
+ * there is none. On the package entry since issue 1766.
+ */
+export function dailyCashRate(quotePercent: number, basis: CashBasis): number {
   return periodicRate((basis === "yield" ? quotePercent : discountToYield(quotePercent)) / 100, 365);
 }
 
@@ -295,6 +300,42 @@ export interface PeriodStatsOptions {
   // The returns the Sharpe ratio reads (issue 1751): "excess" (default) reads
   // `excess`, "returns" reads `returns`.
   sharpeBasis?: SharpeBasis;
+  // How equity_curve samples the window (issue 1766). Default month-end.
+  sampling?: Sampling;
+}
+
+/**
+ * How an equity curve is sampled (issue 1766): "month-end" is the first value
+ * and each month's last value (the 0.9.0 curve); "weekday" is the first value,
+ * the value on every day of that UTC weekday (0 Sunday to 6 Saturday) and the
+ * last value, with no grid origin and no rebase.
+ */
+export type Sampling = { kind: "month-end" } | { kind: "weekday"; weekday: number };
+
+/** A validated sampling (default month-end). */
+export function samplingOf(v: unknown): Sampling {
+  if (v === undefined) return { kind: "month-end" };
+  const o = v as { kind?: unknown; weekday?: unknown };
+  if (o === null || typeof o !== "object") throw new RangeError(`sampling must be { kind: "month-end" } or { kind: "weekday", weekday }, got ${JSON.stringify(v)}`);
+  for (const k of Object.keys(o)) if (k !== "kind" && !(k === "weekday" && o.kind === "weekday")) throw new RangeError(`sampling: unknown key ${JSON.stringify(k)}`);
+  if (o.kind === "month-end") return { kind: "month-end" };
+  if (o.kind !== "weekday") throw new RangeError(`sampling.kind must be "month-end" or "weekday", got ${JSON.stringify(o.kind)}`);
+  if (!Number.isInteger(o.weekday) || (o.weekday as number) < 0 || (o.weekday as number) > 6) throw new RangeError(`sampling.weekday must be an integer 0 (Sunday) to 6 (Saturday), got ${JSON.stringify(o.weekday)}`);
+  return { kind: "weekday", weekday: o.weekday as number };
+}
+
+/** The sampled equity curve of a window's daily values (the curve periodStats returns as equity_curve). */
+export function sampleEquityCurve(values: readonly Point[], sampling: Sampling = { kind: "month-end" }): Point[] {
+  const s = samplingOf(sampling);
+  if (s.kind === "weekday") {
+    return values.filter((p, i) => i === 0 || i === values.length - 1 || new Date(`${p.date}T00:00:00Z`).getUTCDay() === s.weekday);
+  }
+  // The window's first value (1 at a simulation's start), then each month's last value (issue 1559).
+  const monthEnd = new Map<string, Point>();
+  for (const pt of values) monthEnd.set(pt.date.slice(0, 7), pt);
+  const downsampled = [...monthEnd.values()].sort((a, b) => a.date.localeCompare(b.date));
+  if (values.length && downsampled[0] !== values[0]) downsampled.unshift(values[0]!);
+  return downsampled;
 }
 
 const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
@@ -409,6 +450,24 @@ function openDays(dateAxis: readonly string[], pts: Point[] | undefined, calenda
   return dateAxis.map((d) => seen.has(d));
 }
 
+/** A validated lagSessions (default 1). */
+function lagOf(v: number | undefined): number {
+  const lag = v ?? 1;
+  if (!Number.isInteger(lag) || lag < 0) throw new RangeError(`lagSessions must be a nonnegative integer, got ${JSON.stringify(lag)}`);
+  return lag;
+}
+
+/** Per asset and axis date, whether its market is open under its calendar (default "observed"); the calendars validated. */
+function marketOpenDays(dateAxis: readonly string[], prices: Record<string, Point[]>, calendars: Record<string, MarketCalendar> = {}): Record<string, boolean[]> {
+  for (const [k, c] of Object.entries(calendars)) {
+    if (!MARKET_CALENDARS.includes(c)) throw new RangeError(`calendar for ${JSON.stringify(k)} must be one of ${MARKET_CALENDARS.join(", ")}, got ${JSON.stringify(c)}`);
+    if (!Object.hasOwn(prices, k)) throw new RangeError(`calendar key ${JSON.stringify(k)} names no series; expected a key of prices`);
+  }
+  const open: Record<string, boolean[]> = {};
+  for (const k of Object.keys(prices)) open[k] = openDays(dateAxis, prices[k], calendars[k] ?? "observed");
+  return open;
+}
+
 /**
  * The weights the book holds after each date's close (issue 1734). A target set
  * at date j trades no earlier than date j + lagSessions, and a trade that
@@ -422,15 +481,8 @@ function executionSchedule(
   prices: Record<string, Point[]>,
   options: { lagSessions?: number; calendars?: Record<string, MarketCalendar> },
 ): Schedule {
-  const lag = options.lagSessions ?? 1;
-  if (!Number.isInteger(lag) || lag < 0) throw new RangeError(`lagSessions must be a nonnegative integer, got ${JSON.stringify(lag)}`);
-  const calendars = options.calendars ?? {};
-  for (const [k, c] of Object.entries(calendars)) {
-    if (!MARKET_CALENDARS.includes(c)) throw new RangeError(`calendar for ${JSON.stringify(k)} must be one of ${MARKET_CALENDARS.join(", ")}, got ${JSON.stringify(c)}`);
-    if (!Object.hasOwn(prices, k)) throw new RangeError(`calendar key ${JSON.stringify(k)} names no series; expected a key of prices`);
-  }
-  const open: Record<string, boolean[]> = {};
-  for (const k of Object.keys(prices)) open[k] = openDays(dateAxis, prices[k], calendars[k] ?? "observed");
+  const lag = lagOf(options.lagSessions);
+  const open = marketOpenDays(dateAxis, prices, options.calendars);
   const allOpen = Object.values(open).every((o) => o.every(Boolean));
   if (lag === 0 && allOpen) return schedule;
 
@@ -711,6 +763,46 @@ export interface DriftOptions {
   fill?: SimulatorFill;
   // How the cash rate quote is read, as simulatePortfolio (issue 1751). Default "discount".
   cashBasis?: CashBasis;
+  // Issue 1766. What lagSessions counts: "axis-days" (default) or
+  // "asset-sessions", each asset's own open days after the day a target is set
+  // (needs execution "per-asset").
+  lagCount?: LagCount;
+  // "whole-book" (default): a changed book trades once every changed asset's
+  // market is open, then the whole book trades. "per-asset": each asset trades
+  // on its own open days; sales fill first, purchases share the cash on hand,
+  // and a purchase cut short stays open.
+  execution?: Execution;
+  // The day a calendar rebalance falls on: "axis-day" (default), the first axis
+  // day of the period, or "asset-session", each asset's own first open day of
+  // the period (needs execution "per-asset").
+  calendarDay?: CalendarDay;
+  // A day with no target: "skip" (default) leaves it off the curve; "hold"
+  // keeps it, the book earning its returns and following the targets it follows.
+  missingTarget?: MissingTarget;
+}
+
+/** What DriftOptions.lagSessions counts (issue 1766). */
+export type LagCount = "axis-days" | "asset-sessions";
+/** How a drifting book trades (issue 1766). */
+export type Execution = "whole-book" | "per-asset";
+/** The day a calendar rebalance falls on (issue 1766). */
+export type CalendarDay = "axis-day" | "asset-session";
+/** What a day with no target does (issue 1766). */
+export type MissingTarget = "skip" | "hold";
+
+const DRIFT_OPTION_KEYS = ["costBps", "freq", "band", "fill", "lagSessions", "calendars", "cashBasis", "lagCount", "execution", "calendarDay", "missingTarget"] as const;
+
+/** A validated enumerated option: its value, or the default when undefined. */
+function choiceOf<T extends string>(name: string, v: unknown, allowed: readonly T[]): T {
+  if (v === undefined) return allowed[0]!;
+  if (!allowed.includes(v as T)) throw new RangeError(`${name} must be one of ${allowed.join(", ")}, got ${JSON.stringify(v)}`);
+  return v as T;
+}
+
+/** A schedule with each null after the first target replaced by the target before it (missingTarget "hold"). */
+function holdMissing(schedule: Schedule): Schedule {
+  let last: Weights | null = null;
+  return schedule.map((w) => (last = w ?? last));
 }
 
 /** UTC weekday of a YYYY-MM-DD date, Monday 0 through Sunday 6. */
@@ -758,9 +850,17 @@ export function simulateDrift(
   options: DriftOptions = {},
 ): SimulationResult {
   for (const k of Object.keys(options)) {
-    if (!["costBps", "freq", "band", "fill", "lagSessions", "calendars", "cashBasis"].includes(k)) throw new RangeError(`unknown option ${JSON.stringify(k)}; expected costBps, freq, band, fill, lagSessions, calendars, cashBasis`);
+    if (!(DRIFT_OPTION_KEYS as readonly string[]).includes(k)) throw new RangeError(`unknown option ${JSON.stringify(k)}; expected ${DRIFT_OPTION_KEYS.join(", ")}`);
   }
   const { freq = "daily", band } = options;
+  const lagCount = choiceOf<LagCount>("lagCount", options.lagCount, ["axis-days", "asset-sessions"]);
+  const execution = choiceOf<Execution>("execution", options.execution, ["whole-book", "per-asset"]);
+  const calendarDay = choiceOf<CalendarDay>("calendarDay", options.calendarDay, ["axis-day", "asset-session"]);
+  const missingTarget = choiceOf<MissingTarget>("missingTarget", options.missingTarget, ["skip", "hold"]);
+  if (execution === "whole-book" && lagCount !== "axis-days") throw new RangeError(`lagCount "${lagCount}" needs execution "per-asset"`);
+  if (execution === "whole-book" && calendarDay !== "axis-day") throw new RangeError(`calendarDay "${calendarDay}" needs execution "per-asset"`);
+  if (execution === "per-asset" && band !== undefined) throw new RangeError(`band needs execution "whole-book"`);
+  if (missingTarget === "hold") schedule = holdMissing(schedule);
   const costs = costSpec(options.costBps);
   const cashBasis = cashBasisOf(options.cashBasis);
   if (!REBALANCE_FREQUENCIES.includes(freq)) {
@@ -770,6 +870,11 @@ export function simulateDrift(
     throw new RangeError(`band must be a finite nonnegative number, got ${JSON.stringify(band)}`);
   }
   const prepared = prepareSimulation(dateAxis, schedule, prices, cashRate, options.fill);
+  if (execution === "per-asset") {
+    return simulatePerAsset(dateAxis, schedule, prices, prepared, {
+      lag: lagOf(options.lagSessions), lagCount, open: marketOpenDays(dateAxis, prices, options.calendars), freq, calendarDay, costs, cashBasis,
+    });
+  }
   const { assetSeries, tbillDaily, firstIdx } = prepared;
   schedule = executionSchedule(dateAxis, schedule, prices, options);
 
@@ -804,18 +909,7 @@ export function simulateDrift(
     equity.grow(portRet);
     returns.push({ date, value: portRet });
 
-    const next: Weights = {};
-    for (const [k, wk] of Object.entries(held)) {
-      let r = 0;
-      if (k === "cash") r = dailyCash;
-      else {
-        const p0 = assetSeries[k]?.[i - 1];
-        const p1 = assetSeries[k]?.[i];
-        if (Number.isFinite(p0) && Number.isFinite(p1) && p0! > 0) r = p1! / p0! - 1;
-      }
-      next[k] = driftedWeight(wk, r, portRet);
-    }
-    held = next;
+    held = driftBook(held, assetSeries, i, dailyCash, portRet);
 
     const drifted =
       band !== undefined && [...new Set([...Object.keys(held), ...Object.keys(w)])].some((k) => Math.abs((held![k] || 0) - (w[k] || 0)) > band);
@@ -844,6 +938,172 @@ export function simulateDrift(
   };
 }
 
+/** Each holding after one day's returns: w (1 + r) / (1 + rp) (driftedWeight), a closed or unpriced asset earning 0. */
+function driftBook(held: Weights, assetSeries: Record<string, number[]>, i: number, dailyCash: number, portRet: number): Weights {
+  const next: Weights = {};
+  for (const [k, wk] of Object.entries(held)) {
+    let r = 0;
+    if (k === "cash") r = dailyCash;
+    else {
+      const p0 = assetSeries[k]?.[i - 1];
+      const p1 = assetSeries[k]?.[i];
+      if (Number.isFinite(p0) && Number.isFinite(p1) && p0! > 0) r = p1! / p0! - 1;
+    }
+    next[k] = driftedWeight(wk, r, portRet);
+  }
+  return next;
+}
+
+interface PerAssetRules {
+  lag: number;
+  lagCount: LagCount;
+  open: Record<string, boolean[]>;
+  freq: RebalanceFrequency;
+  calendarDay: CalendarDay;
+  costs: CostSpec;
+  cashBasis: CashBasis;
+}
+
+/** The sum of a list of exact twoSum pairs and plain terms, compensated and rounded once. */
+const exactSum = (terms: number[]): number => ddValue(sumDD(terms));
+
+// simulateDrift under execution "per-asset" (issue 1766). Each asset follows
+// the targets whose lag has passed on its own open days (lagCount): under
+// "axis-days" a target set on day t is followed from axis day t + lag, under
+// "asset-sessions" from the asset's lag-th open day after t (lag 0: day t when
+// it is open). An open asset trades back to the target it follows when that
+// target differs (sameWeights) from the one it last reached, when any asset's
+// order is open, or when its calendar rebalance falls due (calendarDay). Sales
+// fill first; purchases share the cash on hand after them in proportion to
+// their size. A purchase short by more than 1e-12 fills pro rata, cash ends at
+// 0 and its order stays open. When every asset trades in full to one target,
+// the book after the trade is that target, cash included. The curve starts on
+// the first day, at or after every asset is priced, whose day before (the day
+// itself under lag 0) has a target and on which every asset's market is open;
+// it holds that target at no cost. A null target day is skipped (missingTarget
+// "skip"; "hold" has replaced it by then). Turnover is turnoverBetween of the
+// book before and after the day's trades; a trade above 1e-9 is costed and
+// recorded, as under whole-book execution. With lag 0, every market open every
+// day and calendarDay "axis-day" it equals the whole-book result exactly.
+function simulatePerAsset(
+  dateAxis: readonly string[],
+  schedule: Schedule,
+  prices: Record<string, Point[]>,
+  prepared: PreparedSimulation,
+  rules: PerAssetRules,
+): SimulationResult {
+  const { assetSeries, tbillDaily, firstIdx } = prepared;
+  const { lag, lagCount, freq, calendarDay, costs, cashBasis } = rules;
+  const assets = Object.keys(prices);
+  const n = dateAxis.length;
+  const open: Record<string, boolean[]> = {};
+  for (const a of assets) open[a] = rules.open[a]!.map((o, i) => o && Number.isFinite(assetSeries[a]![i]));
+  // Per asset and day: whether its calendar rebalance falls due there.
+  const due: Record<string, boolean[]> = {};
+  for (const a of assets) {
+    let prev = -1;
+    due[a] = dateAxis.map((d, i) => {
+      if (calendarDay === "axis-day") return i > 0 && calendarDue(freq, dateAxis[i - 1]!, d);
+      if (!open[a]![i]) return false;
+      const fires = prev < 0 ? freq !== "never" : calendarDue(freq, dateAxis[prev]!, d);
+      prev = i;
+      return fires;
+    });
+  }
+
+  const offset = lag === 0 ? 0 : 1;
+  let start = -1;
+  for (let s = Math.max(firstIdx, offset); s < n && start < 0; s++) {
+    if (schedule[s - offset] != null && assets.every((a) => open[a]![s])) start = s;
+  }
+  if (start < 0) return { values: [], returns: [], excess: [], trades: [], startDate: dateAxis[firstIdx]!, endDate: dateAxis[n - 1]! };
+
+  const first = schedule[start - offset]!;
+  const queue = new Map<string, { target: Weights; set: number; sessions: number }[]>(assets.map((a) => [a, []]));
+  const follows = new Map<string, Weights>(assets.map((a) => [a, first]));
+  // The target an asset last reached in full; null while its order is open.
+  const settled = new Map<string, Weights | null>(assets.map((a) => [a, first]));
+  const enqueue = (i: number): void => {
+    const t = schedule[i];
+    if (t) for (const a of assets) queue.get(a)!.push({ target: t, set: i, sessions: 0 });
+  };
+  if (offset === 1) enqueue(start);
+
+  const equity = new Compounder(1);
+  let held: Weights = { ...first };
+  const values: Point[] = [{ date: dateAxis[start]!, value: equity.value }];
+  const returns: Point[] = [];
+  const excess: Point[] = [];
+  const trades: TradeEvidence[] = [];
+  const weight = (w: Weights, k: string): number => w[k] || 0;
+
+  for (let i = start + 1; i < n; i++) {
+    if (!schedule[i]) continue;
+    const date = dateAxis[i]!;
+    checkHeldDay(held, prepared, dateAxis, i);
+    const dailyCash = dailyCashRate(tbillDaily[i - 1] || 0, cashBasis);
+    const { ws, rs } = dayTerms(held, assetSeries, i, dailyCash);
+    const portRet = ddValue(dotDD(ws, rs));
+    if (!(1 + portRet > 0)) throw new RangeError(`simulateDrift: 1 + portfolio return is not positive on ${date} (${portRet})`);
+    equity.grow(portRet);
+    returns.push({ date, value: portRet });
+    held = driftBook(held, assetSeries, i, dailyCash, portRet);
+
+    enqueue(i);
+    for (const a of assets) {
+      if (!open[a]![i]) continue;
+      const q = queue.get(a)!;
+      if (lagCount === "asset-sessions") {
+        for (const p of q) if (p.set < i) p.sessions++;
+        while (q.length > 0 && q[0]!.sessions >= lag) follows.set(a, q.shift()!.target);
+      } else {
+        while (q.length > 0 && q[0]!.set + lag <= i) follows.set(a, q.shift()!.target);
+      }
+    }
+    const orderOpen = [...settled.values()].some((t) => t === null);
+    const orders = assets.filter((a) => open[a]![i] && (orderOpen || !sameWeights(follows.get(a)!, settled.get(a)!) || due[a]![i]));
+
+    let tradeFraction = 0;
+    if (orders.length > 0) {
+      const before = held;
+      const after: Weights = { ...held };
+      const goal = (a: string): number => weight(follows.get(a)!, a);
+      // Sales first: the cash they free.
+      const freed: number[] = [weight(before, "cash")];
+      for (const a of orders) {
+        if (goal(a) > weight(before, a)) continue;
+        freed.push(...twoSum(weight(before, a), -goal(a)));
+        after[a] = goal(a);
+        settled.set(a, follows.get(a)!);
+      }
+      const buys = orders.filter((a) => goal(a) > weight(before, a));
+      const available = Math.max(0, exactSum(freed));
+      const wanted = exactSum(buys.flatMap((a) => twoSum(goal(a), -weight(before, a))));
+      const full = wanted - available <= 1e-12;
+      for (const a of buys) {
+        after[a] = full ? goal(a) : weight(before, a) + (goal(a) - weight(before, a)) * (available / wanted);
+        settled.set(a, full ? follows.get(a)! : null);
+      }
+      const target = follows.get(orders[0]!)!;
+      if (full && orders.length === assets.length && orders.every((a) => sameWeights(follows.get(a)!, target))) held = { ...target };
+      else {
+        after.cash = full ? Math.max(0, exactSum([available, ...buys.flatMap((a) => twoSum(-goal(a), weight(before, a)))])) : 0;
+        held = after;
+      }
+      const { turnover, rate } = tradeCost(before, held, costs);
+      if (turnover > 1e-9) {
+        equity.shrinkByProduct(turnover, rate);
+        tradeFraction = turnover * rate;
+        trades.push({ date, turnover, cost: tradeFraction });
+      }
+    }
+    excess.push({ date, value: netOfCost(portRet, tradeFraction) - dailyCash });
+    values.push({ date, value: equity.value });
+  }
+
+  return { values, returns, excess, trades, startDate: dateAxis[start]!, endDate: dateAxis[n - 1]! };
+}
+
 /** The year periodStats annualizes over: 365.25 days, in milliseconds. */
 export const YEAR_MS = 365.25 * 86400 * 1000;
 
@@ -854,8 +1114,9 @@ export const YEAR_MS = 365.25 * 86400 * 1000;
 // exactly. `_daily` carries the window's values; stripDailyFromSnapshot drops it.
 export function periodStats(valueSeries: Point[], from: string, to: string, options: PeriodStatsOptions): BacktestMetrics {
   for (const k of Object.keys(options)) {
-    if (!["returns", "excess", "trades", "splitDate", "sharpeBasis"].includes(k)) throw new RangeError(`unknown option ${JSON.stringify(k)}; expected returns, excess, trades, splitDate, sharpeBasis`);
+    if (!["returns", "excess", "trades", "splitDate", "sharpeBasis", "sampling"].includes(k)) throw new RangeError(`unknown option ${JSON.stringify(k)}; expected returns, excess, trades, splitDate, sharpeBasis, sampling`);
   }
+  const sampling = samplingOf(options.sampling);
   if (!Array.isArray(options.returns)) throw new RangeError("options.returns (the simulation's pre-cost daily returns) is required");
   if (!Array.isArray(options.excess)) throw new RangeError("options.excess (the simulation's post-cost daily returns in excess of cash) is required");
   const sharpeSeries = sharpeSeriesOf(options);
@@ -920,12 +1181,7 @@ export function periodStats(valueSeries: Point[], from: string, to: string, opti
       ? annualizedGrowth(ddDiv([oosEquityEnd, 0], [oosEquityStart, 0]), yearsOos)
       : null;
 
-  // The curve opens with the window's first value (1 at a simulation's start),
-  // then each month's last value (issue 1559).
-  const monthEnd = new Map<string, Point>();
-  for (const pt of window) monthEnd.set(pt.date.slice(0, 7), pt);
-  const downsampled = [...monthEnd.values()].sort((a, b) => a.date.localeCompare(b.date));
-  if (window.length && downsampled[0] !== window[0]) downsampled.unshift(window[0]!);
+  const downsampled = sampleEquityCurve(window, sampling);
 
   return {
     final_value: nullIfNaN(equity),

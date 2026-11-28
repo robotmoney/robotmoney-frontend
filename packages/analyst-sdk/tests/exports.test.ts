@@ -382,3 +382,23 @@ describe("every name the README imports from a package entry is exported by it (
     });
   });
 });
+
+// Issue 1766: the building blocks of a multi-portfolio regime backtest are on the package entry.
+describe("package entry exports the multi-portfolio building blocks (issue 1766)", () => {
+  test("every new function and constant is on the package entry", () => {
+    for (const name of [
+      "dailyCashRate", "latestStoredSeries", "sampleEquityCurve", "evaluateEquityCurve", "monthsBefore", "assetClassReturns", "weightingRuleSchedule",
+      "labelScaledTargets", "computePortfolioWeighting", "labelStrategyCurves", "equityCurveViolations", "crossCurveViolations", "weightingRuleViolations",
+    ] as const) {
+      expect(typeof sdk[name]).toBe("function");
+    }
+    expect(sdk.WEIGHTING_RULE_KEYS).toEqual(["naive", "inverse_vol", "equal_risk", "risk_budget", "min_variance", "markowitz"]);
+    expect(Object.isFrozen(sdk.OPTIMIZERS_PRESET)).toBe(true);
+  });
+  test("dailyCashRate on the entry is the simulators' rate: discount through discountToYield, yield as quoted", () => {
+    for (const q of [0, -0.02, 4.05, 5.25]) {
+      expect(sdk.dailyCashRate(q, "discount")).toBe(sdk.periodicRate(sdk.discountToYield(q) / 100, 365));
+      expect(sdk.dailyCashRate(q, "yield")).toBe(sdk.periodicRate(q / 100, 365));
+    }
+  });
+});

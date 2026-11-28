@@ -37,7 +37,17 @@ const DIR = import.meta.dir;
 // backtest.test.ts). Both wrappers pass the same defaults, so the bit-for-bit
 // comparisons between the simulators still hold.
 const sameClose = (p: Record<string, Point[]>) => ({ lagSessions: 0, calendars: Object.fromEntries(Object.keys(p).map((k) => [k, "continuous" as const])) });
-const simulateDrift: typeof simulateDriftWithDefaults = (a, s, p, c, o = {}) => simulateDriftWithDefaults(a, s, p, c, { ...sameClose(p), ...o });
+// Issue 1766: every case below also runs with the four new options given at
+// their defaults, and the two results must be equal, so each fixture of this
+// suite pins the 0.9.0 result under both calls.
+const EXPLICIT_DEFAULTS: DriftOptions = { lagCount: "axis-days", execution: "whole-book", calendarDay: "axis-day", missingTarget: "skip" };
+let explicitDefaultRuns = 0;
+const simulateDrift: typeof simulateDriftWithDefaults = (a, s, p, c, o = {}) => {
+  const result = simulateDriftWithDefaults(a, s, p, c, { ...sameClose(p), ...o });
+  expect(simulateDriftWithDefaults(a, s, p, c, { ...sameClose(p), ...EXPLICIT_DEFAULTS, ...o })).toEqual(result);
+  explicitDefaultRuns++;
+  return result;
+};
 const simulatePortfolio: typeof simulatePortfolioWithDefaults = (a, s, p, c, o = {}) => simulatePortfolioWithDefaults(a, s, p, c, { ...sameClose(p), ...o });
 const raw = toHistory(parseRawHistory(readFileSync(join(DIR, "fixtures/raw-indicator-history.csv"), "utf8")));
 
@@ -339,3 +349,190 @@ describe("cash basis (issue 1751)", () => {
 // Issue 1554: simulateDrift reads its series under the same declared fill
 // policies as simulatePortfolio.
 simulatorFillCases("simulateDrift", simulateDrift);
+
+// Issue 1766: per-asset trading. lagCount, execution, calendarDay and
+// missingTarget default to the 0.9.0 behaviour.
+describe("per-asset trading (issue 1766)", () => {
+  test("every case above ran a second time with the four options given at their defaults, and equalled the first", () => {
+    expect(explicitDefaultRuns).toBeGreaterThan(20);
+  });
+
+  test("the committed SPX/ETH/TBILL3M fixture under lag 1 and the reference calendars equals itself with the defaults given", () => {
+    const r = runRegime(raw);
+    const sched = scheduleFromLabels(r.result.regime, PORTFOLIO_SPECS.mixed!.weights);
+    const p = { eth: raw.ETH!, sp500: raw.SPX! };
+    for (const freq of ["daily", "monthly", "never"] as const) {
+      const o: DriftOptions = { freq, calendars: { eth: "continuous", sp500: "observed" } };
+      const implicit = simulateDriftWithDefaults(r.dateAxis, sched, p, raw.TBILL3M!, o);
+      expect(implicit.trades.length).toBeGreaterThan(3);
+      expect(simulateDriftWithDefaults(r.dateAxis, sched, p, raw.TBILL3M!, { ...o, ...EXPLICIT_DEFAULTS })).toEqual(implicit);
+    }
+  });
+
+  test("lag 0, every market continuous, calendarDay axis-day and missingTarget skip: per-asset equals whole-book exactly", () => {
+    // A target change, two month boundaries, a cash-only stretch and a day with no target.
+    const axis = axisBetween("2024-01-20", "2024-03-10");
+    const x = pts(axis, axis.map((_, i) => 100 * (1 + 0.013 * Math.sin(i * 0.7)) * (1 + i * 0.002)));
+    const y = pts(axis, axis.map((_, i) => 50 * (1 + 0.021 * Math.cos(i * 1.3)) * (1 - i * 0.001)));
+    const tbill = pts(axis, axis.map((_, i) => 4 + 0.01 * i));
+    const A: Weights = { cash: 0.2, x: 0.5, y: 0.3 };
+    const B: Weights = { cash: 0.1, x: 0.3, y: 0.6 };
+    const sched: Schedule = axis.map((d, i) => (i < 2 ? null : d === "2024-02-07" ? null : d >= "2024-02-20" && d < "2024-02-26" ? { cash: 1 } : i < 15 ? A : B));
+    const prices = { x, y };
+    const calendars = { x: "continuous", y: "continuous" } as const;
+    for (const freq of ["monthly", "daily", "weekly", "never"] as const) {
+      const base: DriftOptions = { lagSessions: 0, calendars, freq, costBps: 10 };
+      const whole = simulateDriftWithDefaults(axis, sched, prices, tbill, base);
+      const per = simulateDriftWithDefaults(axis, sched, prices, tbill, { ...base, execution: "per-asset", lagCount: "asset-sessions", calendarDay: "axis-day", missingTarget: "skip" });
+      expect(per.values).toEqual(whole.values);
+      expect(per.returns).toEqual(whole.returns);
+      expect(per.excess).toEqual(whole.excess);
+      expect(per.trades).toEqual(whole.trades);
+      expect(per).toEqual(whole);
+      expect(whole.trades.length).toBeGreaterThan(2);
+      expect(whole.values.some((p) => p.date === "2024-02-07")).toBe(false);
+    }
+  });
+
+  // The hand fixtures: ETH trades every day; the S&P 500 only on the days it
+  // has a close (none on weekends, none on Monday 2024-07-01). Cash earns 0.
+  // Every expected value is written out below in plain arithmetic.
+  const rel = (got: number, want: number) => expect(Math.abs(got - want)).toBeLessThanOrEqual(1e-14 * Math.abs(want));
+  const COST = 10 / 10_000;
+  const series = (rows: Record<string, number>): Point[] => Object.entries(rows).map(([date, value]) => ({ date, value }));
+  const PER_ASSET: DriftOptions = { execution: "per-asset", lagCount: "asset-sessions", lagSessions: 1, calendars: { eth: "continuous", sp500: "observed" }, freq: "never", costBps: 10 };
+
+  test("a target set on a Friday trades ETH on Saturday and the S&P 500 on Monday; the S&P 500 trades back to its target though only ETH's and cash's weights changed", () => {
+    const axis = axisBetween("2024-06-19", "2024-06-25");
+    const eth = series({ "2024-06-19": 100, "2024-06-20": 100, "2024-06-21": 100, "2024-06-22": 110, "2024-06-23": 110, "2024-06-24": 110, "2024-06-25": 110 });
+    const sp500 = series({ "2024-06-19": 100, "2024-06-20": 100, "2024-06-21": 100, "2024-06-24": 120, "2024-06-25": 120 });
+    const T1: Weights = { cash: 0.5, eth: 0.25, sp500: 0.25 };
+    const T2: Weights = { cash: 0.3, eth: 0.45, sp500: 0.25 };
+    const sched: Schedule = axis.map((d) => (d < "2024-06-21" ? T1 : T2));
+    const sim = simulateDriftWithDefaults(axis, sched, { eth, sp500 }, [], PER_ASSET);
+    // Starts Thursday holding Wednesday's target; Friday's T2 waits a session of each asset.
+    expect(sim.startDate).toBe("2024-06-20");
+    expect(sim.trades.map((t) => t.date)).toEqual(["2024-06-22", "2024-06-24"]);
+    // Saturday: ETH +10%, then ETH buys up to 0.45 from cash.
+    const r1 = 0.25 * 0.1;
+    const eth1 = (0.25 * 1.1) / (1 + r1);
+    const sp1 = 0.25 / (1 + r1);
+    const cash1 = 0.5 / (1 + r1);
+    const t1 = 0.45 - eth1; // one-sided: ETH up, cash down by the same amount
+    rel(sim.trades[0]!.turnover, t1);
+    const v1 = (1 + r1) * (1 - t1 * COST);
+    // Monday: the S&P 500 +20% on the weights after Saturday's trade (cash1 - t1 in cash), then it sells back to 0.25.
+    expect(cash1 - t1).toBeGreaterThan(0);
+    const r2 = sp1 * 0.2;
+    const sp2 = (sp1 * 1.2) / (1 + r2);
+    const t2 = sp2 - 0.25;
+    rel(sim.trades[1]!.turnover, t2);
+    const v2 = v1 * (1 + r2) * (1 - t2 * COST);
+    expect(sim.values.map((p) => p.date)).toEqual(axis.slice(1));
+    rel(sim.values[1]!.value, 1);
+    rel(sim.values[2]!.value, v1);
+    rel(sim.values[3]!.value, v1);
+    rel(sim.values[4]!.value, v2);
+    rel(sim.values[5]!.value, v2);
+    rel(sim.returns[1]!.value, r1);
+    rel(sim.returns[3]!.value, r2);
+  });
+
+  test("under calendarDay asset-session the monthly rebalance falls on ETH's 1st and on the S&P 500's first open day, the 2nd", () => {
+    const axis = axisBetween("2024-06-27", "2024-07-03");
+    const eth = series({ "2024-06-27": 100, "2024-06-28": 100, "2024-06-29": 100, "2024-06-30": 100, "2024-07-01": 120, "2024-07-02": 120, "2024-07-03": 120 });
+    const sp500 = series({ "2024-06-27": 100, "2024-06-28": 100, "2024-07-02": 100, "2024-07-03": 100 });
+    const T: Weights = { cash: 0.5, eth: 0.25, sp500: 0.25 };
+    const sched: Schedule = axis.map(() => T);
+    const sim = simulateDriftWithDefaults(axis, sched, { eth, sp500 }, [], { ...PER_ASSET, freq: "monthly", calendarDay: "asset-session" });
+    expect(sim.startDate).toBe("2024-06-28");
+    expect(sim.trades.map((t) => t.date)).toEqual(["2024-07-01", "2024-07-02"]);
+    const r = 0.25 * 0.2;
+    const eth1 = 0.3 / (1 + r);
+    const sp1 = 0.25 / (1 + r);
+    const t1 = eth1 - 0.25; // ETH sells back to 0.25
+    rel(sim.trades[0]!.turnover, t1);
+    const t2 = 0.25 - sp1; // the S&P 500 buys back to 0.25 a day later
+    rel(sim.trades[1]!.turnover, t2);
+    const v = (1 + r) * (1 - t1 * COST) * (1 - t2 * COST);
+    rel(sim.values.at(-1)!.value, v);
+    // Under calendarDay axis-day the 1st is due for both, and the S&P 500, closed then, does not trade.
+    const axisDay = simulateDriftWithDefaults(axis, sched, { eth, sp500 }, [], { ...PER_ASSET, freq: "monthly", calendarDay: "axis-day" });
+    expect(axisDay.trades.map((t) => t.date)).toEqual(["2024-07-01"]);
+  });
+
+  test("a purchase larger than the cash on hand fills pro rata, cash ends at 0, the order stays open, and the next day every open asset trades back to its target", () => {
+    const axis = axisBetween("2024-06-20", "2024-06-25");
+    const eth = series({ "2024-06-20": 100, "2024-06-21": 100, "2024-06-22": 100, "2024-06-23": 125, "2024-06-24": 125, "2024-06-25": 125 });
+    const sp500 = series({ "2024-06-20": 100, "2024-06-21": 100, "2024-06-24": 100, "2024-06-25": 100 });
+    const T1: Weights = { cash: 0.5, eth: 0.25, sp500: 0.25 };
+    const T2: Weights = { cash: 0, eth: 0.5, sp500: 0.5 };
+    const sched: Schedule = axis.map((d) => (d < "2024-06-21" ? T1 : T2));
+    const sim = simulateDriftWithDefaults(axis, sched, { eth, sp500 }, [], PER_ASSET);
+    expect(sim.startDate).toBe("2024-06-21");
+    expect(sim.trades.map((t) => t.date)).toEqual(["2024-06-22", "2024-06-24", "2024-06-25"]);
+    // Saturday: ETH buys 0.25 from cash 0.5 in full.
+    rel(sim.trades[0]!.turnover, 0.25);
+    // Sunday: ETH +25% on 0.5.
+    const r = 0.5 * 0.25;
+    const eth1 = 0.625 / (1 + r);
+    const cash1 = 0.25 / (1 + r);
+    const sp1 = 0.25 / (1 + r);
+    // Monday: the S&P 500 wants 0.5 - sp1 but cash1 is all there is: it buys cash1, cash ends at 0.
+    expect(0.5 - sp1).toBeGreaterThan(cash1);
+    rel(sim.trades[1]!.turnover, cash1);
+    // Tuesday: the order is open, so ETH (no change of its own) sells back to 0.5 and funds the purchase in full.
+    const t3 = eth1 - 0.5;
+    rel(sim.trades[2]!.turnover, t3); // cash stays 0: the one-sided turnover is ETH's sale alone
+    const v = (1 - 0.25 * COST) * (1 + r) * (1 - cash1 * COST) * (1 - t3 * COST);
+    rel(sim.values.at(-1)!.value, v);
+    // The book is T2 itself after Tuesday: a further day of returns earns exactly T2's mix.
+    const longer = [...axis, "2024-06-26"];
+    const eth26 = [...eth, { date: "2024-06-26", value: 150 }];
+    const sp26 = [...sp500, { date: "2024-06-26", value: 110 }];
+    const sim2 = simulateDriftWithDefaults(longer, [...sched, T2], { eth: eth26, sp500: sp26 }, [], PER_ASSET);
+    rel(sim2.returns.at(-1)!.value, 0.5 * 0.2 + 0.5 * 0.1);
+  });
+
+  test("missingTarget hold keeps a day with no target on the curve with its return; skip leaves it out", () => {
+    const axis = axisBetween("2024-06-20", "2024-06-24");
+    const eth = series({ "2024-06-20": 100, "2024-06-21": 100, "2024-06-22": 110, "2024-06-23": 121, "2024-06-24": 121 });
+    const sp500 = series({ "2024-06-20": 100, "2024-06-21": 100, "2024-06-24": 100 });
+    const T: Weights = { cash: 0.5, eth: 0.5 };
+    const sched: Schedule = axis.map((d) => (d === "2024-06-22" ? null : T));
+    const hold = simulateDriftWithDefaults(axis, sched, { eth, sp500 }, [], { ...PER_ASSET, missingTarget: "hold" });
+    const skip = simulateDriftWithDefaults(axis, sched, { eth, sp500 }, [], { ...PER_ASSET, missingTarget: "skip" });
+    expect(hold.values.map((p) => p.date)).toEqual(["2024-06-21", "2024-06-22", "2024-06-23", "2024-06-24"]);
+    expect(skip.values.map((p) => p.date)).toEqual(["2024-06-21", "2024-06-23", "2024-06-24"]);
+    // hold: +10% on 0.5 ETH, then +10% on the drifted 0.55 / 1.05.
+    const r1 = 0.05;
+    const r2 = (0.55 / 1.05) * 0.1;
+    rel(hold.returns[0]!.value, r1);
+    rel(hold.returns[1]!.value, r2);
+    rel(hold.values[2]!.value, (1 + r1) * (1 + r2));
+    // skip: the 22nd is off the curve and its move is lost; the 23rd earns 121 / 110 on 0.5 ETH.
+    rel(skip.returns[0]!.value, 0.5 * 0.1);
+    expect(hold.trades).toEqual([]);
+    // Whole-book hold is the schedule with the target carried over the day.
+    const wb = simulateDriftWithDefaults(axis, sched, { eth, sp500 }, [], { lagSessions: 0, calendars: { eth: "continuous", sp500: "continuous" }, freq: "never", missingTarget: "hold" });
+    expect(wb.values.map((p) => p.date)).toEqual(axis);
+  });
+
+  test("lagCount asset-sessions or calendarDay asset-session with whole-book, band with per-asset, and an unknown value of each option throw RangeError naming the option", () => {
+    const sched = AX.map(() => HALF);
+    const bad = (o: unknown, field: RegExp) => {
+      const call = () => simulateDriftWithDefaults(AX, sched, DOUBLES, [], o as DriftOptions);
+      expect(call).toThrow(RangeError);
+      expect(call).toThrow(field);
+    };
+    bad({ lagCount: "asset-sessions" }, /lagCount/);
+    bad({ lagCount: "asset-sessions", execution: "whole-book" }, /lagCount/);
+    bad({ calendarDay: "asset-session" }, /calendarDay/);
+    bad({ execution: "per-asset", band: 0.1 }, /band/);
+    bad({ lagCount: "sessions" }, /lagCount/);
+    bad({ execution: "per_asset" }, /execution/);
+    bad({ calendarDay: "first" }, /calendarDay/);
+    bad({ missingTarget: "carry" }, /missingTarget/);
+    bad({ targetChange: "per-asset" }, /targetChange/);
+  });
+});

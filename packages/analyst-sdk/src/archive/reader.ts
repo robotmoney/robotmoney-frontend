@@ -27,6 +27,7 @@
 //                          (source_key, market_date) for the requested storage
 //                          keys, tagged with the input id they are read under.
 import { sha256 } from "../hash.ts";
+import type { Point } from "../types.ts";
 import {
   ArchiveError,
   INPUT_TABLES,
@@ -260,6 +261,57 @@ export function openArchive(fs: ArchiveFiles, asOf?: string): Archive {
     revisedTable,
     latestValues,
   };
+}
+
+// Options of latestStoredSeries (issue 1766).
+export interface LatestStoredSeriesOptions {
+  // The last market date kept (YYYY-MM-DD). Default: every date.
+  notAfter?: string;
+  // Refuse a value at or below 0 (a price). Default false.
+  positive?: boolean;
+}
+
+// For each storage key asked, its newest stored version of each market date
+// (the highest source_value_versions id, compared as BigInt), as numbers in
+// date order, cut at notAfter (issue 1766). Any storage key is accepted,
+// whether or not an input id maps to it (latestValues refuses one no input id
+// maps to). Throws ArchiveError naming the key for a key with no rows, a row
+// with a market_instant and no market_date, or a value that is not finite, and
+// under `positive` for a value at or below 0.
+export function latestStoredSeries(archive: Archive, sourceKeys: readonly string[], options: LatestStoredSeriesOptions = {}): Record<string, Point[]> {
+  for (const k of Object.keys(options)) {
+    if (k !== "notAfter" && k !== "positive") throw new RangeError(`latestStoredSeries: unknown option ${JSON.stringify(k)}; expected notAfter, positive`);
+  }
+  const { notAfter, positive = false } = options;
+  if (notAfter !== undefined && !/^\d{4}-\d{2}-\d{2}$/.test(notAfter)) throw new RangeError(`latestStoredSeries: notAfter must be a YYYY-MM-DD date, got ${JSON.stringify(notAfter)}`);
+  const wanted = new Set(sourceKeys);
+  const newest = new Map<string, Map<string, { n: bigint; value: string }>>([...wanted].map((k) => [k, new Map()]));
+  const vfiles = archive.files("source_value_versions");
+  archive.versions().forEach((rows, i) => {
+    rows.forEach((r, j) => {
+      const at = where(archive.root, vfiles[i]!.path);
+      const kind = checkVersionRow(r, at, j + 1);
+      const byDate = newest.get(r.source_key!);
+      if (byDate === undefined) return;
+      if (kind === "instant") throw new ArchiveError(`${at} row ${j + 1}: ${r.source_key} version ${r.id} has a market_instant and no market_date`);
+      const date = r.market_date!.slice(0, 10);
+      if (notAfter !== undefined && date > notAfter) return;
+      const n = BigInt(r.id!);
+      const prior = byDate.get(date);
+      if (!prior || n > prior.n) byDate.set(date, { n, value: r.value! });
+    });
+  });
+  const out: Record<string, Point[]> = {};
+  for (const [key, byDate] of newest) {
+    if (byDate.size === 0) throw new ArchiveError(`${archive.root} as of ${archive.asOf.backup} has no rows for ${key}`);
+    out[key] = [...byDate.keys()].sort().map((date) => {
+      const value = Number(byDate.get(date)!.value);
+      if (!Number.isFinite(value)) throw new ArchiveError(`${key} on ${date} is ${byDate.get(date)!.value}, not a finite number`);
+      if (positive && !(value > 0)) throw new ArchiveError(`${key} on ${date} is ${value}, not above 0`);
+      return { date, value };
+    });
+  }
+  return out;
 }
 
 // The analytics_vintage_members rows of one run's vintage, in file order (issue
