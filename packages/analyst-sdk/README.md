@@ -1177,7 +1177,9 @@ src/transform/   series math, alignment, transforms
 src/input/       the input loaders, the manifest, the provenance envelope and the supplementary series format
 src/archive/     reading a format 1 local copy: completeness, a run's vintage, the input file
                  (format1.ts), and the reader over injected files (reader.ts: openArchive,
-                 revised tables, latest values)
+                 revised tables, latest values, latestStoredSeries)
+src/analyze/equity-curves.ts  EquityCurve, evaluateEquityCurve, monthsBefore, labelStrategyCurves (issue 1766)
+src/analyze/curve-checks.ts   the output checks: equityCurveViolations, crossCurveViolations, weightingRuleViolations
 src/analyze/kept-regime.ts  the kept record of a methodology that keeps its history (v5): score a day,
                  walk forward, derive the composite and the labels from kept days
 src/model/       the model value: MODELS (the published presets), modelOf, each preset's storage
@@ -1203,6 +1205,7 @@ src/allocate/rules.ts     rule files: validateRuleFile, parseRuleFile (types.ts 
 src/allocate/optimize.ts  the certified solvers: ERC and risk budgets, minimum variance, mean-variance, maximum Sharpe
 src/allocate/covariance.ts  annualCov, shrinkToDiagonal, shrunkCov
 src/allocate/markowitz.ts  Markowitz sizing, the point-in-time schedule and the Markowitz backtest
+src/allocate/weighting-rules.ts  the six weighting rules of the optimizers page, computePortfolioWeighting, OPTIMIZERS_PRESET
 src/transform/linalg.ts   covarianceMatrix, correlationMatrix, solveRefined (dependency-free LU)
 bin/check-rule.ts the `bun run rules:check` entry
 universe/        base-universe.json (the shipped universe), groups.csv and series.csv (its export inputs)
