@@ -269,7 +269,7 @@ jobs:
           tests/backtest-drift.test.ts:38
           tests/archive-reader.test.ts:49
           tests/backtest.test.ts:54
-          tests/exports.test.ts:18
+          tests/exports.test.ts:20
       # Export ONLY the package's tracked files (no node_modules from the install
       # above) into a fresh directory, install from the lockfile, and diff the CLI
       # output against the committed golden. Fails if the SDK reaches outside
