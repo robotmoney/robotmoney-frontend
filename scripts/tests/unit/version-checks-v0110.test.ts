@@ -100,7 +100,8 @@ describe("the v0.11.0 runbook's scope and added steps (issue 1754)", () => {
   const rb = loadReleaseRunbook("v0.11.0");
   test("the scope names every migration the range adds, each with a check", () => {
     const at0100 = 133; // the newest migration v0.10.0 shipped: 0133_buybacks_refresh_disabled
-    const pending = readdirSync(join(repoRoot, "backend/migrations")).filter((f) => /^\d{4}_.*\.sql$/.test(f) && Number(f.slice(0, 4)) > at0100).map((f) => f.replace(/\.sql$/, "")).sort();
+    const at0110 = 136; // the newest migration v0.11.0 shipped: 0136_regime_beside_snapshots. Bounded so a later migration on main does not turn this release's test red.
+    const pending = readdirSync(join(repoRoot, "backend/migrations")).filter((f) => /^\d{4}_.*\.sql$/.test(f) && Number(f.slice(0, 4)) > at0100 && Number(f.slice(0, 4)) <= at0110).map((f) => f.replace(/\.sql$/, "")).sort();
     expect(pending).toEqual(["0134_read_path_indexes", "0135_drop_vintage_members_vintage_idx", "0136_regime_beside_snapshots"]);
     for (const m of pending) expect(rb.scope.some((e) => e.what.includes(m) && e.check !== undefined), m).toBe(true);
   });
