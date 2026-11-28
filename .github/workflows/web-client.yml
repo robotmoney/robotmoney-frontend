@@ -80,6 +80,8 @@ jobs:
               - 'frontend/**'
               - 'goldens/**'
               - 'playwright.config.ts'
+              # The deposit fork spec's config (issue 1778); its spec is under frontend/.
+              - 'playwright.fork.config.ts'
               # D54: the api-range step below reads contract/package.json, so a
               # contract bump that leaves frontend/package.json's apiRange
               # behind must re-run this gate.
@@ -185,3 +187,42 @@ jobs:
           else
             echo "⚠️ Preview route sweep against **stage** failed (advisory only — does not block merge). See the \"Preview route sweep against stage (advisory)\" step above." >> "$GITHUB_STEP_SUMMARY"
           fi
+
+  # ── BLOCKING: a real wallet deposit on an anvil fork of Base (issue 1778) ──
+  # frontend/test/deposit-fork/: a test wallet connects through the page's own
+  # AppKit modal and signs the deposit; the spec reads the request back from
+  # the fork. Anvil forks Base at the spec's pinned block from Base's public
+  # RPC, so the fork's reads are cached by block; the browser itself never
+  # leaves localhost. The JSON report must show 2 run and 0 skipped.
+  deposit-fork:
+    needs: [changes]
+    if: ${{ github.event_name != 'pull_request' || needs.changes.outputs.web-client == 'true' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.4"
+          no-cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      # foundry-toolchain v1.9.0. Its cache holds ~/.foundry/cache/rpc, where
+      # anvil keeps the fork's reads under base/<block>; keyed on the fork block
+      # (FORK_BLOCK in frontend/test/deposit-fork/anvil.ts).
+      - uses: foundry-rs/foundry-toolchain@b00af27efadbc7b4ca8b82abbd903b17cc874d2a
+        with:
+          version: v1.8.5
+          cache-key: deposit-fork-base-63480000
+          cache-restore-keys: deposit-fork-base-63480000
+      - name: Install root tooling
+        run: bun install --frozen-lockfile
+      - name: Install Chromium
+        run: bunx playwright install chromium
+      - name: Deposit on the fork
+        run: bun run test:deposit-fork
+      - name: Two tests ran, none skipped
+        if: always()
+        run: |
+          jq -e '.stats.expected == 2 and .stats.skipped == 0 and .stats.unexpected == 0 and .stats.flaky == 0' playwright-report/deposit-fork.json \
+            || { echo "deposit-fork report:"; jq '.stats' playwright-report/deposit-fork.json; exit 1; }
