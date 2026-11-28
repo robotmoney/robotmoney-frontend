@@ -170,6 +170,43 @@ describe("main's services against the committed classifications (default deny, w
     expect(verdictOf("api", [caddyAccess("info", "/x?state=failed", 200)]).failures).toHaveLength(1);
   });
 
+  // Issue 1754: the archive's backup record answers 503 + Retry-After while it builds (RECORD_WAIT_MS).
+  const record = "/api/public/analytics/archive/csv/2026-11-27T000000Z/backup.json";
+  test("a Caddy 503 for a backup record still being built is expected", () => {
+    const line = caddyAccess("error", record, 503, "Bun/1.4.4");
+    const g = classify(inventory("rm_prod-website-server-1", [{ ts: null, text: line }]), committed);
+    expect(g.map((x) => x.rule?.id)).toEqual(["expected-caddy-archive-record-building-503"]);
+    expect(verdictOf("rm_prod-website-server-1", [line]).failures).toEqual([]);
+  });
+
+  test("a Caddy access line groups by its method, URI and status, so a 502 never hides in a 503's group", () => {
+    const g = classify(inventory("website-server", [caddyAccess("error", record, 503), caddyAccess("error", record, 502), caddyAccess("error", record, 503, "other/1.0")].map((text) => ({ ts: null, text }))), committed);
+    expect(g.map((x) => [x.count, x.rule?.id ?? null])).toEqual([[2, "expected-caddy-archive-record-building-503"], [1, null]]);
+  });
+
+  test("RED CONTROL: another status, another archive path, a forged URI or status, or another container stays unclassified", () => {
+    expect(verdictOf("website-server", [caddyAccess("error", record, 502)]).failures).toHaveLength(1);
+    expect(verdictOf("website-server", [caddyAccess("error", record, 500)]).failures).toHaveLength(1);
+    expect(verdictOf("website-server", [caddyAccess("error", "/api/public/analytics/archive/csv/2026-11-27T000000Z/data/x.2026-11-26T000000Z_2026-11-27T000000Z.csv.gz", 503)]).failures).toHaveLength(1);
+    expect(verdictOf("website-server", [caddyAccess("error", "/api/swarm/x", 503)]).failures).toHaveLength(1);
+    expect(verdictOf("website-server", [caddyAccess("error", `${record}?x`, 503)]).failures).toHaveLength(1);
+    // A client's words are escaped, so a header cannot supply the status or the URI field.
+    expect(verdictOf("website-server", [caddyAccess("error", "/api/swarm/x", 500, `\\",\\"uri\\":\\"${record}\\",\\"status\\":503,`)]).failures).toHaveLength(1);
+    expect(verdictOf("api", [caddyAccess("error", record, 503)]).failures).toHaveLength(1);
+  });
+
+  // Issue 1754: production's v0.11.0 cutover logs.
+  test("a FRED series 404 or 5xx and an unreachable multpl are external; other shapes stay unclassified", () => {
+    const fred = (status: string, id = "DFII10") => `[extract] fetch ${id} (fred) FAILED: ${status} for https://fred.stlouisfed.org/graph/fredgraph.csv?id=${id}&cosd=2010-01-01`;
+    const shiller = (why: string) => `[shiller] datahub fallback only: 1713 rows (multpl failed: ${why})`;
+    expect(verdictOf("analytics-producer", [fred("404 Not Found"), fred("503 Service Unavailable", "MTSDS133FMS"), shiller("ECONNREFUSED: Unable to connect. Is the computer able to access the url?")]).failures).toEqual([]);
+    // red controls: a 400, a 403, '0 rows' and another container stay unclassified.
+    expect(verdictOf("analytics-producer", [fred("400 Bad Request")]).failures).toHaveLength(1);
+    expect(verdictOf("analytics-producer", [fred("403 Forbidden")]).failures).toHaveLength(1);
+    expect(verdictOf("analytics-producer", [shiller("0 rows")]).failures).toHaveLength(1);
+    expect(verdictOf("api", [fred("404 Not Found")]).failures).toHaveLength(1);
+  });
+
   test("lines of components main retired are no longer excused", () => {
     for (const line of [
       "swarm session failed (stack still running): independent analytics producer exited 1 for regime",
