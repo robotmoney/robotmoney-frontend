@@ -263,6 +263,12 @@ const prices = archive.latestValues(["backtest:^GSPC", "backtest:ETH-USD", "back
   then storage key. A key no input id is read under is refused, and so is a
   `market_instant` row of a requested key. These are the newest values, not a run's
   vintage: a published run's inputs come from `collectRunInputs`.
+- `latestStoredSeries(archive, sourceKeys, { notAfter?, positive? })` is the same newest
+  version per market date for any storage key, whether or not an input id maps to it
+  (`research:BTC-USD`, `yahoo:GLD`), as `{ date, value }` numbers in date order per key,
+  cut at `notAfter`. A key with no rows, a `market_instant` row, a value that is not finite
+  and, under `positive: true`, a value at or below 0 throw an `ArchiveError` naming the key
+  (issue 1766).
 - A `source_value_versions` row with a missing or non-integer id, an empty `source_key`, an
   empty value, or not exactly one of `market_date` and `market_instant` throws an
   `ArchiveError` naming the file and the 1-based data row. `collectRunInputs` still counts
@@ -719,6 +725,105 @@ solver that returns a negative or over-budget weight throws `RangeError`. `marko
 `markowitzSchedule`, `simulateDrift`, `periodStats` and every solver return plain data, so
 you can also compose them yourself.
 
+## Multi-portfolio backtests: per-asset trading, equity curves and weighting rules
+
+Issue 1766 adds the building blocks a regime backtest of many portfolios needs, so a
+downstream model or the backend composes every equity curve from SDK functions and one
+preset. Every new option on an existing function defaults to the 0.9.0 behaviour.
+
+**Per-asset trading.** `simulateDrift` takes four more options:
+
+| Option | Default | Other value |
+| ------ | ------- | ----------- |
+| `execution` | `"whole-book"`: a changed book trades once every changed asset's market is open, then the whole book trades | `"per-asset"`: each asset trades on its own open days. Sales fill first; purchases share the cash on hand in proportion to their size. A purchase short by more than 1e-12 fills pro rata, cash ends at 0, and its order stays open: while it is open every asset that trades that day trades back to its target, so a sale funds it. There is no borrowing. |
+| `lagCount` | `"axis-days"`: `lagSessions` counts axis days | `"asset-sessions"`: each asset's own open days after the day the target was set (needs `per-asset`) |
+| `calendarDay` | `"axis-day"`: a calendar rebalance falls on the period's first axis day | `"asset-session"`: on each asset's own first open day of the period (needs `per-asset`) |
+| `missingTarget` | `"skip"`: a day with no target is off the curve | `"hold"`: the day stays on the curve, the book earning, drifting and rebalancing on the calendar |
+
+`band` needs `whole-book`. Any other bad pairing or an unknown value throws a `RangeError`
+naming the option. Under `per-asset` a curve starts on the first day, after its first target
+is known, on which every priced asset's market is open, holding that target at no cost.
+With lag 0, every market `continuous`, `calendarDay: "axis-day"` and `missingTarget:
+"skip"`, `per-asset` equals `whole-book` exactly. `dailyCashRate(quotePercent, basis)` is
+the cash rate both simulators compound.
+
+**Equity curves.** `periodStats` takes `sampling`: `{ kind: "month-end" }` (the default
+curve) or `{ kind: "weekday", weekday }` (the first value, every day of that UTC weekday,
+the last value). `sampleEquityCurve(values, sampling)` samples without measuring.
+`evaluateEquityCurve(simulation, { kind, trailingMonths?, sampling?, sharpeBasis? })`
+returns one `EquityCurve` (`kind`, `first_day`, `last_day`, `final_value`, `windows`,
+`equity_curve`): since inception, and `trailing_<N>m` from `monthsBefore(last_day, N)`,
+null when the curve does not cover it. `labelStrategyCurves(dateAxis, labels, prices,
+cashQuotes, { trading, sampling, windows })` runs every `referenceStrategies` line on the
+`eth`, `sp500` and `mixed` markets, with each market's buy-and-hold benchmark and one
+`stables_only` curve, all starting on one day.
+
+<!-- readme-test: ts prelude=drift -->
+```ts
+import { evaluateEquityCurve, simulateDrift } from "@robotmoney/analyst-sdk";
+
+const perAsset = simulateDrift(dateAxis, schedule, prices, tbillPercent, {
+  execution: "per-asset", lagCount: "asset-sessions", lagSessions: 1, calendarDay: "asset-session", missingTarget: "hold",
+  calendars: { SPX: "observed", ETH: "continuous" }, freq: "monthly",
+});
+const curve = evaluateEquityCurve(perAsset, { kind: "strategy", trailingMonths: [12], sampling: { kind: "weekday", weekday: 5 } });
+curve.windows.trailing_12m; // first_day, last_day, final_value, cagr, sharpe, max_drawdown, trades, n_days
+```
+
+**Weighting rules.** `src/allocate/weighting-rules.ts` holds the six rules of Lex's
+optimizers page, `WEIGHTING_RULE_KEYS`: `naive`, `inverse_vol`, `equal_risk`
+(`ercCertified`), `risk_budget`, `min_variance` (`minVarExact`) and `markowitz` (the
+tangency rule). `assetClassReturns(prices, assetClasses)` gives each class's daily return on
+the days every member has a price. `weightingRuleSchedule(key, options)` is the rule's
+`markowitzSchedule`, re-optimised on the first axis day of each month; Markowitz's expected
+returns have the solve day's cash rate subtracted once, with rf 0.
+`labelScaledTargets(classWeights, labels, riskOnShare, assetClasses)` scales the class
+weights by each label's risk-on share. `computePortfolioWeighting(dateAxis, labels, prices,
+cashQuotes, options)` returns each rule's daily `targets`, the page's `figures`
+(`WeightingFigures`: money and risk shares under `engines`, the covariances, `cash_rate`)
+and one group of `curves`: the six rules and `stables_only`, `sp500_hodl` and `eth_hodl`.
+
+**The preset.** `OPTIMIZERS_PRESET` is frozen plain data: `trading` (per-asset execution at
+a lag of one session of each asset, BTC and ETH `continuous`, the S&P 500 and GLD
+`observed`, a monthly rebalance on each asset's own first open day, `missingTarget: "hold"`,
+10 basis points, `cashBasis: "discount"`), `sampling` (Fridays), `labelStrategies`,
+`weightingRules` (asset classes, risk-on shares, lookback 252, minObs 126, the risk budget,
+Markowitz's minObs and expected returns) and `windows` (12, 36 and 60 months; common period
+60).
+
+<!-- readme-test: ts prelude=none -->
+```ts
+import { readFileSync } from "node:fs";
+import { OPTIMIZERS_PRESET as P, computePortfolioWeighting, labelStrategyCurves } from "@robotmoney/analyst-sdk";
+
+// The committed optimizers-page fixture: five price series from csv-backups 2026-11-17T000000Z.
+const fx = JSON.parse(readFileSync("tests/fixtures/optimizers-page/prices.json", "utf8"));
+const series = (id: string) => fx.series[fx.keys[id]].map(([date, value]: [string, number]) => ({ date, value }));
+const prices = { btc: series("btc"), eth: series("eth"), sp500: series("sp500"), gld: series("gld") };
+const dateAxis: string[] = [];
+for (let t = Date.parse("2018-04-28T00:00:00Z"); t <= Date.parse("2026-11-16T00:00:00Z"); t += 86_400_000) dateAxis.push(new Date(t).toISOString().slice(0, 10));
+const labels = dateAxis.map(() => "neutral");
+const weighting = computePortfolioWeighting(dateAxis, labels, prices, series("tbill3m"), { trading: P.trading, sampling: P.sampling, windows: P.windows, ...P.weightingRules });
+weighting.figures.engines.risk_budget.money; // { crypto, us_equities, gold }
+const markets = labelStrategyCurves(dateAxis, { regime: labels, panelRegimes: { macro: labels }, panels: ["macro"] }, prices, series("tbill3m"), { trading: P.trading, sampling: P.sampling, windows: P.windows });
+markets.mixed!.blend_hodl!.windows.since_inception.final_value;
+```
+
+**Output checks.** `src/analyze/curve-checks.ts` returns one sentence per violation:
+`equityCurveViolations(name, curve, { trailingMonths, sampling, negativeQuoteDays? })` (a
+curve's own facts), `crossCurveViolations(groups, { lastAxisDay, trailingMonths,
+commonPeriodMonths })` (one last day, one common period, equal figures for curves that hold
+the same thing) and `weightingRuleViolations(figures, { riskBudget, expectedReturn,
+riskOnShare, label })` (each rule meets its own rule). An empty list means the output holds.
+
+`tests/optimizers-page.test.ts` reproduces Lex's published optimizers file within the
+workbench's reference tolerance from the committed fixture `tests/fixtures/optimizers-page/`.
+`scripts/optimizers-page-fixture.ts` rebuilds its `prices.json` from a local csv-backups folder:
+
+```sh
+RM_CSV_BACKUPS_DIR=<a csv-backups checkout> bun run scripts/optimizers-page-fixture.ts --check
+```
+
 ## Build your own regime model: rules, options and building blocks
 
 Every choice below is an option with a default, and every default is what 0.8.0 does
@@ -1072,7 +1177,9 @@ src/transform/   series math, alignment, transforms
 src/input/       the input loaders, the manifest, the provenance envelope and the supplementary series format
 src/archive/     reading a format 1 local copy: completeness, a run's vintage, the input file
                  (format1.ts), and the reader over injected files (reader.ts: openArchive,
-                 revised tables, latest values)
+                 revised tables, latest values, latestStoredSeries)
+src/analyze/equity-curves.ts  EquityCurve, evaluateEquityCurve, monthsBefore, labelStrategyCurves (issue 1766)
+src/analyze/curve-checks.ts   the output checks: equityCurveViolations, crossCurveViolations, weightingRuleViolations
 src/analyze/kept-regime.ts  the kept record of a methodology that keeps its history (v5): score a day,
                  walk forward, derive the composite and the labels from kept days
 src/model/       the model value: MODELS (the published presets), modelOf, each preset's storage
@@ -1098,6 +1205,7 @@ src/allocate/rules.ts     rule files: validateRuleFile, parseRuleFile (types.ts 
 src/allocate/optimize.ts  the certified solvers: ERC and risk budgets, minimum variance, mean-variance, maximum Sharpe
 src/allocate/covariance.ts  annualCov, shrinkToDiagonal, shrunkCov
 src/allocate/markowitz.ts  Markowitz sizing, the point-in-time schedule and the Markowitz backtest
+src/allocate/weighting-rules.ts  the six weighting rules of the optimizers page, computePortfolioWeighting, OPTIMIZERS_PRESET
 src/transform/linalg.ts   covarianceMatrix, correlationMatrix, solveRefined (dependency-free LU)
 bin/check-rule.ts the `bun run rules:check` entry
 universe/        base-universe.json (the shipped universe), groups.csv and series.csv (its export inputs)

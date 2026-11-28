@@ -71,7 +71,7 @@ jobs:
       - name: Fixtures exist and are current
         working-directory: packages/analyst-sdk
         run: |
-          for f in tests/fixtures/raw-indicator-history.csv tests/fixtures/raw-indicator-history.json tests/golden/regime-report.json tests/fixtures/archive/facts.json tests/fixtures/archive/api-recorded/backups.json tests/reference/backtest-pre-refactor.ts tests/fixtures/lex-equity-golden/runs.json.gz tests/fixtures/lex-equity-golden/outputs.json tests/fixtures/lex-equity-golden/manifest.json; do
+          for f in tests/fixtures/raw-indicator-history.csv tests/fixtures/raw-indicator-history.json tests/golden/regime-report.json tests/fixtures/archive/facts.json tests/fixtures/archive/api-recorded/backups.json tests/reference/backtest-pre-refactor.ts tests/fixtures/lex-equity-golden/runs.json.gz tests/fixtures/lex-equity-golden/outputs.json tests/fixtures/lex-equity-golden/manifest.json tests/fixtures/optimizers-page/prices.json tests/fixtures/optimizers-page/reference-optimizers.json tests/fixtures/optimizers-page/manifest.json; do
             test -s "$f" || { echo "::error::$f is missing: an SDK fixture is absent"; exit 1; }
           done
           bun run archive-fixture:regenerate --check
@@ -251,6 +251,25 @@ jobs:
           tests/regime-v5-golden.test.ts:10
           tests/collected-series.test.ts:16
           tests/backtest-cli.test.ts:10
+      # Issue 1766: the multi-portfolio building blocks. Per-asset trading and
+      # its reduction to whole-book execution, the cash rate, latestStoredSeries,
+      # equity curve sampling and windows, the label strategies, the six
+      # weighting rules and the preset, the output checks against planted
+      # faults, and Lex's optimizers page reproduced from the committed fixture
+      # with a tampered-reference negative control. Each minimum is the count
+      # measured on the branch that added it. A suite that runs fewer cases, or
+      # skips one, is red.
+      - name: Multi-portfolio building blocks suites ran (issue 1766)
+        run: >-
+          bun scripts/checks/assert-junit-suites.ts "$RUNNER_TEMP/analyst-sdk.junit.xml"
+          tests/equity-curves.test.ts:12
+          tests/weighting-rules.test.ts:9
+          tests/curve-checks.test.ts:15
+          tests/optimizers-page.test.ts:4
+          tests/backtest-drift.test.ts:38
+          tests/archive-reader.test.ts:49
+          tests/backtest.test.ts:54
+          tests/exports.test.ts:20
       # Export ONLY the package's tracked files (no node_modules from the install
       # above) into a fresh directory, install from the lockfile, and diff the CLI
       # output against the committed golden. Fails if the SDK reaches outside

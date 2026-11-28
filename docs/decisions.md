@@ -6844,3 +6844,18 @@ Panel weights refit every 21 days on a fixed calendar anchored at 2018-01-01. A 
 **Why.** The deployed CSP refused the kit's services, so wallets could not connect after a deploy while local preview, which sends no CSP, worked. The guard from D24 failed on the deposit page because it treats any chain read in the browser as a dashboard feed. Signing cannot move to the server, so the rule is narrowed to the files that sign, not relaxed for the site.
 
 **Rejected.** Dropping Reown for plain wagmi connectors: mobile wallets and Safe would lose WalletConnect, and issue 1615 keeps the wallet providers. Moving the page's position reads to the backend now: the wallet session reads the connected holder's own state, and a backend copy would be a second reader of the same chain state. Adding `'unsafe-inline'` to `script-src` for the SDKs' telemetry. Exempting all of `frontend/public/assets/js/vendor/` or all of `lib/`.
+
+## D98 — Per-asset trading is an option of the drifting simulator, and one preset holds the optimizers page's values (issue 1766; D94 item 2 stays the default)
+
+**Status:** proposed. Drafted by the agent with issue 1766 (pr 1780); the owner accepts it. `packages/analyst-sdk/src/analyze/backtest.ts`, `packages/analyst-sdk/src/analyze/equity-curves.ts`, `packages/analyst-sdk/src/analyze/curve-checks.ts`, `packages/analyst-sdk/src/allocate/weighting-rules.ts` (`OPTIMIZERS_PRESET`), `packages/analyst-sdk/src/archive/reader.ts` (`latestStoredSeries`), `docs/technical/analytics-requirements.md` sections 5.3, 5.4 and 5.7.
+
+**Decision.**
+
+1. **Defaults.** Every new option on an existing function defaults to what analyst-sdk 0.9.0 does. No published figure, golden, methodology or stored row moves.
+2. **Per-asset trading is an option (D94 item 2 unchanged).** `simulateDrift` accepts `execution` (`whole-book` default, `per-asset`), `lagCount` (`axis-days` default, `asset-sessions`), `calendarDay` (`axis-day` default, `asset-session`) and `missingTarget` (`skip` default, `hold`). The whole-book rule of D94 item 2 stays the default. Under `per-asset` each asset trades on its own open days; sales fill first, purchases share the cash on hand, and a purchase cut short stays open until a sale funds it. There is no borrowing.
+3. **One preset.** `OPTIMIZERS_PRESET` holds every value the optimizers page computes with: one trading-rule set for every curve (per-asset execution at a lag of one session of each asset, a monthly rebalance on each asset's own first open day, a day with no target held, 10 basis points), its cash basis `discount`, the six rules' parameters, the asset classes, the risk-on shares, the weekday sampling and the evaluation windows. The backend and the workbench read it and keep no copy.
+4. **Building blocks.** The cash rate, the newest stored version of any storage key, the equity-curve sampling and windows, the six weighting rules and the output checks are SDK functions, so the backend holds no portfolio math (D57).
+
+**Why.** The workbench's experiment-lex-equity-lucky-rev (research-workbench pull request 46) ran every curve after the label on local copies of SDK logic. The backend that serves those figures may hold none (D57).
+
+**Rejected.** A `targetChange` option: trading only the assets whose own weight changed gave byte-identical outputs on the workbench golden. Changing any default. A plain floating-point mode (D78). Per-asset options on `simulatePortfolio`, `computeBacktest`, `markowitzBacktest` and the research comparisons.

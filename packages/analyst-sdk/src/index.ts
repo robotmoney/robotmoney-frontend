@@ -62,7 +62,22 @@ export {
   type BacktestPayload, type BacktestMetrics, type Weights, type Schedule, type SimulateOptions, type SimulationResult,
   type TradeEvidence, type PeriodStatsOptions, type SampleBlock, type ReferenceBacktestOptions, type MarketCalendar, type CostBps, type DriftOptions, type RebalanceFrequency,
   type CashBasis, type SharpeBasis,
+  dailyCashRate, sampleEquityCurve, type Sampling, type LagCount, type Execution, type CalendarDay, type MissingTarget,
 } from "./analyze/backtest.ts";
+// The building blocks of a multi-portfolio regime backtest (issue 1766).
+export {
+  evaluateEquityCurve, monthsBefore, trailingKey, labelStrategyCurves,
+  type EquityCurve, type EquityCurveKind, type Window, type Windows, type TrailingKey, type EvaluateOptions, type CurveGroup, type CurveGroupOptions, type CurveWindows,
+} from "./analyze/equity-curves.ts";
+export {
+  WEIGHTING_RULE_KEYS, assetClassReturns, weightingRuleSchedule, labelScaledTargets, classWeightsInForce, yearlyCashRateBefore, computePortfolioWeighting, OPTIMIZERS_PRESET,
+  type WeightingRuleKey, type AssetClasses, type ClassWeights, type MarkowitzParameters, type WeightingRuleScheduleOptions, type WeightingFigures, type RuleShares,
+  type WeightingRuleParameters, type PortfolioWeightingOptions, type PortfolioWeighting,
+} from "./allocate/weighting-rules.ts";
+export {
+  equityCurveViolations, crossCurveViolations, weightingRuleViolations,
+  type EquityCurveCheckOptions, type CrossCurveCheckOptions, type WeightingRuleCheckOptions,
+} from "./analyze/curve-checks.ts";
 // A fixed-target portfolio backtest's inputs (issue 1765, moved out of bin/backtest.ts).
 // Its plain calendar axis is exported as portfolioDateAxis: it is not the regime axis (D59).
 export {
@@ -75,7 +90,7 @@ export {
   ArchiveError, INPUT_TABLES, type BackupRecord, type FileRecord, type GeneratedRow, type RunIdentity, type RunInputs,
 } from "./archive/format1.ts";
 export {
-  openArchive, collectRunInputs, runVintageMembers, type ArchiveFiles, type Archive, type RevisedTable, type LatestValue,
+  openArchive, collectRunInputs, runVintageMembers, latestStoredSeries, type ArchiveFiles, type Archive, type RevisedTable, type LatestValue, type LatestStoredSeriesOptions,
 } from "./archive/reader.ts";
 export type { Row as ArchiveRow } from "./archive/format1.ts";
 export {

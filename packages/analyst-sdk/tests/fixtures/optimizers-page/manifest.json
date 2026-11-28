@@ -1,0 +1,15 @@
+{
+  "csv_backups": {
+    "repository": "https://github.com/robotmoney/csv-backups",
+    "backup": "2026-11-17T000000Z",
+    "last_day": "2026-11-16"
+  },
+  "reference": {
+    "repository": "https://github.com/robotmoney/research-workbench",
+    "path": "research/optimizers-page/reference-optimizers.json"
+  },
+  "files": {
+    "prices.json": "236fd77286e27950d7dc4a53b13d98551007aef64960d6a2549d745e420e2403",
+    "reference-optimizers.json": "49995e9081ddbda834ee9e53552bfec80d9ffd2503f54b45d17731cfee1b7905"
+  }
+}

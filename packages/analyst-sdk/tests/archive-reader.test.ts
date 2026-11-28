@@ -728,3 +728,78 @@ describe("the archive reader maps every v5 storage key, through each run's own m
     }
   });
 });
+
+// Issue 1766: latestStoredSeries reads any storage key's newest stored version per market date.
+describe("latestStoredSeries (issue 1766)", () => {
+  const B1 = "2026-01-01T000000Z";
+  const B2 = "2026-01-08T000000Z";
+  const head = "id,source_key,market_date,market_instant,value\n";
+  // Two backups: the second revises research:BTC-USD on 2026-01-02 and adds days.
+  function twoBackups(body1: string, body2: string): Map<string, Uint8Array> {
+    const tree = new Map<string, Uint8Array>();
+    let before: string | null = null;
+    for (const [id, body, after] of [[B1, body1, "20"], [B2, body2, "9007199254740993"]] as const) {
+      const raw = enc(head + body);
+      const path = `csv/${id}/data/source_value_versions.${id}_${id}.csv.gz`;
+      const files = [{ path, rows: body.split("\n").length - 1, bytes_raw: raw.length, sha256_raw: sha(raw) }];
+      tree.set(path, gzipSync(raw));
+      tree.set(`csv/${id}/backup.json`, enc(JSON.stringify({ format: 1, backup: id, append_only: { source_value_versions: { watermark_before: before, watermark_after: after, files } }, revisions: {} })));
+      before = after;
+    }
+    return tree;
+  }
+  const body1 = [
+    "1,research:BTC-USD,2026-01-02,,40000",
+    "2,yahoo:GLD,2026-01-02,,190.5",
+    "3,backtest:DTB3,2026-01-02,,4.05",
+    "4,research:BTC-USD,2026-01-03,,41000",
+    "5,backtest:DTB3,2026-01-05,,-0.02",
+    "6,backtest:ETH-USD,2026-01-02,,3000",
+    "",
+  ].join("\n");
+  const body2 = [
+    "9007199254740993,research:BTC-USD,2026-01-02,,40500",
+    "9007199254740992,research:BTC-USD,2026-01-02,,40400",
+    "21,yahoo:GLD,2026-01-05,,191",
+    "22,research:BTC-USD,2026-01-06,,42000",
+    "23,yahoo:GLD,2026-01-07,,192",
+    "",
+  ].join("\n");
+  const archive = () => openArchive(memoryFiles(twoBackups(body1, body2)));
+
+  test("the highest id per market date, compared as BigInt, in date order, cut at notAfter", async () => {
+    const { latestStoredSeries } = await import("../src/archive/reader.ts");
+    expect(Number("9007199254740992")).toBe(Number("9007199254740993"));
+    const got = latestStoredSeries(archive(), ["research:BTC-USD", "yahoo:GLD", "backtest:DTB3"], { notAfter: "2026-01-06" });
+    expect(got).toEqual({
+      "research:BTC-USD": [{ date: "2026-01-02", value: 40500 }, { date: "2026-01-03", value: 41000 }, { date: "2026-01-06", value: 42000 }],
+      "yahoo:GLD": [{ date: "2026-01-02", value: 190.5 }, { date: "2026-01-05", value: 191 }],
+      "backtest:DTB3": [{ date: "2026-01-02", value: 4.05 }, { date: "2026-01-05", value: -0.02 }],
+    });
+    expect(latestStoredSeries(archive(), ["yahoo:GLD"])["yahoo:GLD"]!.at(-1)).toEqual({ date: "2026-01-07", value: 192 });
+    // As of the first backup the revision is not there yet.
+    expect(latestStoredSeries(openArchive(memoryFiles(twoBackups(body1, body2)), B1), ["research:BTC-USD"])["research:BTC-USD"]![0]!.value).toBe(40000);
+  });
+
+  test("a key with no rows, a market_instant row, a non-finite value, and under positive a value at or below 0 are ArchiveErrors naming the key", async () => {
+    const { latestStoredSeries } = await import("../src/archive/reader.ts");
+    const refuses = (call: () => unknown, key: string) => {
+      expect(call).toThrow(ArchiveError);
+      expect(call).toThrow(key);
+    };
+    refuses(() => latestStoredSeries(archive(), ["yahoo:GLD", "yahoo:NOPE"]), "yahoo:NOPE");
+    const instant = openArchive(memoryFiles(twoBackups(body1, "24,yahoo:GLD,,2026-01-05T16:00:00Z,191\n")));
+    refuses(() => latestStoredSeries(instant, ["yahoo:GLD"]), "yahoo:GLD");
+    const nan = openArchive(memoryFiles(twoBackups(body1, "24,yahoo:GLD,2026-01-05,,NaN\n")));
+    refuses(() => latestStoredSeries(nan, ["yahoo:GLD"]), "yahoo:GLD");
+    refuses(() => latestStoredSeries(archive(), ["backtest:DTB3"], { positive: true }), "backtest:DTB3");
+    const zero = openArchive(memoryFiles(twoBackups(body1, "24,yahoo:GLD,2026-01-05,,0\n")));
+    refuses(() => latestStoredSeries(zero, ["yahoo:GLD"], { positive: true }), "yahoo:GLD");
+    expect(latestStoredSeries(zero, ["yahoo:GLD"])["yahoo:GLD"]!.at(-1)!.value).toBe(0);
+  });
+
+  test("latestValues still refuses a key no input id maps to", () => {
+    expect(() => archive().latestValues(["yahoo:GLD"])).toThrow(ArchiveError);
+    expect(archive().latestValues(["backtest:DTB3"]).length).toBe(2);
+  });
+});
